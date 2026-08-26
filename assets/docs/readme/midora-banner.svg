@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500" viewBox="0 0 1600 500" role="img" aria-labelledby="title description">
+  <title id="title">Midora</title>
+  <desc id="description">A dark red and black banner representing reusable MIDI events flowing into deterministic compilation.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050608"/>
+      <stop offset="0.52" stop-color="#0c0d11"/>
+      <stop offset="1" stop-color="#07080a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8f101f"/>
+      <stop offset="0.52" stop-color="#ef3345"/>
+      <stop offset="1" stop-color="#8f101f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#d52b37" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#d52b37" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="80" height="50" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0V50" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="500" rx="28" fill="url(#background)"/>
+  <rect width="1600" height="500" rx="28" fill="url(#grid)"/>
+  <ellipse cx="800" cy="250" rx="610" ry="310" fill="url(#glow)"/>
+
+  <g fill="#d52b37" opacity="0.2">
+    <rect x="70" y="90" width="220" height="10" rx="5"/>
+    <rect x="110" y="140" width="120" height="10" rx="5"/>
+    <rect x="55" y="190" width="285" height="10" rx="5"/>
+    <rect x="100" y="300" width="190" height="10" rx="5"/>
+    <rect x="40" y="350" width="245" height="10" rx="5"/>
+    <rect x="1310" y="115" width="205" height="10" rx="5"/>
+    <rect x="1265" y="165" width="270" height="10" rx="5"/>
+    <rect x="1340" y="215" width="155" height="10" rx="5"/>
+    <rect x="1285" y="315" width="235" height="10" rx="5"/>
+    <rect x="1350" y="365" width="130" height="10" rx="5"/>
+  </g>
+
+  <g fill="#ef3345">
+    <circle cx="335" cy="95" r="5"/>
+    <circle cx="300" cy="195" r="5"/>
+    <circle cx="330" cy="305" r="5"/>
+    <circle cx="315" cy="355" r="5"/>
+    <circle cx="1270" cy="120" r="5"/>
+    <circle cx="1300" cy="220" r="5"/>
+    <circle cx="1260" cy="320" r="5"/>
+    <circle cx="1315" cy="370" r="5"/>
+  </g>
+
+  <g transform="translate(385 137)" filter="url(#softGlow)">
+    <path d="M56 5v144.5c-14.5-7-34.5-4.5-48.5 7.5-17 14.7-10.6 37.9 10.6 42.2 25.3 5.2 52.9-13.9 52.9-38.7V57l94-22v91.5c-14.5-7-34.5-4.5-48.5 7.5-17 14.7-10.6 37.9 10.6 42.2 25.3 5.2 52.9-13.9 52.9-38.7V5L56 34z" fill="url(#accent)"/>
+    <path d="M75 67l86-20" stroke="#ff7b87" stroke-width="5" stroke-linecap="round" opacity="0.72"/>
+  </g>
+
+  <g font-family="Sora, Segoe UI, Arial, sans-serif">
+    <text x="630" y="229" fill="#f7f7f8" font-size="112" font-weight="700" letter-spacing="16">MIDORA</text>
+    <rect x="633" y="259" width="650" height="3" rx="1.5" fill="url(#accent)"/>
+    <text x="636" y="305" fill="#d9d9dd" font-size="23" font-weight="400" letter-spacing="6">MIDI 1.0 EVENT INSTRUMENT ENVIRONMENT</text>
+    <text x="638" y="355" fill="#85868d" font-size="17" font-weight="600" letter-spacing="5">DESIGN  ·  COMPOSE  ·  COMPILE</text>
+  </g>
+
+  <rect x="1.5" y="1.5" width="1597" height="497" rx="26.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+</svg>
