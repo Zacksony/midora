@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="./assets/docs/readme/midora-banner.svg" alt="Midora — MIDI 1.0 event instrument environment" width="100%">
-</p>
-
-<p align="center">
   <a href="./docs/README.md">English</a> ·
   <a href="./docs/README.zh-CN.md">简体中文</a>
 </p>
@@ -10,51 +6,79 @@
 <p align="center">
   <img alt="Status: 1.0.0-dev" src="https://img.shields.io/badge/status-1.0.0--dev-d52b37?style=flat-square">
   <img alt="Platform: Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-17191f?style=flat-square&logo=windows11&logoColor=white">
-  <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512bd4?style=flat-square&logo=dotnet&logoColor=white">
+  <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512bd4?style=flat-square">
   <img alt="MIDI 1.0" src="https://img.shields.io/badge/MIDI-1.0-17191f?style=flat-square">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-d52b37?style=flat-square"></a>
 </p>
 
 # Midora
 
-**Design reusable MIDI event instruments. Compose with logical or direct MIDI tracks. Compile everything into one deterministic result.**
+**Build a MIDI sound once. Use it like an instrument.**
 
-Midora is a Windows desktop composition and compilation environment for MIDI 1.0. It is being built for musicians who want to turn dense, stateful MIDI event sequences into reusable **Event Instruments**, while retaining a direct **Pure MIDI Track** workflow when low-level control is the better tool.
+Midora is for musicians who enjoy shaping sounds with MIDI itself. If you have ever built a custom sound in a regular MIDI editor, you already know the problem: the sound is rarely just one note. It is often a carefully timed stack of notes, controller curves, program changes, pitch bends, and resets—and every new hit means copying that stack again.
 
 > [!IMPORTANT]
-> Midora is under active development at `1.0.0-dev`. There is no stable end-user release yet. The capabilities below describe the initial-release scope, not a promise that every item is complete in the current commit.
+> Midora is under active development at `1.0.0-dev`. There is no stable end-user release yet, and workflows may still change before 1.0.
 
-## Why Midora?
+## Table of contents
 
-A single MIDI-driven sound can involve Program and Bank changes, Pitch Bend Range, controller curves, RPN/NRPN state, notes, release behavior, and cleanup. Copying that event stack by hand is repetitive and makes channel-state conflicts easy to introduce.
+- [One familiar example: a Sine + Click kick](#one-familiar-example-a-sine--click-kick)
+- [How Midora changes the workflow](#how-midora-changes-the-workflow)
+- [Why not just use a DAW?](#why-not-just-use-a-daw)
+- [Black MIDI performance](#black-midi-performance)
+- [Platform and prerequisites](#platform-and-prerequisites)
+- [Build from source](#build-from-source)
+- [Documentation](#documentation)
+- [Acknowledgements](#acknowledgements)
+- [License and third-party components](#license-and-third-party-components)
 
-Midora turns that workflow into a reusable system:
+## One familiar example: a Sine + Click kick
+
+Suppose you want to make a kick from two layers:
+
+- a **Sine** layer for the body;
+- a short **Click** layer for the attack.
+
+In a regular MIDI editor, you may create two channels, choose their Bank/Program settings, configure Pitch Bend Range, draw the pitch drop and Expression curves, align both notes, and add the required cleanup events. Making one kick is manageable. Writing a whole rhythm means copying those two event stacks for every hit.
+
+That creates familiar problems: changing the sound means finding and updating every copy; one missed event can make hits behave differently; fast repeats can leave Pitch Bend or CC state leaking into the next hit; and adding more layers means manually managing even more channels.
+
+## How Midora changes the workflow
+
+In Midora, you design the Sine + Click kick once as an **Event Instrument**—a reusable recipe made entirely from MIDI events. After that, you can write each use on a track as simply as an ordinary note.
 
 ```text
-Event Instrument definitions ──► Logical Tracks ──┐
-                                                  │
-SMF import / direct MIDI ───────► Pure MIDI Tracks ├─► Semantic validation
-                                                  │          │
-                                                  └──────────▼
-                                                Canonical compilation
-                                                          │
-                                    ┌───────────┬───────────┴──────────┐
-                                    ▼           ▼                      ▼
-                                 Playback   MIDI export          Audio render
+Design the Sine + Click recipe once
+              ↓
+Place one simple note for each kick hit
+              ↓
+Midora expands every hit into the full MIDI event sequence
 ```
 
-Playback, preview, MIDI export, and audio rendering consume the same canonical compiled result. They do not independently reinterpret the project.
+You arrange the rhythm with compact notes instead of copied event piles. Midora expands those notes, assigns the required ports and channels, and handles event ordering and cleanup boundaries. Change the recipe once, and the arrangement uses the updated design without editing every copied stack.
 
-## Initial-release direction
+Three Midora terms are enough to understand the idea:
 
-- Build reusable Event Instruments from notes, MIDI events, SubVoices, logical parameters, mappings, lifecycle rules, loops, envelopes, and overlap policies.
-- Arrange with high-level Logical Tracks or edit MIDI 1.0 notes and channel events directly in Pure MIDI Tracks.
-- Allocate up to 16 ports × 16 channels deterministically, with explicit lifecycle and reset boundaries.
-- Open SMF 1.0 Format 0/1 files with TPQN timing and export deterministic SMF Type 1 output.
-- Play and preview through an application-level ordered SF2/SFZ list, then render stereo IEEE float32 RIFF/WAVE audio.
-- Save source projects as `.midora` packages without embedding compiled results, caches, exports, or session UI state.
+- **Event Instrument**: the reusable MIDI-event recipe, such as the Sine + Click kick.
+- **Logical Track**: a track containing compact notes that call an Event Instrument.
+- **Pure MIDI Track**: a familiar direct MIDI track for editing notes and channel events without the reusable layer.
 
-Midora is intentionally **not** a DAW, VST host, audio recorder, MIDI 2.0 tool, or general-purpose replacement for a full MIDI workstation.
+You can combine both approaches in one project: use Event Instruments where repetition is painful, and use Pure MIDI Tracks where direct control is simpler. Midora turns the project into standard MIDI 1.0 data for playback and export, so the result remains usable outside Midora as MIDI.
+
+## Why not just use a DAW?
+
+Midora is not trying to replace a DAW. Its purpose is to explore how far composition made entirely from MIDI 1.0 events can be pushed. A DAW offers far more freedom; Midora offers a different kind of fun: doing more within the limits of pure MIDI.
+
+## Black MIDI performance
+
+Midora's smooth-editing support target is Black MIDI at the million-note scale: **fewer than 10,000,000 notes**.
+
+Midora can open Black MIDI projects containing tens or even hundreds of millions of notes, and it uses paged data and visibility-based rendering to keep dense-note browsing as responsive as practical. Above the supported editing range, however, Midora does not guarantee that editing speed or memory usage will meet your needs.
+
+If your main goal is editing Black MIDI at still larger scales, also see these projects built with that workload in mind:
+
+- [yinhe](https://github.com/BuickMeow/yinhe)
+- [lumino-rs](https://github.com/PenguinBMDevs/lumino-rs)
 
 ## Platform and prerequisites
 
@@ -98,6 +122,12 @@ The runner validates every native file against the pinned versions and SHA-256 v
 | [Midora SRS](./misc/Midora-SRS-Initial-Release-v0.1/00-Table-of-Contents-and-Document-Control.md) | Normative initial-release requirements |
 | [Implementation roadmap](./misc/Midora-Implementation-Roadmap.md) | Engineering sequence and recorded implementation status; the SRS takes precedence |
 
+## Acknowledgements
+
+Special thanks to [BuickMeow](https://github.com/BuickMeow) and [Enderman-bm](https://github.com/Enderman-bm) for their performance-related advice during Midora's development.
+
+Midora's dense-note rendering optimizations were informed by ideas from [yinhe](https://github.com/BuickMeow/yinhe).
+
 ## License and third-party components
 
 Midora's own source code is available under the [MIT License](./LICENSE), copyright © 2026 Midora contributors. The project's official initial-release positioning is free, open source, and non-commercial; this positioning does not add restrictions to the standard MIT terms.
@@ -106,4 +136,4 @@ BASS, BASSMIDI, BASSWASAPI, user-provided SoundFonts, and other third-party mate
 
 ---
 
-<p align="center"><sub>MIDI events are the material. Deterministic compilation is the instrument.</sub></p>
+<p align="center"><sub>Build once. Compose freely. Export standard MIDI.</sub></p>

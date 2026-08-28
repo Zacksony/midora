@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="../assets/docs/readme/midora-banner.svg" alt="Midora — MIDI 1.0 事件乐器环境" width="100%">
-</p>
-
-<p align="center">
   <a href="./README.md">English</a> ·
   <a href="./README.zh-CN.md">简体中文</a> ·
   <a href="../README.md">仓库首页</a>
@@ -11,62 +7,90 @@
 <p align="center">
   <img alt="状态：1.0.0-dev" src="https://img.shields.io/badge/status-1.0.0--dev-d52b37?style=flat-square">
   <img alt="平台：Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-17191f?style=flat-square&logo=windows11&logoColor=white">
-  <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512bd4?style=flat-square&logo=dotnet&logoColor=white">
+  <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512bd4?style=flat-square">
   <img alt="MIDI 1.0" src="https://img.shields.io/badge/MIDI-1.0-17191f?style=flat-square">
   <a href="../LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-d52b37?style=flat-square"></a>
 </p>
 
 # Midora
 
-**设计可复用的 MIDI 事件乐器，使用逻辑轨道或直接 MIDI 轨道编曲，再将全部内容确定性地编译为唯一正式结果。**
+**把一套 MIDI 音色事件设计一次，然后像使用普通乐器一样反复调用。**
 
-Midora 是面向 MIDI 1.0 的 Windows 桌面编曲与编译环境。它用于把密集且具有状态的 MIDI 事件序列组织成可复用的 **Event Instrument（事件乐器）**；需要底层控制时，也可以使用直接编辑 MIDI 数据的 **Pure MIDI Track（纯 MIDI 轨道）**工作流。
+Midora 面向喜欢用 MIDI 本身塑造声音的用户。如果你用过普通 MIDI 编辑器，应该很熟悉这个问题：一个自制声音往往不只是一个 Note，而是一组精心对齐的 Note、控制器曲线、Program Change、Pitch Bend 和 Reset；每次再次使用这个声音，都要把整组事件重新复制一遍。
 
 > [!IMPORTANT]
-> Midora 当前处于 `1.0.0-dev` 活跃开发阶段，尚无稳定的终端用户版本。下文描述的是初版目标范围，并不表示当前提交已经完成所有能力。
+> Midora 当前处于 `1.0.0-dev` 活跃开发阶段，尚无稳定的终端用户版本，部分界面和工作流在 1.0 前仍可能调整。
 
-## 为什么开发 Midora？
+## 目录
 
-一个由 MIDI 驱动的声音可能同时包含 Program 与 Bank 切换、Pitch Bend Range、控制器曲线、RPN/NRPN 状态、音符、Release 行为和清理事件。手工复制整组事件不仅重复，也很容易引入 Channel 状态冲突。
+- [一个熟悉的例子：用 Sine + Click 制作 Kick](#一个熟悉的例子用-sine--click-制作-kick)
+- [Midora 如何改变这套工作流](#midora-如何改变这套工作流)
+- [那我为什么不直接用 DAW？](#那我为什么不直接用-daw)
+- [关于黑乐谱性能](#关于黑乐谱性能)
+- [平台与前置条件](#平台与前置条件)
+- [从源码构建](#从源码构建)
+- [文档](#文档)
+- [特别鸣谢](#特别鸣谢)
+- [许可证与第三方组件](#许可证与第三方组件)
 
-Midora 将这套工作流组织为可复用系统：
+## 一个熟悉的例子：用 Sine + Click 制作 Kick
+
+假设你想用两个声部做一个 Kick：
+
+- **Sine** 负责低频主体；
+- 很短的 **Click** 负责起音瞬态。
+
+在普通 MIDI 编辑器中，你可能要创建两个 Channel，分别设置 Bank/Program 和 Pitch Bend Range，画出音高下坠与 Expression 曲线，对齐两个 Note，再补上必要的状态清理事件。做一个 Kick 尚可接受，但写一整段鼓点时，每一次击打都要复制这两大组事件。
+
+问题随之而来：修改声音时要找到并更新每一份副本；漏掉一个事件就可能让某次击打听起来不同；快速连打时，Pitch Bend 或 CC 状态可能污染下一次击打；增加声部后，还要手动规划更多 Channel。
+
+## Midora 如何改变这套工作流
+
+在 Midora 中，你只需把 Sine + Click Kick 设计一次，并保存成一个 **Event Instrument（事件乐器）**——也就是一份完全由 MIDI 事件组成、可以反复调用的“声音配方”。之后便可以像编写普通 Note 一样，在轨道中反复使用它。
 
 ```text
-Event Instrument 定义 ──► Logical Track ──┐
-                                           │
-SMF 导入 / 直接 MIDI ─────► Pure MIDI Track ├─► 语义验证
-                                           │       │
-                                           └───────▼
-                                                Canonical 编译
-                                                      │
-                                   ┌──────────┬────────┴────────┐
-                                   ▼          ▼                 ▼
-                                  播放      MIDI 导出         音频渲染
+设计一次 Sine + Click 配方
+            ↓
+每次 Kick 只放置一个简单 Note
+            ↓
+Midora 自动展开为完整的 MIDI 事件序列
 ```
 
-播放、预览、MIDI 导出和音频渲染共用同一个 Canonical Compiled Result，不会各自重新解释 Project。
+编曲时，你操作的是简洁的 Note，而不是反复复制的大量事件。Midora 会展开这些 Note，分配所需的 Port 和 Channel，并处理事件顺序与清理边界。需要改变声音时，只修改一次配方，整段编曲即可使用更新后的设计，不必逐份寻找事件副本。
 
-## 初版目标方向
+理解 Midora 只需要先认识三个概念：
 
-- 使用 Note、MIDI Event、SubVoice、Logical Parameter、Mapping、生命周期、Loop、Envelope 和重叠策略构建可复用的 Event Instrument。
-- 既可使用高层 Logical Track 编曲，也可在 Pure MIDI Track 中直接编辑 MIDI 1.0 Note 与 Channel Event。
-- 以确定性规则分配最多 16 Port × 16 Channel，并明确处理生命周期和 Reset 边界。
-- 打开采用 TPQN 时间基准的 SMF 1.0 Format 0/1 文件，并导出确定性的 SMF Type 1 文件。
-- 通过程序级有序 SF2/SFZ 列表播放和预览，并渲染 stereo IEEE float32 RIFF/WAVE 音频。
-- 将源 Project 保存为 `.midora` package，不写入编译结果、缓存、导出产物或会话 UI 状态。
+- **Event Instrument（事件乐器）**：可复用的 MIDI 事件配方，例如上面的 Sine + Click Kick。
+- **Logical Track（逻辑轨道）**：放置简洁 Note、调用 Event Instrument 的轨道。
+- **Pure MIDI Track（纯 MIDI 轨道）**：不经过可复用抽象，像普通 MIDI 编辑器一样直接编辑 Note 和 Channel Event 的轨道。
 
-Midora 明确**不是** DAW、VST 宿主、音频录制工具、MIDI 2.0 工具，也不试图替代完整的通用 MIDI 工作站。
+两种方式可以在同一个 Project 中混用：需要大量重复时使用 Event Instrument，需要直接控制时使用 Pure MIDI Track。Midora 最终会把 Project 转换为标准 MIDI 1.0 数据用于播放和导出，因此结果仍能以 MIDI 的形式离开 Midora 使用。
+
+## 那我为什么不直接用 DAW？
+
+Midora 无意取代 DAW。它的设计目的，是探索完全由 MIDI 1.0 事件构成的编曲究竟能走多远。DAW 提供更大的自由度；Midora 提供的是另一种乐趣——在纯 MIDI 的限制内尽可能做得更多。
+
+## 关于黑乐谱性能
+
+Midora 对黑乐谱流畅编辑的支持目标是百万 Note 级别，即 **少于 10,000,000 个 Note**。
+
+Midora 可以打开包含数千万乃至上亿 Note 的黑乐谱，并通过分页数据和按可见区域渲染，让密集音符浏览尽量保持顺畅。但超出上述支持范围后，Midora 不保证编辑速度和内存占用能够满足你的具体需求。
+
+如果你的主要目标是编辑更高规模的黑乐谱，也请关注这两个针对该类工作负载提供便利和优化的项目：
+
+- [yinhe](https://github.com/BuickMeow/yinhe)
+- [lumino-rs](https://github.com/PenguinBMDevs/lumino-rs)
 
 ## 平台与前置条件
 
-| 要求 | 初版基线 |
-|---|---|
-| 操作系统 | Windows Desktop，x64 |
-| 运行时与 UI | .NET 10、WPF |
-| 仓库 SDK | .NET SDK `10.0.302`，由 [`global.json`](../global.json) 固定 |
-| MIDI | MIDI 1.0 |
-| 音频资源 | 用户自行提供的 SF2/SFZ 文件 |
-| 原生音频后端 | 固定版本的 x64 BASS、BASSMIDI 和 BASSWASAPI 二进制文件 |
+| 要求         | 初版基线                                                     |
+| ------------ | ------------------------------------------------------------ |
+| 操作系统     | Windows Desktop，x64                                         |
+| 运行时与 UI  | .NET 10、WPF                                                 |
+| 仓库 SDK     | .NET SDK `10.0.302`，由 [`global.json`](../global.json) 固定 |
+| MIDI         | MIDI 1.0                                                     |
+| 音频资源     | 用户自行提供的 SF2/SFZ 文件                                  |
+| 原生音频后端 | 固定版本的 x64 BASS、BASSMIDI 和 BASSWASAPI 二进制文件       |
 
 本仓库**不保存** BASS 二进制文件或 SoundFont。没有 Enabled SoundFont 时仍可打开、保存、编译和导出 Project；播放、预览和音频渲染则需要至少一个 Enabled SF2/SFZ。
 
@@ -92,12 +116,18 @@ dotnet build src/midora-desktop/midora-desktop.slnx -c Release --no-restore
 
 ## 文档
 
-| 文档 | 说明 |
-|---|---|
-| [`README.md`](./README.md) | 英文 README |
-| [`README.zh-CN.md`](./README.zh-CN.md) | 简体中文 README |
-| [《Midora SRS》](../misc/Midora-SRS-Initial-Release-v0.1/00-Table-of-Contents-and-Document-Control.md) | 初版范围的正式需求基线 |
-| [实施路线图](../misc/Midora-Implementation-Roadmap.md) | 工程顺序与实现现状记录；与 SRS 冲突时以 SRS 为准 |
+| 文档                                                                                                   | 说明                                             |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| [`README.md`](./README.md)                                                                             | 英文 README                                      |
+| [`README.zh-CN.md`](./README.zh-CN.md)                                                                 | 简体中文 README                                  |
+| [《Midora SRS》](../misc/Midora-SRS-Initial-Release-v0.1/00-Table-of-Contents-and-Document-Control.md) | 初版范围的正式需求基线                           |
+| [实施路线图](../misc/Midora-Implementation-Roadmap.md)                                                 | 工程顺序与实现现状记录；与 SRS 冲突时以 SRS 为准 |
+
+## 特别鸣谢
+
+特别感谢 [BuickMeow](https://github.com/BuickMeow) 与 [Enderman-bm](https://github.com/Enderman-bm) 在 Midora 开发期间提供的性能相关建议。
+
+Midora 的密集音符渲染性能优化思路参考了 [yinhe](https://github.com/BuickMeow/yinhe)。
 
 ## 许可证与第三方组件
 
@@ -107,4 +137,4 @@ BASS、BASSMIDI、BASSWASAPI、用户提供的 SoundFont 及其他第三方材�
 
 ---
 
-<p align="center"><sub>以 MIDI Event 为材料，以确定性编译塑造乐器。</sub></p>
+<p align="center"><sub>设计一次，自由编曲，导出标准 MIDI。</sub></p>
