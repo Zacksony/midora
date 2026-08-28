@@ -24,6 +24,8 @@ Midora is for musicians who enjoy shaping sounds with MIDI itself. If you have e
 
 - [One familiar example: a Sine + Click kick](#one-familiar-example-a-sine--click-kick)
 - [How Midora changes the workflow](#how-midora-changes-the-workflow)
+- [A complete instrument built from MIDI events](#a-complete-instrument-built-from-midi-events)
+- [Channels without channel bookkeeping](#channels-without-channel-bookkeeping)
 - [Why not just use a DAW?](#why-not-just-use-a-daw)
 - [Black MIDI performance](#black-midi-performance)
 - [Platform and prerequisites](#platform-and-prerequisites)
@@ -64,6 +66,24 @@ Three Midora terms are enough to understand the idea:
 - **Pure MIDI Track**: a familiar direct MIDI track for editing notes and channel events without the reusable layer.
 
 You can combine both approaches in one project: use Event Instruments where repetition is painful, and use Pure MIDI Tracks where direct control is simpler. Midora turns the project into standard MIDI 1.0 data for playback and export, so the result remains usable outside Midora as MIDI.
+
+## A complete instrument built from MIDI events
+
+An Event Instrument is more than a macro that replays one fixed block of events. It can describe how a MIDI-built instrument is constructed, controlled, and played:
+
+- **Multiple layers**: each **SubVoice** is an independent layer with its own notes, Bank/Program settings, controllers, pitch bends, and curves. A Sine body, a Click attack, and additional layers can still be triggered and written as one instrument.
+- **Musical controls instead of raw event editing**: an instrument can expose **Logical Parameters** such as `Punch`, `Brightness`, or `Pitch Drop`. One control can drive several internal MIDI values across several layers, so the arrangement can shape the sound without reopening its event stacks or editing every CC curve by hand.
+- **A full note lifecycle**: an instrument can react differently to short notes, long notes, release, and overlap. It can cut at Note Off, behave as a one-shot, play tail events, hold a state, loop part of its design, follow envelopes, and isolate overlapping notes when they need independent channel-wide state.
+
+The instrument definition is stored separately from the notes that use it. Edit the definition once and every reference uses the updated design. Tracks that use the same definition can keep independent runtime state, or be explicitly grouped when they are meant to share it; duplicate the definition only when you want a separate variation.
+
+## Channels without channel bookkeeping
+
+Event Instruments and their SubVoices never ask you to choose a Port or Channel. Midora calculates the required routes, allocates them across Ports, safely reuses released Channel Units, and keeps channel-wide state from leaking between unrelated sounds. For normal Logical Track work, Port/Channel routing is something you can largely ignore.
+
+When shared state is intentional, you can explicitly bind multiple Logical Tracks into one shared group. In the instrument's shared-state mode, those tracks are guaranteed to use the same Channel Group instead of merely landing on the same channels by accident. Independent usages of the same instrument remain isolated.
+
+Pure MIDI Tracks retain lower-level control: their route can be assigned automatically, or you can pin a track—or a group of tracks sharing one route—to an exact `Port.Channel` address. Midora supports up to **16 Ports × 16 Channels = 256 Channel Units**. If a project cannot fit within that limit, compilation fails instead of silently dropping, stealing, or shortening notes.
 
 ## Why not just use a DAW?
 

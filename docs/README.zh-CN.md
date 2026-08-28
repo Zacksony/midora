@@ -25,6 +25,8 @@ Midora 面向喜欢用 MIDI 本身塑造声音的用户。如果你用过普通 
 
 - [一个熟悉的例子：用 Sine + Click 制作 Kick](#一个熟悉的例子用-sine--click-制作-kick)
 - [Midora 如何改变这套工作流](#midora-如何改变这套工作流)
+- [不只是事件模板：一件完整的 MIDI 乐器](#不只是事件模板一件完整的-midi-乐器)
+- [无需管理 Port 和 Channel](#无需管理-port-和-channel)
 - [那我为什么不直接用 DAW？](#那我为什么不直接用-daw)
 - [关于黑乐谱性能](#关于黑乐谱性能)
 - [平台与前置条件](#平台与前置条件)
@@ -65,6 +67,24 @@ Midora 自动展开为完整的 MIDI 事件序列
 - **Pure MIDI Track（纯 MIDI 轨道）**：不经过可复用抽象，像普通 MIDI 编辑器一样直接编辑 Note 和 Channel Event 的轨道。
 
 两种方式可以在同一个 Project 中混用：需要大量重复时使用 Event Instrument，需要直接控制时使用 Pure MIDI Track。Midora 最终会把 Project 转换为标准 MIDI 1.0 数据用于播放和导出，因此结果仍能以 MIDI 的形式离开 Midora 使用。
+
+## 不只是事件模板：一件完整的 MIDI 乐器
+
+Event Instrument 并非只能原样重放一段固定事件的宏。它可以完整描述一件由 MIDI 构造的乐器如何组成、如何控制，以及如何响应演奏：
+
+- **多个独立声部**：每条 **SubVoice（子声部）**都可以拥有自己的 Note、Bank/Program、控制器、Pitch Bend 和曲线。Sine 主体、Click 起音及更多声部可以各自完成不同工作，但在编曲时仍作为一件乐器触发和书写。
+- **用音乐含义控制声音**：乐器可以向编曲界面提供 `Punch（冲击感）`、`Brightness（亮度）`、`Pitch Drop（音高下坠）` 等 **Logical Parameter（逻辑参数）**。一个参数可以同时驱动多个声部中的多个底层 MIDI 值，让用户直接塑造声音，而不必重新打开事件堆或逐条修改 CC 曲线。
+- **完整的音符生命周期**：乐器可以分别处理短音、长音、释放和重叠。它既可以在 Note Off 时立即截断，也可以作为 One-shot 播放、执行尾部事件、保持状态、循环模板的一部分、跟随 Envelope，并在重叠音符需要独立 Channel 状态时将它们隔离。
+
+乐器定义与使用它的编曲内容分开保存。修改一次定义，所有引用都会使用更新后的设计；引用同一定义的轨道可以保持彼此独立的运行状态，也可以在确实需要时显式组成共享状态组。只有想制作独立变体时，才需要复制一份乐器定义。
+
+## 无需管理 Port 和 Channel
+
+使用 Event Instrument 和 SubVoice 时，用户无需为它们选择 Port 或 Channel，也无需创建或删除 Port。Midora 会计算所需路由、跨 Port 完成分配、安全复用已经释放的 Channel Unit，并避免无关声音之间发生 Channel 状态污染。对于通常的 Logical Track 编曲，用户基本不需要感知 Port/Channel 的存在。
+
+如果确实需要共享状态，用户可以把多个 Logical Track 显式绑定为一个共享组。在乐器的共享状态模式下，这些轨道会固定使用同一个 Channel Group，而不是由系统偶然把它们分配到一起；引用同一乐器但彼此独立的轨道，运行状态仍然互相隔离。
+
+Pure MIDI Track 则保留下层路由控制：既可以让程序自动分配，也可以把一条轨道——或共享同一路由的一组轨道——固定到明确的 `Port.Channel` 地址。Midora 最多支持 **16 Ports × 16 Channels = 256 Channel Units**。如果工程无法放入这一资源上限，编译会明确失败，而不会静默丢弃、抢占或截短 Note。
 
 ## 那我为什么不直接用 DAW？
 
