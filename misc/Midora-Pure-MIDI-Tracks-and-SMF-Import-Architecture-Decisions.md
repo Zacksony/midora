@@ -338,3 +338,19 @@ Track内按tick查询先用目录bounds裁剪相交endpoint pages，再对page-l
 原始Note page的bounds同时覆盖最早NoteOn与最晚NoteOff。一个长Note会使同一页在大量250 ms窗口内持续“相交”，导致重复解压、扫描和外部排序；中途起播也会从巨型Segment起点回扫。端点索引用可控的pack空间放大换取顺序读取、稳定producer吞吐和有界冷启动。索引是source records的确定性物理派生物，不进入音乐语义、fingerprint或编辑身份；损坏时必须拒绝pack，不能静默使用慢路径掩盖损坏。
 
 验证覆盖跨endpoint page同tick顺序、NoteOn/Off边界、Channel checkpoint前后等价、active-note恢复且不读取普通Note page、正常source page上限保持65,536、v1/v2拒绝、1M/18M/164M样本常驻内存与启动窗口查询。
+
+## 13. ADR-PMIDI-012（已接受）：外部 SMF 已建模文本采用 UTF-8→Windows-31J 兼容解码
+
+### 决定
+
+导入 Track Name 与 Marker 时先使用无替换字符的严格 UTF-8；失败后使用固定 Windows-31J（Microsoft code page 932）严格解码。不得依赖当前 Windows 区域设置或系统 ANSI code page。Windows-31J 成功结果转换为普通 Unicode Project 文本并汇总报告 `Info`；导出仍按正式严格 UTF-8 编码，因此不承诺文本 Meta 的原始字节 round-trip。
+
+两种解码都失败时，不把结构合法的 SMF 判为损坏：Track Name 丢弃并进入既有确定性名称回退，Marker 丢弃并汇总报告 `Warning`。其他未建模文本 Meta 不解码，继续以 single-owner opaque payload 原样保存。
+
+### 理由与边界
+
+SMF 1.0 没有为历史文本 Meta 固定现代 Unicode 编码，大量日本制作环境实际写入 Shift-JIS/Windows-31J。把这类可选显示文本当作结构错误会拒绝本可安全导入的音乐数据；使用机器区域设置又会破坏确定性。固定 CP932 fallback 可覆盖目标兼容面，同时让无法可靠解释的文本只局部损失。该决定不放宽 chunk、VLQ、Running Status、数值 Meta 或事件边界校验，也不改变 `.midora`、canonical、播放或音频语义。
+
+### 验证
+
+内存导入与两遍流式 `ImportFile` 路径都覆盖日文 CP932 Track Name/Marker、严格 UTF-8 优先级、不可解码 Marker 局部丢弃和诊断分级；结果 Project 必须可通过正式 semantic validation / compile。opaque 文本 Meta 的原始 payload 回归保持不变。

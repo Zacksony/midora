@@ -108,8 +108,9 @@ public static partial class ProjectDomainEditCommands
         ?? throw new ArgumentOutOfRangeException(nameof(curveId));
 
     private static CurvePoint FindCurvePoint(ValueCurve curve, MidoraId pointId) =>
-        curve.Points.SingleOrDefault(value => value.Id == pointId)
-        ?? throw new ArgumentOutOfRangeException(nameof(pointId));
+        curve.Points.TryGetById(pointId, out CurvePoint? value) && value is not null
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(pointId));
 
     private static void ValidateValueCurvePoint(
         ValueCurve curve,
@@ -130,7 +131,10 @@ public static partial class ProjectDomainEditCommands
         {
             throw new ArgumentOutOfRangeException(nameof(interpolation));
         }
-        if (curve.Points.Any(candidate => candidate.Id != pointId && candidate.Tick == tick))
+        long endTick = tick == long.MaxValue ? long.MaxValue : tick + 1;
+        if (curve.Points.CreateQuerySnapshot()
+            .QueryValues(tick, endTick)
+            .Any(candidate => candidate.Id != pointId && candidate.Tick == tick))
         {
             throw new InvalidOperationException(
                 "Only one Value Curve point is allowed at a tick.");

@@ -48,21 +48,28 @@ public static partial class ProjectDomainEditCommands
         long tickDelta,
         int valueDelta,
         bool duplicate) =>
+        templateEventIds.Count >= BoundedPointThreshold
+        ? BoundedTemplatePoints(duplicate ? "Duplicate SubVoice event points" : "Move SubVoice event points",
+            eventInstrumentId, subVoiceId, templateEventIds, BoundedPointOperation.Adjust, target, tickDelta, valueDelta, duplicate)
+        :
         Command(duplicate ? "Duplicate SubVoice event points" : "Move SubVoice event points", project =>
         {
             ArgumentNullException.ThrowIfNull(templateEventIds);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (voice.Events.Count >= BoundedPointThreshold)
+                return BoundedTemplatePoints(duplicate ? "Duplicate SubVoice event points" : "Move SubVoice event points",
+                    eventInstrumentId, subVoiceId, templateEventIds, BoundedPointOperation.Adjust, target, tickDelta, valueDelta, duplicate).Prepare(project);
             HashSet<MidoraId> requested = ValidateBatchIds(
                 templateEventIds,
                 nameof(templateEventIds),
                 "Template Event");
             IndexedEventLaneTemplateEvent[] selected = voice.Events
-                .Select((value, index) => new IndexedEventLaneTemplateEvent(
-                    value,
-                    index,
-                    CaptureTemplateEvent(value)))
-                .Where(value => requested.Contains(value.Event.Id))
+                .ResolveByIdsWithIndicesInCollectionOrder(requested)
+                .Select(static value => new IndexedEventLaneTemplateEvent(
+                    value.Value,
+                    value.Index,
+                    CaptureTemplateEvent(value.Value)))
                 .ToArray();
             if (selected.Length != requested.Count
                 || selected.Any(value => value.Event.Kind == TemplateEventKind.Note
@@ -110,17 +117,11 @@ public static partial class ProjectDomainEditCommands
                                 return copy;
                             }).ToArray();
                         }
-                        for (int index = 0; index < copies.Length; index++)
-                        {
-                            InsertAt(
-                                voice.Events,
-                                insertionIndex + index,
-                                copies[index],
-                                "Template Event copy");
-                        }
+                        voice.Events.InsertRange(insertionIndex, copies);
                     }
                     else
                     {
+                        using IDisposable batch = voice.Events.BeginBatchChange();
                         for (int index = 0; index < selected.Length; index++)
                         {
                             SetTemplateEvent(selected[index].Event, replacements[index]);
@@ -137,13 +138,13 @@ public static partial class ProjectDomainEditCommands
                             throw new InvalidOperationException(
                                 "Template Event copies do not exist before the first Apply.");
                         }
-                        foreach (TemplateEvent copy in copies)
-                        {
-                            RemoveRequired(voice.Events, copy, "Template Event copy");
-                        }
+                        int removed = voice.Events.RemoveRange(copies);
+                        if (removed != copies.Length)
+                            throw new InvalidOperationException("The Template Event copy set is no longer present.");
                     }
                     else
                     {
+                        using IDisposable batch = voice.Events.BeginBatchChange();
                         foreach (IndexedEventLaneTemplateEvent value in selected)
                         {
                             SetTemplateEvent(value.Event, value.Original);
@@ -152,7 +153,10 @@ public static partial class ProjectDomainEditCommands
                     instrument.TemplateLengthTicks = oldTemplateLength;
                 });
             return duplicate || tickDelta != 0
-                ? ResolveExactSubVoiceEventCollisions(prepared, voice)
+                ? ResolveTargetedExactTemplateEventPointCollisions(
+                    prepared,
+                    replacements.SelectMany(value =>
+                        CreateTemplateEventPointCollisionTargets(voice, value)))
                 : prepared;
         });
 
@@ -165,6 +169,8 @@ public static partial class ProjectDomainEditCommands
         {
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (voice.Events.Count >= BoundedPointThreshold)
+                return PrepareBoundedTemplateLaneDelete(project, instrument, voice, target, nonEmptyDeletionConfirmed);
             TemplateEventMappingTarget requestedTarget = TemplateEventMidiTargets.ToMappingTarget(target);
             TemplateEventMappingTarget[] mappingTargets = target.Kind is
                 MidiValueKind.PitchBendRangeSemitones or MidiValueKind.PitchBendRangeCents
@@ -185,12 +191,12 @@ public static partial class ProjectDomainEditCommands
                     "The requested SubVoice event lane does not exist.");
             }
 
-            IndexedEventLaneTemplateEvent[] affected = voice.Events
-                .Select((value, index) => new IndexedEventLaneTemplateEvent(
-                    value,
-                    index,
-                    CaptureTemplateEvent(value)))
-                .Where(value => TemplateEventMidiTargets.Enumerate(value.Event).Contains(target))
+            IndexedEventLaneTemplateEvent[] affected = TemplateEventTargetQueryIndex
+                .Query(voice.Events, target)
+                .Select(static value => new IndexedEventLaneTemplateEvent(
+                    value.Value,
+                    value.Index,
+                    CaptureTemplateEvent(value.Value)))
                 .ToArray();
             if (affected.Length != 0 && !nonEmptyDeletionConfirmed)
             {
@@ -211,12 +217,17 @@ public static partial class ProjectDomainEditCommands
             IndexedEventLaneTemplateEvent[] removedEvents = affected
                 .Where(value => !retainedIds.Contains(value.Event.Id))
                 .ToArray();
+            TemplateEvent[] removedValues = removedEvents
+                .Select(static value => value.Event)
+                .ToArray();
+            Action? restoreRemovedEvents = null;
 
             return Prepared(
                 hasChanges: true,
                 EventInstrumentChange(eventInstrumentId),
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     foreach (IndexedEventLaneTemplateEvent value in retainedBankEvents)
                     {
                         TemplateEventValue replacement = value.Original with
@@ -228,10 +239,8 @@ public static partial class ProjectDomainEditCommands
                         };
                         SetTemplateEvent(value.Event, replacement);
                     }
-                    foreach (IndexedEventLaneTemplateEvent value in removedEvents)
-                    {
-                        RemoveRequired(voice.Events, value.Event, "Template Event");
-                    }
+                    if (removedValues.Length != 0)
+                        restoreRemovedEvents = voice.Events.RemoveRangeWithUndo(removedValues);
                     foreach (IndexedSubVoiceEventMapping value in mappings)
                     {
                         RemoveRequired(voice.EventMappings, value.Mapping, "SubVoice event Mapping");
@@ -239,6 +248,7 @@ public static partial class ProjectDomainEditCommands
                 },
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     foreach (IndexedSubVoiceEventMapping value in mappings.OrderBy(value => value.Index))
                     {
                         InsertAt(
@@ -251,9 +261,11 @@ public static partial class ProjectDomainEditCommands
                     {
                         SetTemplateEvent(value.Event, value.Original);
                     }
-                    foreach (IndexedEventLaneTemplateEvent value in removedEvents.OrderBy(value => value.Index))
+                    if (removedValues.Length != 0)
                     {
-                        InsertAt(voice.Events, value.Index, value.Event, "Template Event");
+                        (restoreRemovedEvents ?? throw new InvalidOperationException(
+                            "Deleted Template Events do not have a pending removal to restore."))();
+                        restoreRemovedEvents = null;
                     }
                 });
         });

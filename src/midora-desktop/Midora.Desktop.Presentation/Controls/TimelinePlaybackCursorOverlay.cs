@@ -39,6 +39,19 @@ public sealed class TimelinePlaybackCursorOverlay : FrameworkElement
             TimelineSurfaceMode.General,
             FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty LaneHeaderWidthOverrideProperty = DependencyProperty.Register(
+        nameof(LaneHeaderWidthOverride),
+        typeof(double),
+        typeof(TimelinePlaybackCursorOverlay),
+        new FrameworkPropertyMetadata(double.NaN, FrameworkPropertyMetadataOptions.AffectsRender),
+        value => double.IsNaN((double)value) || (double.IsFinite((double)value) && (double)value >= 0));
+
+    public double LaneHeaderWidthOverride
+    {
+        get => (double)GetValue(LaneHeaderWidthOverrideProperty);
+        set => SetValue(LaneHeaderWidthOverrideProperty, value);
+    }
+
     public TimelinePlaybackCursorOverlay()
     {
         IsHitTestVisible = false;
@@ -83,7 +96,7 @@ public sealed class TimelinePlaybackCursorOverlay : FrameworkElement
         {
             return;
         }
-        double headerWidth = SurfaceMode switch
+        double headerWidth = !double.IsNaN(LaneHeaderWidthOverride) ? LaneHeaderWidthOverride : SurfaceMode switch
         {
             TimelineSurfaceMode.Arrangement => TimelineSurface.ArrangementLaneHeaderWidth,
             TimelineSurfaceMode.PianoRoll => 52,

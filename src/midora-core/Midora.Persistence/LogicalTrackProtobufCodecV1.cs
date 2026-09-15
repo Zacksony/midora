@@ -4,35 +4,33 @@ using Midora.Persistence.Wire.Proto.V1;
 
 namespace Midora.Persistence;
 
-internal static class LogicalTrackProtobufCodecV1
+internal static partial class LogicalTrackProtobufCodecV1
 {
     public const string ObjectType = "logical-track";
 
     public static byte[] Serialize(LogicalTrack value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        LogicalTrackV1 wire = ToWire(value);
-        Validate(wire);
-        return StrictProtobufWireV1.SerializeDeterministic(wire);
+        using MemoryStream output = new();
+        Serialize(value, output);
+        return output.ToArray();
     }
 
     public static LogicalTrack Restore(MidoraProject project, ReadOnlySpan<byte> bytes)
     {
         ArgumentNullException.ThrowIfNull(project);
-        try
-        {
-            StrictProtobufWireV1.Validate(bytes, LogicalTrackV1.Descriptor);
-            LogicalTrackV1 wire = LogicalTrackV1.Parser.ParseFrom(bytes);
-            Validate(wire);
-            return FromWire(project, wire);
-        }
-        catch (InvalidProtocolBufferException exception)
-        {
-            throw new InvalidDataException("Logical Track protobuf is malformed.", exception);
-        }
+        using MemoryStream input = new(bytes.ToArray(), writable: false);
+        return Restore(project, input);
     }
 
-    private static LogicalTrackV1 ToWire(LogicalTrack value)
+    public static LogicalTrack Restore(MidoraProject project, byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        using MemoryStream input = new(bytes, writable: false);
+        return Restore(project, input);
+    }
+
+    private static LogicalTrackV1 ToWire(LogicalTrack value, bool includeChildren = true)
     {
         PersistenceValueValidationV1.ValidateShortText(value.Name, "Logical Track name");
         LogicalTrackV1 result = new()
@@ -51,7 +49,7 @@ internal static class LogicalTrackProtobufCodecV1
         {
             result.ColorOverride = ProtobufValueCodecV1.ToWire(value.ColorOverride.Value);
         }
-        result.Segments.Add(value.Segments.Select(ToWire));
+        if (includeChildren) result.Segments.Add(value.Segments.Select(item => ToWire(item)));
         return result;
     }
 
@@ -73,7 +71,7 @@ internal static class LogicalTrackProtobufCodecV1
         return result;
     }
 
-    private static SegmentV1 ToWire(Segment value)
+    private static SegmentV1 ToWire(Segment value, bool includeChildren = true)
     {
         SegmentV1 result = new()
         {
@@ -82,8 +80,11 @@ internal static class LogicalTrackProtobufCodecV1
             LengthTicks = value.LengthTicks,
             ContentOffsetTick = value.ContentOffsetTick
         };
-        result.Notes.Add(value.Notes.Select(ToWire));
-        result.ParameterLanes.Add(value.ParameterLanes.Select(ToWire));
+        if (includeChildren)
+        {
+            result.Notes.Add(value.Notes.Select(ToWire));
+            result.ParameterLanes.Add(value.ParameterLanes.Select(item => ToWire(item)));
+        }
         return result;
     }
 
@@ -119,14 +120,14 @@ internal static class LogicalTrackProtobufCodecV1
         Velocity = value.Velocity
     };
 
-    private static LogicalParameterLaneV1 ToWire(LogicalParameterLane value)
+    private static LogicalParameterLaneV1 ToWire(LogicalParameterLane value, bool includeChildren = true)
     {
         LogicalParameterLaneV1 result = new()
         {
             Id = ProtobufValueCodecV1.ToWire(value.Id),
             ParameterId = ProtobufValueCodecV1.ToWire(value.ParameterId)
         };
-        result.Points.Add(value.Points.Select(EventInstrumentProtobufCodecV1.ToWire));
+        if (includeChildren) result.Points.Add(value.Points.Select(EventInstrumentProtobufCodecV1.ToWire));
         return result;
     }
 

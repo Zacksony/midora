@@ -1,4 +1,7 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Reflection;
+using System.Windows.Threading;
 using Midora.Application;
 using Midora.Compiler;
 using Midora.Desktop.Presentation.Interaction;
@@ -11,6 +14,7 @@ using Xunit;
 
 namespace Midora.Desktop.Tests;
 
+[Collection(DesktopSharedPresentationStateCollection.Name)]
 public sealed class DesktopSessionControllerTests
 {
     [Fact]
@@ -140,6 +144,20 @@ public sealed class DesktopSessionControllerTests
             $"[paged-ui-move] selected={selected.Length}; "
             + $"executeMs={moveTimer.Elapsed.TotalMilliseconds:F1}");
         Assert.True(move.Changed);
+
+        System.Diagnostics.Stopwatch undoTimer = System.Diagnostics.Stopwatch.StartNew();
+        session.Undo();
+        undoTimer.Stop();
+        Console.WriteLine(
+            $"[paged-ui-undo] selected={selected.Length}; "
+            + $"undoMs={undoTimer.Elapsed.TotalMilliseconds:F1}");
+
+        System.Diagnostics.Stopwatch redoTimer = System.Diagnostics.Stopwatch.StartNew();
+        session.Redo();
+        redoTimer.Stop();
+        Console.WriteLine(
+            $"[paged-ui-redo] selected={selected.Length}; "
+            + $"redoMs={redoTimer.Elapsed.TotalMilliseconds:F1}");
 
         long createTick = checked(segment.ContentEndTick + 1);
         System.Diagnostics.Stopwatch createTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -308,6 +326,7 @@ public sealed class DesktopSessionControllerTests
         ProjectTreeNode failedNode = session.ProjectTree.Single(item => item.Kind == ProjectTreeNodeKind.Diagnostics);
         Assert.Equal($"Diagnostics ({session.IssueSummary})", failedNode.Title);
         Assert.True(session.WarningCount > 0 || session.ErrorCount > 0);
+        string failedTitle = failedNode.Title;
 
         session.Execute(ProjectDomainEditCommands.DeleteTimeSignature(change.Id));
         await session.Document.Compilation.EnsureCurrentCompilationAsync();
@@ -319,7 +338,29 @@ public sealed class DesktopSessionControllerTests
 
         ProjectTreeNode repairedNode = session.ProjectTree.Single(item => item.Kind == ProjectTreeNodeKind.Diagnostics);
         Assert.Equal($"Diagnostics ({session.IssueSummary})", repairedNode.Title);
-        Assert.NotEqual(failedNode.Title, repairedNode.Title);
+        Assert.NotEqual(failedTitle, repairedNode.Title);
+    }
+
+    [Fact]
+    public async Task LateCompilationNotificationFromClosedProjectIsIgnored()
+    {
+        await using DesktopSessionController session = new();
+        await session.CreateProjectAsync(new NewProjectCreationRequest
+        {
+            ProjectName = "Closed compilation notification",
+            PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+        });
+        ProjectCompilationSession closedCompilation = session.Document!.Compilation;
+        await session.CloseProjectAsync();
+        long refreshPasses = session.ModelRefreshPassCount;
+        MethodInfo callback = typeof(DesktopSessionController).GetMethod(
+            "OnCompilationChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        _ = callback.Invoke(session, [closedCompilation, EventArgs.Empty]);
+
+        Assert.False(session.HasProject);
+        Assert.Equal(refreshPasses, session.ModelRefreshPassCount);
     }
 
     [Fact]
@@ -1274,16 +1315,22 @@ public sealed class DesktopSessionControllerTests
 
         TimelineRenderSnapshot snapshot = Assert.IsType<TimelineRenderSnapshot>(arrangement.Snapshot);
         TimelineRenderSnapshot ruler = Assert.IsType<TimelineRenderSnapshot>(arrangement.RulerSnapshot);
-        TimelineRenderItem marker = Assert.Single(ruler.Items);
+        TimelineRenderItem marker = Assert.Single(ruler.EnumerateAllItems());
         Assert.Equal(TimelineItemKind.Marker, marker.Kind);
         Assert.Equal("Verse", marker.Label);
         Assert.True(marker.State.HasFlag(TimelineItemState.HitTestDisabled));
-        Assert.True(snapshot.Items.Count >= 3);
+        Assert.True(snapshot.HasConductorPreviewItems);
+        Assert.Empty(snapshot.Items);
         Assert.All(snapshot.Items, item =>
             Assert.True(item.State.HasFlag(TimelineItemState.HitTestDisabled)));
-        Assert.Contains(snapshot.Items, item => item.Label.Contains("132.5 BPM", StringComparison.Ordinal));
-        Assert.Contains(snapshot.Items, item => item.Label == "3/4");
-        Assert.Contains(snapshot.Items, item => item.Label == "Verse");
+        Assert.Equal(385, snapshot.MaximumEndTick);
+        // Conductor previews now use a separate immutable source instead of
+        // copying every event into the Arrangement's hit-test items.
+        var projection = new ConductorTimelineProjection(session.Project!.Conductor, 0, 0, 240);
+        var preview = projection.ArrangementSource.EnumerateAll().ToArray();
+        Assert.Contains(preview, item => ConductorRenderItemSource.GetDisplayLabel(item) == "132.5 BPM");
+        Assert.Contains(preview, item => ConductorRenderItemSource.GetDisplayLabel(item) == "3/4");
+        Assert.Contains(preview, item => item.Label == "Verse");
     }
 
     [Fact]
@@ -1301,9 +1348,11 @@ public sealed class DesktopSessionControllerTests
         TimelineWorkspaceViewModel conductor = Assert.IsType<TimelineWorkspaceViewModel>(
             session.OpenWorkspace(conductorNode));
         session.SelectWorkspaceObject(conductor, tempo.Id);
+        Assert.Equal(tempo.Id, conductor.Selection.Primary);
 
         ObjectPropertiesViewModel properties = session.CreateObjectProperties(conductor);
         Assert.Equal("Tempo", properties.Title);
+        WaitForConductorPrimaryPresentation(conductor, tempo.Id);
         Assert.Equal(tempo.Id, conductor.SelectedConductorEvent?.Id);
         Assert.True(ObjectPropertiesProjection.CanEditInPropertiesDialog(
             conductor,
@@ -1327,6 +1376,29 @@ public sealed class DesktopSessionControllerTests
 
         Assert.Equal(120m, session.Project.Conductor.Tempos.Single(value =>
             value.Id == tempo.Id).BeatsPerMinute);
+
+        static void WaitForConductorPrimaryPresentation(TimelineWorkspaceViewModel workspace, MidoraId id)
+        {
+            if (workspace.SelectedConductorEvent?.Id == id) return;
+            // Formal selection is immediate; cold ID metadata is prepared on a
+            // worker and its optional row is published on the captured Dispatcher.
+            // xUnit's async context does not pump that Dispatcher automatically.
+            DispatcherFrame frame = new();
+            PropertyChangedEventHandler onChanged = (_, args) =>
+            {
+                if (args.PropertyName == nameof(workspace.SelectedConductorEvent)
+                    && workspace.SelectedConductorEvent?.Id == id) frame.Continue = false;
+            };
+            workspace.PropertyChanged += onChanged;
+            DispatcherTimer timeout = new(TimeSpan.FromSeconds(5), DispatcherPriority.Send,
+                (_, _) => frame.Continue = false, Dispatcher.CurrentDispatcher);
+            try { Dispatcher.PushFrame(frame); }
+            finally
+            {
+                timeout.Stop();
+                workspace.PropertyChanged -= onChanged;
+            }
+        }
     }
 
     [Fact]
@@ -1807,14 +1879,14 @@ public sealed class DesktopSessionControllerTests
         });
         session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
         EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
-        session.Execute(ProjectDomainEditCommands.UpdateEventInstrumentColor(
-            instrument.Id,
-            new MidoraColor(0x33, 0x66, 0x99)));
         session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track", instrument.Id));
         LogicalTrack track = Assert.Single(session.Project.Tracks);
         session.Execute(ProjectDomainEditCommands.CreateSegment(track.Id, 0, 480));
 
         TimelineWorkspaceViewModel arrangement = session.OpenArrangement();
+        InstrumentWorkspaceViewModel instrumentWorkspace = session.OpenInstrument(instrument.Id);
+        MidoraColor color = new(0x33, 0x66, 0x99);
+        session.Execute(ProjectDomainEditCommands.UpdateEventInstrumentColor(instrument.Id, color));
         TimelineRenderSnapshot snapshot = Assert.IsType<TimelineRenderSnapshot>(arrangement.Snapshot);
         TimelineRenderItem segment = Assert.Single(snapshot.Items, value => value.Kind == TimelineItemKind.Segment);
         ProjectTreeNode conductorNode = session.ProjectTree.Single(value =>
@@ -1824,10 +1896,246 @@ public sealed class DesktopSessionControllerTests
 
         Assert.Equal(0xff336699u, segment.AccentColor);
         Assert.Equal(0xff336699u, snapshot.LaneColors[segment.Lane]);
+        Assert.Equal("#336699", instrumentWorkspace.InstrumentColorText);
         EventInstrumentBrowserRow browserRow = Assert.Single(arrangement.EventInstrumentBrowser);
         Assert.Equal(0xff336699u, browserRow.ColorArgb);
         Assert.Equal("#FF336699", browserRow.ColorText);
         Assert.Equal(27, conductor.LaneHeight);
+
+        session.Undo();
+        snapshot = Assert.IsType<TimelineRenderSnapshot>(arrangement.Snapshot);
+        segment = Assert.Single(snapshot.Items, value => value.Kind == TimelineItemKind.Segment);
+        MidoraColor defaultColor = MidoraColor.DefaultInstrument;
+        uint defaultArgb = 0xff000000u
+            | (uint)defaultColor.Red << 16
+            | (uint)defaultColor.Green << 8
+            | defaultColor.Blue;
+        Assert.Equal(defaultArgb, segment.AccentColor);
+        Assert.Equal(defaultArgb, snapshot.LaneColors[segment.Lane]);
+        Assert.Equal(
+            $"#{defaultColor.Red:X2}{defaultColor.Green:X2}{defaultColor.Blue:X2}",
+            instrumentWorkspace.InstrumentColorText);
+
+        session.Redo();
+        snapshot = Assert.IsType<TimelineRenderSnapshot>(arrangement.Snapshot);
+        segment = Assert.Single(snapshot.Items, value => value.Kind == TimelineItemKind.Segment);
+        Assert.Equal(0xff336699u, segment.AccentColor);
+        Assert.Equal("#336699", instrumentWorkspace.InstrumentColorText);
+    }
+
+    [Fact]
+    public async Task TrackPresentationColorsRefreshOnlyTheAffectedTrackWorkspace()
+    {
+        await using DesktopSessionController session = new();
+        await session.CreateProjectAsync(new NewProjectCreationRequest
+        {
+            ProjectName = "Track presentation colors",
+            PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+        });
+        session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
+        EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
+        MidoraColor instrumentColor = new(0x21, 0x43, 0x65);
+        session.Execute(ProjectDomainEditCommands.UpdateEventInstrumentColor(
+            instrument.Id,
+            instrumentColor));
+        session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Logical", instrument.Id));
+        LogicalTrack logicalTrack = Assert.Single(session.Project.Tracks);
+        session.Execute(ProjectDomainEditCommands.CreateSegment(logicalTrack.Id, 0, 480));
+        Segment logicalSegment = Assert.Single(logicalTrack.Segments);
+
+        session.Execute(ProjectDomainEditCommands.CreatePureMidiTrackWithNewRoot("MIDI"));
+        PureMidiTrack midiTrack = Assert.Single(session.Project.PureMidiTracks);
+        session.Execute(ProjectDomainEditCommands.CreateMidiSegment(midiTrack.Id, 0, 480));
+        MidiSegment midiSegment = Assert.Single(midiTrack.Segments);
+
+        TimelineWorkspaceViewModel arrangement = session.OpenArrangement();
+        TimelineWorkspaceViewModel logicalEditor = session.OpenSegment(logicalSegment.Id);
+        TimelineWorkspaceViewModel midiEditor = session.OpenSegment(midiSegment.Id);
+        TimelineRenderSnapshot logicalBefore = logicalEditor.Snapshot!;
+        TimelineRenderSnapshot midiBefore = midiEditor.Snapshot!;
+
+        MidoraColor logicalOverride = new(0x57, 0x68, 0x79);
+        session.Execute(ProjectDomainEditCommands.UpdateLogicalTrackProperties(
+            logicalTrack.Id,
+            logicalTrack.Name,
+            logicalOverride));
+
+        TimelineRenderSnapshot arrangementSnapshot = arrangement.Snapshot!;
+        TimelineRenderItem renderedLogicalSegment = Assert.Single(
+            arrangementSnapshot.Items,
+            value => value.Id == logicalSegment.Id);
+        Assert.Equal(0xff576879u, renderedLogicalSegment.AccentColor);
+        Assert.NotSame(logicalBefore, logicalEditor.Snapshot);
+        Assert.Same(midiBefore, midiEditor.Snapshot);
+
+        TimelineRenderSnapshot midiBeforeColor = midiEditor.Snapshot!;
+        MidoraColor midiColor = new(0x87, 0x76, 0x65);
+        session.Execute(ProjectDomainEditCommands.UpdatePureMidiTrackProperties(
+            midiTrack.Id,
+            midiTrack.Name,
+            midiColor));
+
+        arrangementSnapshot = arrangement.Snapshot!;
+        TimelineRenderItem renderedMidiSegment = Assert.Single(
+            arrangementSnapshot.Items,
+            value => value.Id == midiSegment.Id);
+        Assert.Equal(0xff877665u, renderedMidiSegment.AccentColor);
+        Assert.NotSame(midiBeforeColor, midiEditor.Snapshot);
+
+        session.Execute(ProjectDomainEditCommands.UpdateLogicalTrackColorOverride(
+            logicalTrack.Id,
+            colorOverride: null));
+        arrangementSnapshot = arrangement.Snapshot!;
+        renderedLogicalSegment = Assert.Single(
+            arrangementSnapshot.Items,
+            value => value.Id == logicalSegment.Id);
+        Assert.Equal(0xff214365u, renderedLogicalSegment.AccentColor);
+    }
+
+    [Fact]
+    public async Task ExplicitSubVoiceEventLaneSelectionWinsOverSelectedPointDuringRebuild()
+    {
+        await using DesktopSessionController session = new();
+        await session.CreateProjectAsync(new NewProjectCreationRequest
+        {
+            ProjectName = "Explicit SubVoice lane",
+            PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+        });
+        session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
+        EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
+        session.Execute(ProjectDomainEditCommands.CreateSubVoice(instrument.Id, "Voice"));
+        SubVoice voice = instrument.SubVoices.Single(value => value.Name == "Voice");
+        session.Execute(ProjectDomainEditCommands.CreateTemplateControlChange(
+            instrument.Id, voice.Id, 24, 1, 32));
+        session.Execute(ProjectDomainEditCommands.CreateTemplateControlChange(
+            instrument.Id, voice.Id, 48, 74, 96));
+
+        InstrumentWorkspaceViewModel workspace = session.OpenInstrument(instrument.Id);
+        workspace.Selection.Replace(voice.Id);
+        session.RefreshWorkspace(workspace);
+        TemplateEvent cc74 = voice.Events.Single(value => value.Tick == 48);
+        TemplateEvent cc1 = voice.Events.Single(value => value.Tick == 24);
+        workspace.Selection.Replace(cc1.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1),
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+
+        workspace.Selection.Replace(cc1.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1),
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+
+        workspace.Selection.Replace(cc74.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1), // A2b: selection changes are not explicit navigation.
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+        int targetLane = workspace.RenderLanes
+            .Select((lane, index) => (lane, index))
+            .Single(value => value.lane.Target == MidiValueTarget.ControlChange(1))
+            .index;
+        workspace.ActiveRenderLaneIndex = targetLane;
+        workspace.PreferCurrentRenderLaneOnNextRebuild();
+
+        session.RefreshWorkspace(workspace);
+
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1),
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+        Assert.Single(workspace.SubVoiceEventSnapshot!.Items);
+        Assert.Equal(24, workspace.SubVoiceEventSnapshot.Items[0].StartTick);
+
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1),
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+
+        workspace.Selection.Replace(cc1.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1),
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+
+        workspace.Selection.Replace(cc74.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(
+            MidiValueTarget.ControlChange(1),
+            workspace.GetRenderLane(workspace.ActiveRenderLaneIndex)?.Target);
+    }
+
+    [Fact]
+    public async Task ExplicitLogicalParameterLaneSelectionWinsOverSelectedPointDuringRebuild()
+    {
+        await using DesktopSessionController session = new();
+        await session.CreateProjectAsync(new NewProjectCreationRequest
+        {
+            ProjectName = "Explicit parameter lane",
+            PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+        });
+        session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
+        EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
+        session.Execute(ProjectDomainEditCommands.CreateLogicalParameter(
+            instrument.Id, "A", LogicalParameterType.Integer, 0, 127, 0, 127, 0));
+        session.Execute(ProjectDomainEditCommands.CreateLogicalParameter(
+            instrument.Id, "B", LogicalParameterType.Integer, 0, 127, 0, 127, 0));
+        LogicalParameterDefinition[] parameters = instrument.LogicalParameters.ToArray();
+        session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track", instrument.Id));
+        LogicalTrack track = Assert.Single(session.Project.Tracks);
+        session.Execute(ProjectDomainEditCommands.CreateSegment(track.Id, 0, 480));
+        Segment segment = Assert.Single(track.Segments);
+        session.Execute(ProjectDomainEditCommands.CreateLogicalParameterLane(
+            segment.Id, parameters[0].Id));
+        session.Execute(ProjectDomainEditCommands.CreateLogicalParameterLane(
+            segment.Id, parameters[1].Id));
+        LogicalParameterLane[] lanes = segment.ParameterLanes.ToArray();
+        session.Execute(ProjectDomainEditCommands.CreateLogicalParameterPoint(
+            segment.Id, lanes[0].Id, 24, 32, CurveInterpolation.Step));
+        session.Execute(ProjectDomainEditCommands.CreateLogicalParameterPoint(
+            segment.Id, lanes[1].Id, 48, 96, CurveInterpolation.Step));
+
+        TimelineWorkspaceViewModel workspace = session.OpenSegment(segment.Id);
+        CurvePoint secondLanePoint = Assert.Single(lanes[1].Points);
+        CurvePoint firstLanePoint = Assert.Single(lanes[0].Points);
+        workspace.Selection.Replace(firstLanePoint.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+
+        workspace.Selection.Replace(firstLanePoint.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+
+        workspace.Selection.Replace(firstLanePoint.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+
+        workspace.Selection.Replace(secondLanePoint.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+        int targetLane = workspace.ParameterLaneOptions
+            .Select((lane, index) => (lane, index))
+            .Single(value => value.lane.ParameterId == parameters[0].Id)
+            .index;
+        workspace.ActiveParameterLaneIndex = targetLane;
+        workspace.PreferCurrentParameterLaneOnNextRebuild();
+
+        session.RefreshWorkspace(workspace);
+
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+        Assert.Single(workspace.ParameterSnapshot!.Items);
+        Assert.Equal(24, workspace.ParameterSnapshot.Items[0].StartTick);
+
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+
+        workspace.Selection.Replace(firstLanePoint.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
+
+        workspace.Selection.Replace(secondLanePoint.Id);
+        session.RefreshWorkspace(workspace);
+        Assert.Equal(parameters[0].Id, workspace.GetActiveParameterLaneOption()?.ParameterId);
     }
 
     [Fact]

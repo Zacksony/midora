@@ -247,7 +247,7 @@
 - 选择集操作：Segment、Logical/Template Note、Logical Parameter Point 与 SubVoice MIDI Event Point 的 Flip、Scale、Transpose 与 Batch Edit 均由 Application 原子命令完成。Segment 内容操作只处理与当前暴露 `[ContentOffsetTick, ContentEndTick)` 相交的对象；隐藏对象不被变换。删除越界 Note 仍可 Undo。
 - 表达式：Batch Edit 的 `=` 语法只允许数值/布尔运算、条件表达式、double cast 和数值型 `System.Math`；拒绝语句、赋值、对象创建、任意 API 与循环。Roslyn 仅解析受限 Expression 语法，正式 binder 保留 C# 数值提升和 Math 重载选择后建立 `System.Linq.Expressions` 委托；不得 Emit DLL、创建 AssemblyLoadContext、读取运行机器 TPA 或依赖发布目录中的 reference assembly。`v1/p1/k1/g1/t1` 依赖仍以静态 DAG 排序，直接或间接环均在提交前拒绝；一次整批求值共享 10 秒上限。所有整数结果采用 `AwayFromZero`，目标字段再执行明确的 clamp/delete 规则。
 - UI 会话：批量操作前后的 Selection/Primary Selection 按 Project history state ID 建立 session bookmark。操作后不存在的 ID 由 workspace projection 清除；Undo 回到旧 state 时恢复被删除对象原有选择，Redo 再恢复新 state 的选择。bookmark 不进入 Project、`.midora`、canonical fingerprint 或普通 Undo payload。
-- 预设：Note 与 Event Batch preset 分别平铺在 `%LOCALAPPDATA%\Midora\Presets\NoteBatchPresets` 和 `EventBatchPresets`，每个 preset 是一个独立 JSON。它们属于应用本机资源，不是 Application Preferences，也不进入 Project；撞名拒绝，损坏的独立文件只在当次列表中隔离省略。
+- 预设：Note 与 Event Batch preset 分别平铺在 `<ProgramRoot>\Data\Presets\NoteBatchPresets` 和 `<ProgramRoot>\Data\Presets\EventBatchPresets`，每个 preset 是一个独立 JSON。它们属于应用本地可携数据，不是 Application Preferences，也不进入 Project；撞名拒绝，损坏的独立文件只在当次列表中隔离省略。该路径已被 Program-root portable storage 决策取代，不得读写旧 `%LOCALAPPDATA%\Midora\Presets`。
 - 依据：产品所有者于 2026-08-18 明确批准 Logical Track clipboard、精确冲突静默删除、批量选择变换与批量表达式工作流。该决定收窄并替代 SRS 20.6.5 对 Logical Track 普通 clipboard 的排除，以及与精确 newcomer 冲突失败相抵触的旧交互文本；SRS 原文未修改。
 
 ## ADR-UI-034：事件轨迹按音乐时间网格采样与焦点敏感批量快捷键

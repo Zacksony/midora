@@ -359,6 +359,8 @@ loopEnd > loopStart
 播放系统不补发该 Note On。
 ```
 这是中途冷启动的明确限制。
+
+对于 Pre-Roll 实例，如果播放/跳转/循环起点位于 Instance Origin 之后，系统同样不补发 origin 之前的模板 Note On，也不在输出起点前隐藏渲染并丢弃 PCM 来恢复 sample 相位。即使 Logical Gate anchor 尚未到达，该实例的范围前 Note On 仍属于已经错过的历史。非 Note 状态继续按 13.8.2 恢复。
 ### 13.8.2 必须恢复非 Note 状态
 从中途播放时，必须在播放起点恢复当前有效的非 Note 状态，包括：
 ```text
@@ -713,10 +715,9 @@ Stop Cursor Behavior
 Render-Ahead Buffer
 Device Buffer Request
 Realtime Maximum Sample Voices per Unit Stream
-Audio Cache Root
 Maximum Reusable Audio Cache Bytes
 ```
-以上均为当前 Windows 用户本机偏好，不进入 Project、`.midora`、Project Undo / Redo 或 canonical 编译结果。初版不提供 Project 级 Playback override。
+以上均为当前 ProgramRoot portable 偏好，不进入 Project、`.midora`、Project Undo / Redo 或 canonical 编译结果。Audio Cache Root 固定为 `<ProgramRoot>\.tmp\AudioCache`，不作为偏好保存。初版不提供 Project 级 Playback override。
 初版不提供 WASAPI Shared / Exclusive 模式选择；正式 BASSWASAPI 后端固定使用第 13.14.7 节策略。
 
 ### 13.14.3 设备枚举与选择
@@ -1152,11 +1153,10 @@ Master/Limiter：保留 Unit PCM，失效相关 playback span。
 
 Application Preferences 包含：
 ```text
-Audio Cache Root：默认 %LOCALAPPDATA%\Midora\AudioCache
 Maximum Reusable Audio Cache Bytes：默认 16 GiB，范围 0..Int64.MaxValue
 ```
 
-Cache Root 只接受可写的本机 fully-qualified 路径，拒绝相对路径、UNC 和网络位置。程序只能管理 root 下由当前版本 manifest 标识的 `session-*` 子目录；不得递归删除 root 或未知文件。
+Audio Cache Root 不再是可编辑 Preference，固定为 `<ProgramRoot>\.tmp\AudioCache`。ProgramRoot 启动能力探测统一拒绝相对路径、UNC、网络/可移动卷、reparse-point root 与缺少必要事务能力的目录。程序只能管理 root 下由当前版本 manifest 标识的 `session-*` 子目录；不得递归删除 root 或未知文件。
 
 主应用成功取得单实例所有权后，以及新 audio-cache session 激活前，必须自动扫描并 best-effort 删除上次异常退出遗留的、当前版本 manifest 可识别且未持有活动独占锁的 `session-*` 直接子目录。删除失败不得阻止应用启动或建立新 session，后续 session 激活必须重试；仍活动、manifest 缺失/不匹配、路径不是 root 直接子项或属于 reparse point 的目录一律保留。自动清理不得扫描、删除或重建 root 本身，也不得把未知内容当作 Midora 缓存。
 
@@ -1329,6 +1329,8 @@ Event Instrument Library 直接预览某个 Event Instrument 时：
 Event Instrument 预览不参与项目时间线编译；
 但可以借用当前播放光标处 Tempo 作为默认试听速度。
 ```
+
+Event Instrument standalone Preview 不应用 Definition 的 `Pre-Roll Ticks`；预览任务把模板 tick 0 直接放在自身 preview origin，等效使用 `Pre-Roll Ticks = 0`。该规则避免一个不绑定 Logical Segment/Logical Note anchor 的试听入口虚构负时间或额外等待。SubVoice standalone Preview 同理。
 ---
 ## 13.22 Event Instrument 虚拟键盘预览
 ### 13.22.1 键盘显示
@@ -1501,6 +1503,8 @@ velocity = 当前 Event Instrument 预览 velocity
 不创建或修改 Project Note
 ```
 
+Pitch Ruler audition 不创建 Logical Segment Instance，因此不应用 Event Instrument `Pre-Roll Ticks`，按等效值 0 从预览 Gate Start 展开模板。它仍使用当前绑定 Definition 的其他正式生命周期与 Mapping 语义。
+
 单音符放置手势不启动声音 Preview；只使用第 18、20 章规定的虚线视觉草稿。该视觉草稿不创建额外 Project 对象，不单独进入 Undo / Redo。Pitch Ruler 点击没有 Project 编辑副作用，只报告预览不可用。
 ---
 ## 13.25 空项目播放
@@ -1615,4 +1619,12 @@ Reader 只能在第一次读到偶数序列时复制完整字段，并在第二�
 供应商 current-package URL 只允许在显式确认后生成 `releaseBaseline=false` 的本地开发候选。正式基线升级必须作为独立变更提交：固定新版本码与 SHA-256，重跑 Native interop、音频语义、逐采样确定性、实时/离线、性能和发布测试；不得自动跟随最新版。
 
 进程内后端或“子进程合成、主进程 WASAPI”的混合链只允许作为开发期对照测试，不是正式消费者，不得由产品运行时回退或切换进入。
+
+## 13.31 统一音色选择器试听
+
+音色选择器试听使用独立干净 Project/受控编译上下文，生成正式 canonical 后进入已有 Preview→Master→Limiter 链。Bank/Program、目标模式和音符只取当前 draft；不套当前编曲的 Expression、Pitch Bend、Mapping 或共享通道状态，不改变项目、Root mode、主播放指针或当前音乐。
+
+自动试听首次默认启用、Key=60、Velocity=100、Gate=500ms；这些字段保存为程序偏好。有限 Gate 通过正式 tick/sample 时序结束，不能由 UI Timer/Thread.Sleep 发 NoteOff。手按键使用 held-gate 预览窗口，松键结束 Gate。模式仅供本次试听，初值取可知目标模式；名称不保证该 preset 一定存在或发声。
+
+每个弹窗具有显式试听 owner；最新选择取代旧请求，至多一个执行请求和一个可替换待处理请求。编辑提交、确认、取消和关闭先等待停止自有试听，禁止迟到结果重启。不能为了试听抢停普通 Project 播放。无 Enabled SoundFont、设备/加载错误只报告试听不可用，合法 draft 仍可提交；清理失败必须明确报告，不把未完成的 Stop 当作成功。
 ---

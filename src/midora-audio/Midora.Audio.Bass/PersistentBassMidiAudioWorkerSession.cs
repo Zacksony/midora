@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.Versioning;
+using Midora.Common;
 
 namespace Midora.Audio.Bass;
 
@@ -7,6 +8,7 @@ namespace Midora.Audio.Bass;
 internal sealed class PersistentBassMidiAudioWorkerSession : IBassMidiAudioWorkerSession
 {
     private readonly PersistentBassMidiAudioWorkerHost _host;
+    private readonly MidoraOwnedTemporaryDirectoryLease _ownedTemporaryDirectoryLease;
     private readonly string _ownedTemporaryDirectory;
     private readonly IAudioPcmCacheSessionAccess? _audioCache;
     private readonly AudioSegmentCacheStaging? _cacheStaging;
@@ -58,10 +60,10 @@ internal sealed class PersistentBassMidiAudioWorkerSession : IBassMidiAudioWorke
 
         _audioCache = audioCache;
         _totalFrameCount = plan.TotalFrameCount;
-        _ownedTemporaryDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"midora-audio-task-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_ownedTemporaryDirectory);
+        _ownedTemporaryDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.AudioWorkerExchangeDirectory,
+            "midora-audio-task");
+        _ownedTemporaryDirectory = _ownedTemporaryDirectoryLease.DirectoryPath;
         try
         {
             if (plan.EventPageProvider is not null) playbackSpanCacheEnabled = false;
@@ -442,19 +444,6 @@ internal sealed class PersistentBassMidiAudioWorkerSession : IBassMidiAudioWorke
 
     private void CleanupOwnedTemporaryDirectory()
     {
-        try
-        {
-            string fullPath = Path.GetFullPath(_ownedTemporaryDirectory);
-            string prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()))
-                + Path.DirectorySeparatorChar;
-            if (fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileName(fullPath).StartsWith("midora-audio-task-", StringComparison.Ordinal))
-            {
-                Directory.Delete(fullPath, recursive: true);
-            }
-        }
-        catch
-        {
-        }
+        _ownedTemporaryDirectoryLease.Dispose();
     }
 }

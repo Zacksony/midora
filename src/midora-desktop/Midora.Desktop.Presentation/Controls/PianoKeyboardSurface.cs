@@ -147,7 +147,9 @@ public sealed class PianoKeyboardSurface : Control
         }
         if (hit is not KeyLayout key) return;
         _pressedNote = key.Note;
-        _pressedVelocity = CalculatePreviewVelocity(point.Y, ActualHeight);
+        _pressedVelocity = CalculatePreviewVelocity(
+            point.Y - key.Bounds.Top,
+            key.Bounds.Height);
         CaptureMouse();
         InvalidateVisual();
         NotePressed?.Invoke(this, new(key.Note, _pressedVelocity));

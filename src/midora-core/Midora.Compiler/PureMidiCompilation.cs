@@ -5,6 +5,9 @@ namespace Midora.Compiler;
 
 public sealed partial class MidoraCompiler
 {
+    internal const string PureMidiAudioFragmentFingerprintAbi =
+        "MIDORA_PURE_MIDI_AUDIO_FRAGMENT_V4";
+
     private sealed record PureMidiPlan(
         PureMidiRootPlan[] Roots,
         CanonicalSmfTrackDescriptor[] TrackDescriptors,
@@ -39,25 +42,6 @@ public sealed partial class MidoraCompiler
         MidoraId EndOwnerTrackId,
         MidoraId EndOwnerSegmentId);
 
-    private readonly record struct PureMidiPendingEvent(
-        long Tick,
-        int TrackOrder,
-        long ExplicitOrder,
-        int EndpointOrder,
-        MidoraId StableId,
-        MidiMessage Message,
-        SourceReference Source,
-        MidoraId ExportTrackId,
-        CanonicalEventRole Role,
-        long SemanticTargetKey);
-
-    private readonly record struct PureMidiHistoricalStateCandidate(
-        long AbsoluteTick,
-        PureMidiTrackPlan TrackPlan,
-        MidiSegment Segment,
-        DirectMidiChannelEventValue Value,
-        MidiMessage Message,
-        long SemanticTargetKey);
 
     private readonly record struct PureMidiChannelModeSystemExclusiveEvent(
         MidoraId RootId,
@@ -179,7 +163,7 @@ public sealed partial class MidoraCompiler
                 foreach (MidiSegment segment in trackPlan.Segments)
                 {
                     long contentEnd = checked(segment.ContentOffsetTick + segment.LengthTicks);
-                    foreach (OpaqueMidiEvent value in segment.OpaqueEvents
+                    foreach (OpaqueMidiEventValue value in segment.OpaqueEvents.EnumerateValues(cancellationToken)
                         .Where(value => value.Tick >= segment.ContentOffsetTick
                             && value.Tick < contentEnd)
                         .OrderBy(value => value.Tick)
@@ -717,269 +701,6 @@ public sealed partial class MidoraCompiler
         return result.ToArray();
     }
 
-    private static List<CanonicalMidiEvent> MaterializePureMidiEvents(
-        PureMidiPlan plan,
-        IReadOnlyDictionary<MidoraId, int> unitByRoot,
-        MidiInitialState resetDefaults,
-        long startTick,
-        CancellationToken cancellationToken)
-    {
-        List<CanonicalMidiEvent> result = [];
-        foreach (PureMidiRootPlan rootPlan in plan.Roots)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!unitByRoot.TryGetValue(rootPlan.Root.Id, out int unit))
-            {
-                continue;
-            }
-            byte port = checked((byte)(unit >> 4));
-            byte channel = checked((byte)(unit & 15));
-            List<PureMidiPendingEvent> pending = [];
-            foreach (PureMidiTrackPlan trackPlan in rootPlan.Tracks)
-            {
-                foreach (MidiSegment segment in trackPlan.Segments)
-                {
-                    MaterializePureMidiSegment(
-                        rootPlan.Root,
-                        trackPlan,
-                        segment,
-                        channel,
-                        pending,
-                        cancellationToken);
-                }
-            }
-            AppendPureMidiHistoricalStateEvents(
-                rootPlan,
-                startTick,
-                channel,
-                pending,
-                cancellationToken);
-
-            pending.Sort(static (left, right) =>
-            {
-                int value = left.Tick.CompareTo(right.Tick);
-                if (value != 0) return value;
-                value = left.TrackOrder.CompareTo(right.TrackOrder);
-                if (value != 0) return value;
-                value = left.ExplicitOrder.CompareTo(right.ExplicitOrder);
-                if (value != 0) return value;
-                value = left.EndpointOrder.CompareTo(right.EndpointOrder);
-                return value != 0 ? value : left.StableId.CompareTo(right.StableId);
-            });
-
-            long stableOrder = 1L << 40;
-            foreach (PureMidiPendingEvent value in pending)
-            {
-                result.Add(new(
-                    value.Tick,
-                    port,
-                    channel,
-                    value.Message,
-                    value.Role,
-                    stableOrder++,
-                    value.SemanticTargetKey,
-                    stableOrder,
-                    value.Source,
-                    value.ExportTrackId,
-                    value.TrackOrder,
-                    value.ExplicitOrder));
-            }
-
-            foreach (PureMidiRootInterval interval in rootPlan.Intervals)
-            {
-                long[] usedTargets = pending
-                    .Where(value => value.Tick >= interval.StartTick
-                        && value.Tick < interval.EndTick
-                        && value.SemanticTargetKey != long.MinValue)
-                    .Select(value => value.SemanticTargetKey)
-                    .Distinct()
-                    .Order()
-                    .ToArray();
-                SourceReference startSource = RootLifecycleSource(
-                    rootPlan.Root.Id,
-                    interval.StartOwnerTrackId,
-                    interval.StartOwnerSegmentId,
-                    interval.StartTick,
-                    interval.StartOwnerTrackId);
-                int startTrackOrder = rootPlan.Tracks
-                    .Single(value => value.Track.Id == interval.StartOwnerTrackId)
-                    .TrackOrder;
-                long startOrder = long.MinValue / 4 + interval.StartTick;
-                result.Add(new(
-                    interval.StartTick,
-                    port,
-                    channel,
-                    MidiMessage.ControlChange(channel, 121, 0),
-                    CanonicalEventRole.Reset,
-                    startOrder++,
-                    ControlTargetKey(121),
-                    startOrder,
-                    startSource,
-                    interval.StartOwnerTrackId,
-                    startTrackOrder,
-                    long.MinValue));
-                AppendPureRootDefaults(
-                    result,
-                    interval.StartTick,
-                    port,
-                    channel,
-                    usedTargets,
-                    resetDefaults,
-                    startSource,
-                    interval.StartOwnerTrackId,
-                    startTrackOrder,
-                    ref startOrder);
-
-                SourceReference endSource = RootLifecycleSource(
-                    rootPlan.Root.Id,
-                    interval.EndOwnerTrackId,
-                    interval.EndOwnerSegmentId,
-                    interval.EndTick,
-                    interval.EndOwnerTrackId);
-                int endTrackOrder = rootPlan.Tracks
-                    .Single(value => value.Track.Id == interval.EndOwnerTrackId)
-                    .TrackOrder;
-                long endOrder = long.MaxValue / 4 + interval.EndTick;
-                result.Add(new(
-                    interval.EndTick,
-                    port,
-                    channel,
-                    MidiMessage.ControlChange(channel, AllSoundOffController, 0),
-                    CanonicalEventRole.RootBoundaryCleanup,
-                    endOrder++,
-                    ControlTargetKey(AllSoundOffController),
-                    endOrder,
-                    endSource,
-                    interval.EndOwnerTrackId,
-                    endTrackOrder,
-                    long.MaxValue));
-                AppendPureRootDefaults(
-                    result,
-                    interval.EndTick,
-                    port,
-                    channel,
-                    usedTargets,
-                    resetDefaults,
-                    endSource,
-                    interval.EndOwnerTrackId,
-                    endTrackOrder,
-                    ref endOrder,
-                    CanonicalEventRole.RootBoundaryCleanup);
-            }
-        }
-        result.Sort(CanonicalComparer.Instance);
-        return result;
-    }
-
-    private static void AppendPureMidiHistoricalStateEvents(
-        PureMidiRootPlan rootPlan,
-        long startTick,
-        byte channel,
-        ICollection<PureMidiPendingEvent> output,
-        CancellationToken cancellationToken)
-    {
-        if (startTick <= 0)
-        {
-            return;
-        }
-
-        PureMidiRootInterval? activeInterval = rootPlan.Intervals
-            .SingleOrDefault(value => value.StartTick < startTick && value.EndTick > startTick);
-        if (activeInterval is null)
-        {
-            return;
-        }
-
-        Dictionary<long, PureMidiHistoricalStateCandidate> state = [];
-        foreach (PureMidiTrackPlan trackPlan in rootPlan.Tracks)
-        {
-            HashSet<MidoraId> materializedSegmentIds = trackPlan.Segments
-                .Select(value => value.Id)
-                .ToHashSet();
-            foreach (MidiSegment segment in trackPlan.Track.Segments
-                .Where(IsRepresentableMidiSegment)
-                .Where(value => !materializedSegmentIds.Contains(value.Id))
-                .Where(value => value.ProjectStartTick < startTick
-                    && checked(value.ProjectStartTick + value.LengthTicks) > activeInterval.StartTick)
-                .OrderBy(value => value.ProjectStartTick)
-                .ThenBy(value => value.Id))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                long contentStart = segment.ContentOffsetTick;
-                long contentEnd = checked(contentStart + segment.LengthTicks);
-                long absoluteHistoryEnd = Math.Min(
-                    startTick,
-                    checked(segment.ProjectStartTick + segment.LengthTicks));
-                long historyContentEnd = checked(
-                    contentStart + absoluteHistoryEnd - segment.ProjectStartTick);
-                foreach (DirectMidiChannelEventValue value in segment.ChannelEvents.QueryOrderedValues(
-                    contentStart,
-                    Math.Min(contentEnd, historyContentEnd)))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    long absoluteTick = checked(
-                        segment.ProjectStartTick + value.Tick - contentStart);
-                    if (absoluteTick < activeInterval.StartTick || absoluteTick >= startTick)
-                    {
-                        continue;
-                    }
-                    MidiMessage message = ToMidiMessage(value, channel);
-                    long target = SemanticTargetForMessage(message);
-                    if (target == long.MinValue)
-                    {
-                        continue;
-                    }
-                    PureMidiHistoricalStateCandidate candidate = new(
-                        absoluteTick,
-                        trackPlan,
-                        segment,
-                        value,
-                        message,
-                        target);
-                    if (!state.TryGetValue(target, out PureMidiHistoricalStateCandidate current)
-                        || CompareHistoricalStateCandidate(candidate, current) > 0)
-                    {
-                        state[target] = candidate;
-                    }
-                }
-            }
-        }
-
-        foreach (PureMidiHistoricalStateCandidate candidate in state.Values)
-        {
-            DirectMidiChannelEventValue value = candidate.Value;
-            SourceReference source = DirectSource(
-                rootPlan.Root.Id,
-                candidate.TrackPlan.Track.Id,
-                candidate.Segment.Id,
-                value.Id,
-                candidate.AbsoluteTick,
-                SourceOrigin.DirectMidiChannelEvent);
-            output.Add(new(
-                candidate.AbsoluteTick,
-                candidate.TrackPlan.TrackOrder,
-                value.Order,
-                1,
-                value.Id,
-                candidate.Message,
-                source,
-                candidate.TrackPlan.Track.Id,
-                CanonicalEventRole.DirectMidi,
-                candidate.SemanticTargetKey));
-        }
-    }
-
-    private static int CompareHistoricalStateCandidate(
-        PureMidiHistoricalStateCandidate left,
-        PureMidiHistoricalStateCandidate right)
-    {
-        int value = left.AbsoluteTick.CompareTo(right.AbsoluteTick);
-        if (value != 0) return value;
-        value = left.TrackPlan.TrackOrder.CompareTo(right.TrackPlan.TrackOrder);
-        if (value != 0) return value;
-        value = left.Value.Order.CompareTo(right.Value.Order);
-        return value != 0 ? value : left.Value.Id.CompareTo(right.Value.Id);
-    }
 
     private static CanonicalSmfTrackDescriptor[] FreezeSmfTrackDescriptors(
         PureMidiPlan plan,
@@ -999,194 +720,6 @@ public sealed partial class MidoraCompiler
         }).ToArray();
     }
 
-    private static CanonicalMidiEvent[] AssignPureMidiRangeBoundaryOwnership(
-        CanonicalMidiEvent[] events,
-        PureMidiPlan plan,
-        IReadOnlyDictionary<MidoraId, int> unitByRoot,
-        long endTick)
-    {
-        Dictionary<(byte Port, byte Channel), (MidiChannelRoot Root, PureMidiRootInterval Interval)>
-            boundaries = [];
-        foreach (PureMidiRootPlan rootPlan in plan.Roots)
-        {
-            if (!unitByRoot.TryGetValue(rootPlan.Root.Id, out int unit))
-            {
-                continue;
-            }
-            PureMidiRootInterval? interval = rootPlan.Intervals
-                .Where(value => value.StartTick < endTick && value.EndTick >= endTick)
-                .OrderByDescending(value => value.StartTick)
-                .FirstOrDefault();
-            if (interval is not null)
-            {
-                boundaries[(checked((byte)(unit >> 4)), checked((byte)(unit & 15)))] =
-                    (rootPlan.Root, interval);
-            }
-        }
-        for (int index = 0; index < events.Length; index++)
-        {
-            CanonicalMidiEvent value = events[index];
-            if (value.Tick != endTick
-                || value.Source.MidiChannelRootId != default
-                || value.Role != CanonicalEventRole.Reset
-                || !boundaries.TryGetValue(
-                    (value.ZeroBasedPort, value.ZeroBasedChannel),
-                    out var boundary))
-            {
-                continue;
-            }
-            SourceReference source = RootLifecycleSource(
-                boundary.Root.Id,
-                boundary.Interval.EndOwnerTrackId,
-                boundary.Interval.EndOwnerSegmentId,
-                endTick,
-                boundary.Interval.EndOwnerTrackId);
-            int smfTrackOrder = plan.Roots
-                .Single(root => root.Root.Id == boundary.Root.Id)
-                .Tracks.Single(track => track.Track.Id == boundary.Interval.EndOwnerTrackId)
-                .TrackOrder;
-            events[index] = value with
-            {
-                Role = CanonicalEventRole.RootBoundaryCleanup,
-                Source = source,
-                ExportTrackId = boundary.Interval.EndOwnerTrackId,
-                SmfTrackOrder = smfTrackOrder,
-                SmfEventOrder = long.MaxValue
-            };
-        }
-        return events;
-    }
-
-    private static void MaterializePureMidiSegment(
-        MidiChannelRoot root,
-        PureMidiTrackPlan trackPlan,
-        MidiSegment segment,
-        byte channel,
-        List<PureMidiPendingEvent> output,
-        CancellationToken cancellationToken)
-    {
-        long contentEnd = checked(segment.ContentOffsetTick + segment.LengthTicks);
-        long segmentEnd = checked(segment.ProjectStartTick + segment.LengthTicks);
-        foreach (DirectMidiNote note in segment.Notes)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (note.StartTick < segment.ContentOffsetTick || note.StartTick >= contentEnd)
-            {
-                continue;
-            }
-            long absoluteStart = checked(
-                segment.ProjectStartTick + note.StartTick - segment.ContentOffsetTick);
-            long absoluteEnd = Math.Min(
-                segmentEnd,
-                checked(absoluteStart + note.LengthTicks));
-            SourceReference source = DirectSource(
-                root.Id,
-                trackPlan.Track.Id,
-                segment.Id,
-                note.Id,
-                absoluteStart,
-                SourceOrigin.DirectMidiNote);
-            output.Add(new(
-                absoluteStart,
-                trackPlan.TrackOrder,
-                note.NoteOnOrder,
-                1,
-                note.Id,
-                MidiMessage.NoteOn(channel, checked((byte)note.Key), checked((byte)note.NoteOnVelocity)),
-                source,
-                trackPlan.Track.Id,
-                CanonicalEventRole.DirectMidi,
-                long.MinValue));
-            output.Add(new(
-                absoluteEnd,
-                trackPlan.TrackOrder,
-                note.NoteOffOrder,
-                0,
-                note.Id,
-                MidiMessage.NoteOff(channel, checked((byte)note.Key), checked((byte)note.NoteOffVelocity)),
-                source with { Tick = absoluteEnd },
-                trackPlan.Track.Id,
-                CanonicalEventRole.DirectMidi,
-                long.MinValue));
-        }
-
-        Dictionary<byte, Queue<SourceReference>> rawNotes = [];
-        foreach (DirectMidiChannelEvent value in segment.ChannelEvents
-            .Where(value => value.Tick >= segment.ContentOffsetTick && value.Tick < contentEnd)
-            .OrderBy(value => value.Tick)
-            .ThenBy(value => value.Order)
-            .ThenBy(value => value.Id))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            long absoluteTick = checked(
-                segment.ProjectStartTick + value.Tick - segment.ContentOffsetTick);
-            MidiMessage message = ToMidiMessage(value, channel);
-            SourceReference source = DirectSource(
-                root.Id,
-                trackPlan.Track.Id,
-                segment.Id,
-                value.Id,
-                absoluteTick,
-                SourceOrigin.DirectMidiChannelEvent);
-            long target = SemanticTargetForMessage(message);
-            output.Add(new(
-                absoluteTick,
-                trackPlan.TrackOrder,
-                value.Order,
-                1,
-                value.Id,
-                message,
-                source,
-                trackPlan.Track.Id,
-                CanonicalEventRole.DirectMidi,
-                target));
-
-            if (message.MessageType == MidiMessageType.NoteOn && message.Byte2 != 0)
-            {
-                if (!rawNotes.TryGetValue(message.Byte1, out Queue<SourceReference>? queue))
-                {
-                    queue = new();
-                    rawNotes.Add(message.Byte1, queue);
-                }
-                queue.Enqueue(source);
-            }
-            else if (message.MessageType == MidiMessageType.NoteOff
-                || message.MessageType == MidiMessageType.NoteOn && message.Byte2 == 0)
-            {
-                if (rawNotes.TryGetValue(message.Byte1, out Queue<SourceReference>? queue)
-                    && queue.Count != 0)
-                {
-                    _ = queue.Dequeue();
-                }
-            }
-        }
-
-        // Unpaired raw NoteOns remain raw source data, but the Segment hard
-        // boundary still closes the currently active instances exactly.
-        long boundaryOrder = long.MaxValue / 8;
-        foreach ((byte key, Queue<SourceReference> sources) in rawNotes.OrderBy(value => value.Key))
-        {
-            while (sources.Count != 0)
-            {
-                SourceReference source = sources.Dequeue() with
-                {
-                    Tick = segmentEnd,
-                    Origin = SourceOrigin.CompilerBoundaryCleanup
-                };
-                output.Add(new(
-                    segmentEnd,
-                    trackPlan.TrackOrder,
-                    boundaryOrder++,
-                    0,
-                    source.DirectMidiObjectId,
-                    MidiMessage.NoteOff(channel, key, 0),
-                    source,
-                    trackPlan.Track.Id,
-                    CanonicalEventRole.DirectMidi,
-                    long.MinValue));
-            }
-        }
-    }
 
     private static MidiMessage ToMidiMessage(DirectMidiChannelEvent value, byte channel) =>
         value.Kind switch
@@ -1227,6 +760,23 @@ public sealed partial class MidoraCompiler
                 channel, checked((ushort)((value.Data2 << 7) | value.Data1))),
             _ => throw new InvalidDataException($"Unsupported direct MIDI event kind {value.Kind}.")
         };
+
+    private static long EncodeDirectMidiStableOrder(MidiMessage message, MidoraId stableId)
+    {
+        if (stableId == default)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stableId));
+        }
+
+        // SmfEventOrder already carries the complete, non-negative Int64 explicit
+        // order. StableOrder therefore only has to preserve the endpoint class and
+        // the stable-object tie break. Mapping NoteOff endpoints to the negative
+        // half and all other events to the positive half is injective for every
+        // valid MidoraId and cannot overflow, unlike `(explicitOrder << 1)`.
+        return CanonicalMidiOrdering.DirectEndpointOrder(message) == 0
+            ? checked(long.MinValue + stableId.Value)
+            : stableId.Value;
+    }
 
     private static SourceReference DirectSource(
         MidoraId rootId,

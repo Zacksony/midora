@@ -10,7 +10,8 @@ public enum MidiExportOutputStage
     SelfValidation,
     Finalizing,
     Rollback,
-    Cleanup
+    Cleanup,
+    Encoding
 }
 
 public enum MidiExportOutputItemState
@@ -24,7 +25,7 @@ public enum MidiExportOutputItemState
 
 public sealed class MidiExportPreparedArtifact
 {
-    private readonly Action<Stream> _writer;
+    private readonly Action<Stream, CancellationToken, IProgress<StandardMidiFileWriteProgress>?> _writer;
     private byte[]? _content;
 
     public MidiExportPreparedArtifact(string sourceKey, ReadOnlySpan<byte> content)
@@ -32,10 +33,27 @@ public sealed class MidiExportPreparedArtifact
         ArgumentException.ThrowIfNullOrEmpty(sourceKey);
         SourceKey = sourceKey;
         _content = content.ToArray();
-        _writer = output => output.Write(_content);
+        _writer = (output, token, _) =>
+        {
+            token.ThrowIfCancellationRequested();
+            output.Write(_content);
+        };
     }
 
     internal MidiExportPreparedArtifact(string sourceKey, Action<Stream> writer)
+        : this(sourceKey, (output, _) => writer(output))
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+    }
+
+    internal MidiExportPreparedArtifact(string sourceKey, Action<Stream, CancellationToken> writer)
+        : this(sourceKey, (output, token, _) => writer(output, token))
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+    }
+
+    internal MidiExportPreparedArtifact(string sourceKey,
+        Action<Stream, CancellationToken, IProgress<StandardMidiFileWriteProgress>?> writer)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceKey);
         SourceKey = sourceKey;
@@ -51,14 +69,15 @@ public sealed class MidiExportPreparedArtifact
             if (_content is null)
             {
                 using MemoryStream output = new();
-                _writer(output);
+                _writer(output, CancellationToken.None, null);
                 _content = output.ToArray();
             }
             return _content;
         }
     }
 
-    internal void WriteTo(Stream output) => _writer(output);
+    internal void WriteTo(Stream output, CancellationToken cancellationToken = default,
+        IProgress<StandardMidiFileWriteProgress>? progress = null) => _writer(output, cancellationToken, progress);
 }
 
 public sealed record MidiExportOutputItemResult(
@@ -110,6 +129,7 @@ public sealed class MidiExportOutputException : IOException
     public string? StagingDirectory { get; }
     public IReadOnlyList<MidiExportOutputItemResult> Items { get; }
     public bool RollbackSucceeded { get; }
+    public MidiExportArtifactDiagnostic? EncodingDiagnostic { get; internal init; }
 }
 
 public sealed class MidiExportOutputTransaction
@@ -130,7 +150,8 @@ public sealed class MidiExportOutputTransaction
         MidiExportFrozenOutputPlan plan,
         IEnumerable<MidiExportPreparedArtifact> artifacts,
         bool overwriteAuthorized,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<MidiExportProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(artifacts);
@@ -176,6 +197,7 @@ public sealed class MidiExportOutputTransaction
         List<PublishedItem> published = [];
         List<MidiExportOutputDiagnostic> diagnostics = [];
         bool finalizing = false;
+        MidiExportPlannedTarget? currentTarget = null;
         try
         {
             try
@@ -188,8 +210,11 @@ public sealed class MidiExportOutputTransaction
                 File.SetAttributes(
                     stagingDirectory,
                     File.GetAttributes(stagingDirectory) | FileAttributes.Hidden);
-                foreach (MidiExportPlannedTarget target in plan.Targets)
+                // README contains actual successful encoding statistics, never predictions.
+                foreach (MidiExportPlannedTarget target in plan.Targets.OrderBy(target => target.SourceKey == "readme"))
                 {
+                    currentTarget = target;
+                    progress?.Report(new(target.FileName, "Encoding"));
                     cancellationToken.ThrowIfCancellationRequested();
                     string stagedPath = Path.Combine(stagingDirectory, target.FileName);
                     _faultInjector.ThrowIfRequested(
@@ -202,7 +227,8 @@ public sealed class MidiExportOutputTransaction
                         FileShare.None,
                         256 * 1024,
                         FileOptions.SequentialScan);
-                    bySourceKey[target.SourceKey].WriteTo(staged);
+                    bySourceKey[target.SourceKey].WriteTo(staged, cancellationToken,
+                        progress is null ? null : new EncodingProgress(progress, target.FileName));
                     await staged.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
@@ -210,16 +236,25 @@ public sealed class MidiExportOutputTransaction
             {
                 throw;
             }
+            catch (Exception exception) when (exception is MidiExportEncodingException or MidoraMidiException
+                or ArgumentException or OverflowException)
+            {
+                MidiExportDiagnostic diagnostic = exception is MidiExportEncodingException encoding
+                    ? encoding.Diagnostic : MidiExportEncodingErrors.FromException(exception);
+                string message = $"MIDI encoding failed for {currentTarget?.FileName ?? "output"}: {diagnostic.Message}";
+                throw new MidiExportOutputException(MidiExportOutputStage.Encoding, message, plan.OutputDirectory,
+                    stagingDirectory, ReadyItems(plan), rollbackSucceeded: true, exception)
+                {
+                    EncodingDiagnostic = new(currentTarget?.SourceKey ?? "output", diagnostic with { Message = message })
+                };
+            }
             catch (Exception exception) when (exception is IOException
                 or UnauthorizedAccessException
-                or NotSupportedException
-                or MidoraMidiException
-                or ArgumentException
-                or OverflowException)
+                or NotSupportedException)
             {
                 throw Failure(
                     MidiExportOutputStage.Staging,
-                    "The MIDI export artifacts could not be written to the staging directory.",
+                    $"The MIDI export artifacts could not be written to the staging directory ({currentTarget?.FileName ?? "output"}): {exception.Message}",
                     plan,
                     stagingDirectory,
                     ReadyItems(plan),
@@ -234,6 +269,8 @@ public sealed class MidiExportOutputTransaction
                     stagingDirectory);
                 foreach (MidiExportPlannedTarget target in plan.Targets)
                 {
+                    currentTarget = target;
+                    progress?.Report(new(target.FileName, "Validating"));
                     string stagedPath = Path.Combine(stagingDirectory, target.FileName);
                     if (target.FileName.EndsWith(".mid", StringComparison.OrdinalIgnoreCase))
                     {
@@ -258,17 +295,22 @@ public sealed class MidiExportOutputTransaction
                 or MidoraMidiException
                 or ArgumentException)
             {
-                throw Failure(
-                    MidiExportOutputStage.SelfValidation,
-                    "A staged MIDI export artifact failed strict SMF Type 1 self-validation.",
-                    plan,
+                string message = $"A staged MIDI export artifact ({currentTarget?.FileName}) failed strict SMF Type 1 self-validation: {exception.Message}";
+                throw new MidiExportOutputException(
+                    MidiExportOutputStage.SelfValidation, message, plan.OutputDirectory,
                     stagingDirectory,
                     ReadyItems(plan),
                     rollbackSucceeded: true,
-                    exception);
+                    exception)
+                {
+                    EncodingDiagnostic = exception is MidoraMidiException
+                        ? new(currentTarget?.SourceKey ?? "output", MidiExportEncodingErrors.FromException(exception) with { Message = message })
+                        : null
+                };
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new("", "Finalizing"));
             finalizing = true;
             if (!plan.OutputDirectoryExistedAtFreeze)
             {
@@ -319,6 +361,17 @@ public sealed class MidiExportOutputTransaction
             }
             throw;
         }
+        catch (Exception exception) when (!finalizing)
+        {
+            // A deferred source/progress callback may fail with a non-I/O exception.
+            // It must not bypass staging cleanup or become a partially published result.
+            TryCleanupDirectory(stagingDirectory, diagnostics);
+            bool cleaned = !Directory.Exists(stagingDirectory);
+            throw Failure(cleaned ? MidiExportOutputStage.Staging : MidiExportOutputStage.Cleanup,
+                $"MIDI export aborted before publication ({currentTarget?.FileName ?? "output"}): {exception.Message}" +
+                (cleaned ? "" : " Its staging directory could not be cleaned."),
+                plan, stagingDirectory, ReadyItems(plan), rollbackSucceeded: true, exception);
+        }
         catch (Exception exception) when (finalizing)
         {
             try
@@ -350,6 +403,12 @@ public sealed class MidiExportOutputTransaction
                     new AggregateException(exception, rollbackException));
             }
         }
+    }
+
+    private sealed class EncodingProgress(IProgress<MidiExportProgress> target, string fileName)
+        : IProgress<StandardMidiFileWriteProgress>
+    {
+        public void Report(StandardMidiFileWriteProgress value) => target.Report(new(fileName, "Encoding", value));
     }
 
     private void PublishNewDirectory(

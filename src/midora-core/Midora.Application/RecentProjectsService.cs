@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Midora.Common;
 
 namespace Midora.Application;
 
@@ -42,17 +43,8 @@ public sealed class RecentProjectsStore
 
     public string FilePath => _filePath;
 
-    public static string GetDefaultFilePath()
-    {
-        string localApplicationData = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localApplicationData))
-        {
-            throw new InvalidOperationException(
-                "The current Windows user's Local Application Data directory is unavailable.");
-        }
-        return Path.Combine(localApplicationData, "Midora", "recent-projects-v1.json");
-    }
+    public static string GetDefaultFilePath() =>
+        MidoraProgramData.Current.RecentProjectsFilePath;
 
     public RecentProjectsLoadResult Load()
     {

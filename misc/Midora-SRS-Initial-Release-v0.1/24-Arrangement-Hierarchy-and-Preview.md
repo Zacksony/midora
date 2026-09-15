@@ -414,7 +414,7 @@ Shared Usage / Auto Root 成员在 Track order 中不连续；
 对象 ID、manifest、index 与文件 path 不一致。
 ```
 
-Definition pane 展开、Arrangement viewport、selection、header focus、Mute/Solo 和 drag preview 属于 session/runtime state，不进入 `.midora`。
+Definition pane 展开、Arrangement viewport、selection、header focus、Mute/Solo 和 drag preview 属于 session/runtime state，不进入 `.midora`。Format 3 只额外保存第 3.11、16.33 节版本化的 Onion source/opacity/enabled 与 All-Tracks raw/compiled presentation；这些字段不属于 Track/Usage/Root source、global order、Project Modified 或 Undo/Redo，也不得改变本节 membership/顺序权威来源。
 
 ## 24.14 失败原子性与验收门
 

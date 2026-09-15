@@ -1,0 +1,113 @@
+<Window x:Class="Midora.Desktop.TimelineGenerationHelpDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+        FontFamily="{StaticResource Font.UI}" Title="Batch Create Help"
+        Width="880" Height="740" MinWidth="690" MinHeight="460"
+        Background="{StaticResource Brush.Surface.0}" WindowStyle="None"
+        ResizeMode="CanResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        PreviewKeyDown="OnDialogPreviewKeyDown">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="36" CornerRadius="0" GlassFrameThickness="0"
+                        ResizeBorderThickness="6" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+  <Window.Resources>
+    <Style x:Key="GenerationHelp.Title" TargetType="TextBlock" BasedOn="{StaticResource Text.Section}">
+      <Setter Property="Margin" Value="0,0,0,8"/>
+    </Style>
+    <Style x:Key="GenerationHelp.Body" TargetType="TextBlock" BasedOn="{StaticResource Text.Muted}">
+      <Setter Property="TextWrapping" Value="Wrap"/><Setter Property="LineHeight" Value="19"/>
+    </Style>
+    <Style x:Key="GenerationHelp.Code" TargetType="TextBlock" BasedOn="{StaticResource Text.Mono}">
+      <Setter Property="Foreground" Value="#DCDCAA"/><Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </Window.Resources>
+  <Border BorderBrush="{StaticResource Brush.Border.Strong}" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/><RowDefinition Height="58"/></Grid.RowDefinitions>
+      <Grid Background="{StaticResource Brush.Black}" MouseLeftButtonDown="OnTitleMouseLeftButtonDown">
+        <TextBlock x:Name="TitleText" Margin="11,0,44,0" VerticalAlignment="Center" FontWeight="SemiBold" Text="Batch Create Help"/>
+        <Button Width="46" Height="36" HorizontalAlignment="Right" Style="{StaticResource Button.Caption.Close}" Click="OnCloseClick">
+          <ui:FluentIcon Style="{StaticResource Icon.WindowControl}" Data="{StaticResource WindowControl.Close}"/>
+        </Button>
+      </Grid>
+      <ScrollViewer Grid.Row="1" Padding="18,15" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,13">
+            <StackPanel>
+              <TextBlock Style="{StaticResource GenerationHelp.Title}" Text="1. Start with a small candidate count"/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Text="Base Tick is an origin in the current editor's time coordinates. Tick expressions return offsets from that origin, not absolute Project ticks. The current editing cursor supplies the default Base Tick. Start with 16 or 128 candidates, inspect the result, then increase the count."/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,8,0,0" Text="Every non-empty expression starts with =; for example =96 or =t0 + 96. A blank field reuses its previous value. Initial fields accept ordinary finite numbers, not expressions. Blank Initial fields use the displayed defaults. Math functions such as Sin, Max, Clamp and Round work without a Math. prefix. Ctrl+Space opens completion."/>
+            </StackPanel>
+          </Border>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,13">
+            <StackPanel>
+              <TextBlock Style="{StaticResource GenerationHelp.Title}" Text="2. Understand an iteration"/>
+              <ItemsControl ItemsSource="{Binding Variables}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,0,0,8">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <TextBlock Style="{StaticResource GenerationHelp.Code}" Text="{Binding Label}"/>
+                      <TextBlock Grid.Column="1" Style="{StaticResource GenerationHelp.Body}" Text="{Binding Text}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Text="All expressions are evaluated from the same previous state. Current-result dependencies are ordered automatically, not by the order of the fields in the dialog. For example, Gate =g0 + 1 and Velocity =g1 * 2 are valid. Circular dependencies (Gate =v1 and Velocity =g1) and referencing a field's own result are rejected. After all fields have been computed, the whole result is normalized and becomes the next previous state."/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,8,0,0" Text="Create first object from initial values is OFF by default: candidate i=0 runs all expressions using normalized Initial values as *0. When ON, candidate i=0 uses Initial values directly and counts toward Maximum Candidates; expressions first run at i=1. The checkbox is saved in presets."/>
+            </StackPanel>
+          </Border>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,13">
+            <StackPanel>
+              <TextBlock Style="{StaticResource GenerationHelp.Title}" Text="3. Stopping, rounding and collisions"/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Text="Maximum Candidates counts attempted candidates, including objects later removed by collisions. It defaults to 65,535 and cannot exceed 16,777,216. An enabled Maximum Relative Start Tick is inclusive: the first rounded start beyond it stops generation, even if later iterations might return to the range. It limits the start, not the end of a note."/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,8,0,0" Text="Integer fields use midpoint rounding away from zero. Negative relative Tick becomes 0. Note Velocity is clamped to 1–127, Key to 0–127, and Gate to at least 1 and at most the remaining representable Tick range. Event values follow the active lane's range and type (including Boolean/Enum normalization). Initial values are normalized too; iteration inputs are not unbounded raw values. Absolute Tick overflow, non-finite results, invalid dependencies, target validation failures or an exhausted resource budget fail the entire operation."/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,8,0,0" Text="Notes: at the same start Tick and Key, existing notes win; between generated candidates, the earlier iteration wins. Events: at the same Tick and lane target, the last candidate wins and replaces all existing points at that exact key. Other imported duplicates remain untouched. A constant Tick can therefore retain only one object; it still consumes all requested candidates."/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,8,0,0" Text="Generation is prepared in bounded pages off the UI thread, then published as one Undo operation. Cancel or any failure publishes nothing. Working buffers and resident staging each have a 64 MiB limit; owned spill has a 16 GiB limit, and the overall result-record budget also applies. A candidate count is not a promise that disk or result capacity is sufficient. Validate checks settings, syntax and dependencies; only generation can check every iteration's runtime result and final collisions."/>
+            </StackPanel>
+          </Border>
+          <TextBlock Style="{StaticResource GenerationHelp.Title}" Text="4. Practical examples — simple patterns to note art"/>
+          <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,0,0,12" Text="Examples use Tick units, not beats. Unlisted expressions are blank (identity), and the Initial checkbox is OFF unless stated. Change the Tick spacing to suit your project's resolution. No example changes the Base Tick."/>
+          <ItemsControl ItemsSource="{Binding Examples}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                  <StackPanel>
+                    <TextBlock Style="{StaticResource GenerationHelp.Title}" Text="{Binding Title}"/>
+                    <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,0,0,10" Text="{Binding Description}"/>
+                    <ItemsControl ItemsSource="{Binding Fields}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Border Margin="0,0,12,0" Padding="8,5" BorderBrush="{StaticResource Brush.Border}" BorderThickness="1" CornerRadius="3">
+                              <TextBlock VerticalAlignment="Center" Text="{Binding Label}"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource GenerationHelp.Code}" Text="{Binding Text}"/>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource GenerationHelp.Title}" Text="5. Reuse safely"/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Text="Note and Event generation have independent preset lists under Data/Presets. Presets store expressions, Initial values, the initial-object checkbox, candidate count and optional relative limit. They never store Base Tick, the current owner or the lane target. Applying an Event preset to a different lane uses that lane's type and range. Presets are revalidated for their tool, expression profile, numeric contract, syntax and resource limits. Duplicate preset names are rejected instead of overwriting another preset."/>
+              <TextBlock Style="{StaticResource GenerationHelp.Body}" Margin="0,8,0,0" Text="Expressions are bounded pure numeric expressions, not C# scripts: no loops, assignments, object creation, files, processes or arbitrary APIs. Each expression body is limited to 8,192 Unicode scalars, 512 syntax nodes and 64 levels of nesting. Generation settings and expression code are not stored in the Project; only the resulting ordinary notes or events are."/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+      <Border Grid.Row="2" Padding="12,10" Background="{StaticResource Brush.Surface.1}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0">
+        <Button IsDefault="True" IsCancel="True" HorizontalAlignment="Right" Style="{StaticResource Button.Dialog.Confirm}" Content="Close" Click="OnCloseClick"/>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

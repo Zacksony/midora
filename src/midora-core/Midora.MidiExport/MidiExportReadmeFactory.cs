@@ -1,5 +1,6 @@
 using Midora.Compiler;
 using Midora.Domain;
+using System.Collections;
 
 namespace Midora.MidiExport;
 
@@ -13,7 +14,8 @@ public static class MidiExportReadmeFactory
         string createdWithSoftwareVersion,
         string lastSavedWithSoftwareVersion,
         string exportSoftwareVersion,
-        DateTimeOffset exportedAtUtc)
+        DateTimeOffset exportedAtUtc,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(compilation);
@@ -21,6 +23,7 @@ public static class MidiExportReadmeFactory
         ArgumentNullException.ThrowIfNull(createdWithSoftwareVersion);
         ArgumentNullException.ThrowIfNull(lastSavedWithSoftwareVersion);
         ArgumentNullException.ThrowIfNull(exportSoftwareVersion);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!compilation.Succeeded)
         {
             throw new ArgumentException(
@@ -59,13 +62,7 @@ public static class MidiExportReadmeFactory
                 track.Participates,
                 track.ExclusionReason)).ToArray(),
             PortMappings = BuildPortMappings(compilation, outputPlan),
-            Diagnostics = compiled.Diagnostics
-                .Where(diagnostic => diagnostic.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Info)
-                .Select(diagnostic => new MidiExportReadmeDiagnostic(
-                    diagnostic.Severity.ToString(),
-                    diagnostic.Code,
-                    diagnostic.Message))
-                .ToArray(),
+            Diagnostics = MidiExportReadmeDiagnosticProjection.Create(compiled.Diagnostics, cancellationToken),
             FileNames = outputPlan.Targets.Select(target => target.FileName).ToArray(),
             CreatedWithSoftwareVersion = createdWithSoftwareVersion,
             LastSavedWithSoftwareVersion = lastSavedWithSoftwareVersion,
@@ -89,4 +86,55 @@ public static class MidiExportReadmeFactory
                 fileName);
         }).ToArray();
 
+}
+
+/// <summary>Only the first 1000 Warning/Info texts; the full count remains exact.</summary>
+internal sealed class MidiExportReadmeDiagnosticProjection(
+    MidiExportReadmeDiagnostic[] prefix, long totalCount) : IReadOnlyList<MidiExportReadmeDiagnostic>
+{
+    public static MidiExportReadmeDiagnosticProjection Create(
+        IEnumerable<CompilerDiagnostic> source,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (source is CompilerDiagnosticList compact)
+        {
+            long included = checked(compact.CountSeverity(DiagnosticSeverity.Warning)
+                + compact.CountSeverity(DiagnosticSeverity.Info));
+            if (included == 0) return new([], 0);
+            CompilerDiagnosticList selected = included == compact.Count ? compact : compact.Filter(
+                static value => value.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Info,
+                cancellationToken);
+            MidiExportReadmeDiagnostic[] prefix = new MidiExportReadmeDiagnostic[
+                (int)Math.Min(included, MidiExportReadmeBuilder.MaximumDiagnosticRows)];
+            for (int index = 0; index < prefix.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                prefix[index] = Project(selected[index]);
+            }
+            return new(prefix, included);
+        }
+        List<MidiExportReadmeDiagnostic> diagnostics = [];
+        long total = 0;
+        foreach (CompilerDiagnostic diagnostic in source)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (diagnostic.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Info)
+            {
+                total = checked(total + 1);
+                if (diagnostics.Count < MidiExportReadmeBuilder.MaximumDiagnosticRows)
+                    diagnostics.Add(Project(diagnostic));
+            }
+        }
+        return new(diagnostics.ToArray(), total);
+    }
+
+    public int Count => prefix.Length;
+    public long TotalCount => totalCount;
+    public MidiExportReadmeDiagnostic this[int index] => prefix[index];
+    public IEnumerator<MidiExportReadmeDiagnostic> GetEnumerator() =>
+        ((IEnumerable<MidiExportReadmeDiagnostic>)prefix).GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    private static MidiExportReadmeDiagnostic Project(CompilerDiagnostic value) =>
+        new(value.Severity.ToString(), value.Code, value.Message);
 }

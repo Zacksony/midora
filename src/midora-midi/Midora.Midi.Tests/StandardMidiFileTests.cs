@@ -48,21 +48,19 @@ public sealed class StandardMidiFileTests
     }
 
     [Fact]
-    public void RejectsDeltaOutsideSmfVariableLengthRange()
+    public void PadsDeltaOutsideSmfVariableLengthRange()
     {
         StandardMidiFileTrack track = new((long)StandardMidiFile.MaximumVariableLengthValue + 1, []);
 
-        MidoraMidiException error = Assert.Throws<MidoraMidiException>(
-            () => StandardMidiFile.EncodeType1(192, [track]));
-
-        Assert.Contains("delta time", error.Message, StringComparison.Ordinal);
+        byte[] bytes = StandardMidiFile.EncodeType1(192, [track]);
+        Assert.Equal("ffffff7fff010001ff2f00", Convert.ToHexString(bytes.AsSpan(22)).ToLowerInvariant());
     }
 
     [Fact]
     public void RejectsNonTpqnDivisionAndAllowsPerTrackEnds()
     {
-        Assert.Throws<MidoraMidiException>(() => StandardMidiFile.EncodeType1(0, [new(0, [])]));
-        Assert.Throws<MidoraMidiException>(() => StandardMidiFile.EncodeType1(32_768, [new(0, [])]));
+        Assert.Throws<StandardMidiFileEncodingException>(() => StandardMidiFile.EncodeType1(0, [new(0, [])]));
+        Assert.Throws<StandardMidiFileEncodingException>(() => StandardMidiFile.EncodeType1(32_768, [new(0, [])]));
         byte[] result = StandardMidiFile.EncodeType1(
             192,
             [new StandardMidiFileTrack(0, []), new StandardMidiFileTrack(1, [])]);

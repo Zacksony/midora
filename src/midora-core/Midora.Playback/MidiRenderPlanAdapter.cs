@@ -2,7 +2,6 @@ using Midora.Audio;
 using Midora.Compiler;
 using Midora.Domain;
 using Midora.Midi;
-using System.Security.Cryptography;
 using System.Text;
 
 namespace Midora.Playback;
@@ -12,9 +11,10 @@ public static class MidiRenderPlanAdapter
     public static MidiRenderPlan Create(
         CanonicalCompiledResult compiled,
         int sampleRate,
-        IReadOnlySet<MidoraId>? audibleTrackIds = null)
+        IReadOnlySet<MidoraId>? audibleTrackIds = null,
+        CancellationToken cancellationToken = default)
         => CreateCore(compiled, sampleRate, audibleTrackIds,
-            preserveFilteredTrackEvents: false, restrictToFileSampleRateRange: true);
+            preserveFilteredTrackEvents: false, restrictToFileSampleRateRange: true, cancellationToken);
 
     public static MidiRenderPlan CreateRealtime(
         CanonicalCompiledResult compiled,
@@ -37,9 +37,11 @@ public static class MidiRenderPlanAdapter
         int sampleRate,
         IReadOnlySet<MidoraId>? audibleTrackIds,
         bool preserveFilteredTrackEvents,
-        bool restrictToFileSampleRateRange)
+        bool restrictToFileSampleRateRange,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(compiled);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!compiled.IsConsumable || compiled.IsPartial)
         {
             throw new ArgumentException("Only a consumable canonical result can produce an audio plan.", nameof(compiled));
@@ -52,9 +54,12 @@ public static class MidiRenderPlanAdapter
 
         TempoSampleMap map = new(compiled.TicksPerQuarterNote, compiled.Tempos);
         long totalFrames = map.TickToSampleFrame(compiled.EndTick, compiled.StartTick, sampleRate);
-        CanonicalMidiEvent[] events = compiled.Events.ToArray();
+        ReadOnlySpan<CanonicalMidiEvent> events = compiled.Events;
+        CanonicalAudioUnitProjection audioProjection = CanonicalAudioUnitProjection.Create(compiled,
+            cancellationToken: cancellationToken);
         ChannelUnitAllocation[] allocations = compiled.Allocations.ToArray();
         HashSet<MidoraId> sourceIdSet = [];
+        foreach (MidoraId source in audioProjection.SourceIds) sourceIdSet.Add(source);
         foreach (CanonicalMidiEvent value in events)
         {
             if (value.Source.TrackId != default)
@@ -115,8 +120,9 @@ public static class MidiRenderPlanAdapter
             pureAudioFragments = compiled.PureMidiAudioFragments.ToDictionary(
                 value => (value.MidiChannelRootId, value.GroupId));
         foreach (CanonicalAudioUnitFragment fragment in
-            CanonicalAudioUnitProjection.Create(compiled, events).Fragments)
+            audioProjection.Fragments)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!preserveFilteredTrackEvents
                 && audibleTrackIds is not null
                 && !audibleTrackIds.Contains(fragment.TrackId))
@@ -219,7 +225,9 @@ public static class MidiRenderPlanAdapter
                         (fragment.MidiChannelRootId, fragment.InstanceGroupId),
                         out CanonicalPureMidiAudioFragmentDescriptor? pureDescriptor)
                             ? CreatePureMidiAudioFingerprint(compiled, pureDescriptor)
-                            : fragment.SemanticFingerprint,
+                            : compiled.HasPagedLogicalEvents
+                                ? CreatePagedLogicalAudioFingerprint(compiled, fragment)
+                                : fragment.SemanticFingerprint,
                 scheduledFragmentEvents,
                 midiChannelRootId: fragment.MidiChannelRootId.Value,
                 isPercussion: fragment.ChannelMode == MidiChannelMode.Percussion));
@@ -237,9 +245,8 @@ public static class MidiRenderPlanAdapter
             .ThenBy(value => value.StartFrame)
             .ThenBy(value => value.SegmentId)
             .ToArray();
-        List<CanonicalMidiRenderEvent> orderedRenderEvents = events
-            .Select(ToRenderEvent)
-            .ToList();
+        List<CanonicalMidiRenderEvent> orderedRenderEvents = new(events.Length);
+        foreach (CanonicalMidiEvent value in events) orderedRenderEvents.Add(ToRenderEvent(value));
         if (!compiled.HasPagedEvents)
         {
             orderedRenderEvents.AddRange(compiled.ChannelModeSystemExclusiveEvents
@@ -317,7 +324,8 @@ public static class MidiRenderPlanAdapter
             .ToArray();
         int[] referencedPresetKeys = CollectReferencedPresetKeys(
             events,
-            compiled.PureMidiPresetReferences);
+            compiled.PureMidiPresetReferences,
+            audioProjection.ReferencedPresetKeys);
         return new MidiRenderPlan(
             sampleRate,
             totalFrames,
@@ -333,8 +341,9 @@ public static class MidiRenderPlanAdapter
     }
 
     private static int[] CollectReferencedPresetKeys(
-        IReadOnlyList<CanonicalMidiEvent> inMemoryEvents,
-        IReadOnlyList<CanonicalMidiPresetReference> pagedReferences)
+        ReadOnlySpan<CanonicalMidiEvent> inMemoryEvents,
+        IReadOnlyList<CanonicalMidiPresetReference> pagedReferences,
+        IReadOnlyList<int> logicalReferences)
     {
         bool[] referenced = new bool[128 * 128];
         referenced[0] = true;
@@ -353,6 +362,7 @@ public static class MidiRenderPlanAdapter
         }
         foreach (CanonicalMidiPresetReference value in pagedReferences)
             referenced[(value.Bank << 7) | value.Program] = true;
+        foreach (int key in logicalReferences) referenced[key] = true;
         return Enumerable.Range(0, referenced.Length).Where(index => referenced[index]).ToArray();
     }
 
@@ -389,7 +399,7 @@ public static class MidiRenderPlanAdapter
         CanonicalCompiledResult compiled,
         CanonicalPureMidiAudioFragmentDescriptor descriptor)
     {
-        using MemoryStream payload = new();
+        using HashingWriteStream payload = new();
         using BinaryWriter writer = new(payload, Encoding.UTF8, leaveOpen: true);
         writer.Write("MIDORA_PURE_MIDI_AUDIO_FRAGMENT_V1");
         writer.Write(descriptor.SemanticFingerprint);
@@ -405,9 +415,31 @@ public static class MidiRenderPlanAdapter
             writer.Write(tempo.IsRangeRestore);
         }
         writer.Flush();
-        return Convert.ToHexStringLower(SHA256.HashData(payload.GetBuffer().AsSpan(
-            0,
-            checked((int)payload.Length))));
+        return payload.GetHash();
+    }
+
+    private static string CreatePagedLogicalAudioFingerprint(
+        CanonicalCompiledResult compiled, CanonicalAudioUnitFragment fragment)
+    {
+        // Paged fragments have no resident ScheduledEvents. Their sample-domain cache
+        // identity must still distinguish event timing under different Tempo maps,
+        // including maps with the same total duration but different internal timing.
+        using HashingWriteStream payload = new();
+        using BinaryWriter writer = new(payload, Encoding.UTF8, leaveOpen: true);
+        writer.Write("MIDORA_PAGED_LOGICAL_SAMPLE_TIMING_V1");
+        writer.Write(fragment.SemanticFingerprint);
+        writer.Write(compiled.TicksPerQuarterNote);
+        writer.Write(compiled.StartTick);
+        writer.Write(fragment.GroupStartTick);
+        writer.Write(fragment.EffectiveStartTick);
+        writer.Write(fragment.EffectiveEndTick);
+        foreach (CanonicalTempo tempo in compiled.Tempos)
+        {
+            writer.Write(tempo.Tick);
+            foreach (int part in decimal.GetBits(tempo.BeatsPerMinute)) writer.Write(part);
+        }
+        writer.Flush();
+        return payload.GetHash();
     }
 
     private static MidiSegmentRenderPlan CreateSegmentPlan(
@@ -416,7 +448,7 @@ public static class MidiRenderPlanAdapter
     {
         long startFrame = fragments.Min(value => value.StartFrame);
         long endFrame = fragments.Max(value => value.EndFrame);
-        using MemoryStream payload = new();
+        using HashingWriteStream payload = new();
         using (BinaryWriter writer = new(payload, Encoding.UTF8, leaveOpen: true))
         {
             writer.Write("MIDORA_SAMPLE_DOMAIN_SEGMENT_PROJECTION_V1");
@@ -459,8 +491,7 @@ public static class MidiRenderPlanAdapter
                 }
             }
         }
-        string fingerprint = Convert.ToHexStringLower(SHA256.HashData(
-            payload.GetBuffer().AsSpan(0, checked((int)payload.Length))));
+        string fingerprint = payload.GetHash();
         return new(
             identity.TrackId,
             identity.SegmentId,

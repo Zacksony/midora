@@ -8,6 +8,7 @@ public static partial class ProjectObjectClipboard
         ProjectDocumentSession document,
         MidoraId trackId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         PureMidiTrack track = document.Project.PureMidiTracks.SingleOrDefault(value => value.Id == trackId)
             ?? throw new ArgumentOutOfRangeException(nameof(trackId));
@@ -30,15 +31,16 @@ public static partial class ProjectObjectClipboard
         IReadOnlyCollection<MidoraId> segmentIds,
         MidoraId primarySegmentId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(segmentIds);
         if (segmentIds.Count == 0) throw new ArgumentException("At least one MIDI Segment must be copied.", nameof(segmentIds));
-        HashSet<MidoraId> requested = [];
+        ClipboardCaptureScope.ReserveMetadata(segmentIds.Count, 2048);
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(segmentIds, nameof(segmentIds));
         List<(PureMidiTrack Track, MidiSegment Segment, int TrackIndex)> selected = [];
-        foreach (MidoraId id in segmentIds)
+        foreach (MidoraId id in requested)
         {
-            if (id == default || !requested.Add(id))
-                throw new ArgumentException("MIDI Segment selections require distinct stable IDs.", nameof(segmentIds));
+            BulkEditPreparationContext.Current!.Token.ThrowIfCancellationRequested();
             selected.Add(FindMidiSegmentForClipboard(document.Project, id));
         }
         var primary = selected.SingleOrDefault(value => value.Segment.Id == primarySegmentId);
@@ -67,32 +69,31 @@ public static partial class ProjectObjectClipboard
         MidoraId segmentId,
         IReadOnlyCollection<MidoraId> noteIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(noteIds);
         MidiSegment source = FindMidiSegmentForClipboard(document.Project, segmentId).Segment;
-        HashSet<MidoraId> requested = noteIds.ToHashSet();
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(noteIds, nameof(noteIds));
         if (requested.Count == 0 || requested.Count != noteIds.Count)
             throw new ArgumentException("Direct MIDI Note selections require distinct stable IDs.", nameof(noteIds));
-        DirectMidiNote[] notes = source.Notes.ResolveByIds(requested)
-            .Select(static match => match.Value)
-            .ToArray();
-        if (notes.Length != requested.Count)
+        long earliest = long.MaxValue;
+        IReadOnlyList<DirectMidiNoteClipboardSnapshot> absolute = ClipboardCaptureScope.Capture(
+            EnumerateClipboardSelection(document.Project, source.Notes.CreateObjectSource(), requested).Select(value =>
+            {
+                earliest = Math.Min(earliest, value.StartTick);
+                return new DirectMidiNoteClipboardSnapshot(
+                value.StartTick, value.LengthTicks, value.Key, value.NoteOnVelocity,
+                value.NoteOffVelocity, value.NoteOnOrder, value.NoteOffOrder, PreserveOrders: true);
+            }), requested.Count, reportReadProgress: false);
+        if (absolute.Count != requested.Count)
             throw new ArgumentException("Every copied Direct MIDI Note must belong to the source Segment.", nameof(noteIds));
-        long earliest = notes.Min(value => value.StartTick);
-        DirectMidiNoteClipboardSnapshot[] snapshots = notes.Select(value => new DirectMidiNoteClipboardSnapshot(
-            checked(value.StartTick - earliest),
-            value.LengthTicks,
-            value.Key,
-            value.NoteOnVelocity,
-            value.NoteOffVelocity,
-            value.NoteOnOrder,
-            value.NoteOffOrder,
-            PreserveOrders: true)).ToArray();
+        IReadOnlyList<DirectMidiNoteClipboardSnapshot> snapshots = new ProjectedClipboardList<DirectMidiNoteClipboardSnapshot, DirectMidiNoteClipboardSnapshot>(
+            absolute, value => value with { StartOffset = checked(value.StartOffset - earliest) });
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.DirectMidiNotes,
-            snapshots.Length,
-            snapshots.Length == 1 ? "1 MIDI Note" : $"{snapshots.Length} MIDI Notes",
+            snapshots.Count,
+            snapshots.Count == 1 ? "1 MIDI Note" : $"{snapshots.Count} MIDI Notes",
             new DirectMidiNoteClipboardData(snapshots));
     }
 
@@ -101,25 +102,29 @@ public static partial class ProjectObjectClipboard
         MidoraId segmentId,
         IReadOnlyCollection<MidoraId> eventIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(eventIds);
         MidiSegment source = FindMidiSegmentForClipboard(document.Project, segmentId).Segment;
-        HashSet<MidoraId> requested = eventIds.ToHashSet();
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(eventIds, nameof(eventIds));
         if (requested.Count == 0 || requested.Count != eventIds.Count)
             throw new ArgumentException("Direct MIDI Event selections require distinct stable IDs.", nameof(eventIds));
-        DirectMidiChannelEvent[] events = source.ChannelEvents.ResolveByIds(requested)
-            .Select(static match => match.Value)
-            .ToArray();
-        if (events.Length != requested.Count)
+        long earliest = long.MaxValue;
+        IReadOnlyList<DirectMidiEventClipboardSnapshot> absolute = ClipboardCaptureScope.Capture(
+            EnumerateClipboardSelection(document.Project, source.ChannelEvents.CreateObjectSource(), requested).Select(value =>
+            {
+                earliest = Math.Min(earliest, value.Tick);
+                return new DirectMidiEventClipboardSnapshot(value.Tick, value.Kind, value.Data1, value.Data2, value.Order);
+            }), requested.Count, reportReadProgress: false);
+        if (absolute.Count != requested.Count)
             throw new ArgumentException("Every copied Direct MIDI Event must belong to the source Segment.", nameof(eventIds));
-        long earliest = events.Min(value => value.Tick);
-        DirectMidiEventClipboardSnapshot[] snapshots = events.Select(value => new DirectMidiEventClipboardSnapshot(
-            checked(value.Tick - earliest), value.Kind, value.Data1, value.Data2, value.Order)).ToArray();
+        IReadOnlyList<DirectMidiEventClipboardSnapshot> snapshots = new ProjectedClipboardList<DirectMidiEventClipboardSnapshot, DirectMidiEventClipboardSnapshot>(
+            absolute, value => value with { Tick = checked(value.Tick - earliest) });
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.DirectMidiEvents,
-            snapshots.Length,
-            snapshots.Length == 1 ? "1 MIDI Event" : $"{snapshots.Length} MIDI Events",
+            snapshots.Count,
+            snapshots.Count == 1 ? "1 MIDI Event" : $"{snapshots.Count} MIDI Events",
             new DirectMidiEventClipboardData(snapshots));
     }
 
@@ -128,29 +133,25 @@ public static partial class ProjectObjectClipboard
         MidoraId segmentId,
         IReadOnlyCollection<MidoraId> eventIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(eventIds);
         MidiSegment source = FindMidiSegmentForClipboard(document.Project, segmentId).Segment;
-        HashSet<MidoraId> requested = eventIds.ToHashSet();
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(eventIds, nameof(eventIds));
         if (requested.Count == 0 || requested.Count != eventIds.Count)
             throw new ArgumentException("Imported MIDI event selections require distinct stable IDs.", nameof(eventIds));
-        OpaqueMidiEvent[] events = source.OpaqueEvents.ResolveByIds(requested)
-            .Select(static match => match.Value)
-            .ToArray();
-        if (events.Length != requested.Count)
+        OpaqueClipboardList absolute = OpaqueClipboardList.Capture(
+            EnumerateClipboardSelection(document.Project, source.OpaqueEvents.CreateObjectSource(), requested), reportReadProgress: false);
+        if (absolute.Count != requested.Count)
             throw new ArgumentException("Every copied imported MIDI event must belong to the source Segment.", nameof(eventIds));
-        long earliest = events.Min(value => value.Tick);
-        OpaqueMidiEventClipboardSnapshot[] snapshots = events.Select(value => new OpaqueMidiEventClipboardSnapshot(
-            checked(value.Tick - earliest),
-            value.Kind,
-            value.MetaType,
-            value.Payload.ToArray(),
-            value.Order)).ToArray();
+        long earliest = absolute.MinimumTick;
+        IReadOnlyList<OpaqueMidiEventClipboardSnapshot> snapshots = new ProjectedClipboardList<OpaqueMidiEventClipboardSnapshot, OpaqueMidiEventClipboardSnapshot>(
+            absolute, value => value with { Tick = checked(value.Tick - earliest) });
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.OpaqueMidiEvents,
-            snapshots.Length,
-            snapshots.Length == 1 ? "1 imported MIDI Event" : $"{snapshots.Length} imported MIDI Events",
+            snapshots.Count,
+            snapshots.Count == 1 ? "1 imported MIDI Event" : $"{snapshots.Count} imported MIDI Events",
             new OpaqueMidiEventClipboardData(snapshots));
     }
 
@@ -162,11 +163,11 @@ public static partial class ProjectObjectClipboard
     {
         PureMidiTrackClipboardData data = RequirePayload<PureMidiTrackClipboardData>(
             document, payload, ProjectObjectClipboardKind.PureMidiTrack);
-        return ProjectDomainEditCommands.PastePureMidiTrackClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PastePureMidiTrackClipboard(
             data.Track,
             data.Route,
             rootId,
-            insertionIndex);
+            insertionIndex));
     }
 
     public static IProjectEditCommand CreatePastePureMidiTrackIndependentCommand(
@@ -178,11 +179,11 @@ public static partial class ProjectObjectClipboard
             document,
             payload,
             ProjectObjectClipboardKind.PureMidiTrack);
-        return ProjectDomainEditCommands.PastePureMidiTrackClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PastePureMidiTrackClipboard(
             data.Track,
             data.Route,
             targetRootId: null,
-            insertionIndex);
+            insertionIndex));
     }
 
     public static IProjectEditCommand CreatePasteMidiSegmentsCommand(
@@ -193,7 +194,9 @@ public static partial class ProjectObjectClipboard
     {
         MidiSegmentClipboardData data = RequirePayload<MidiSegmentClipboardData>(
             document, payload, ProjectObjectClipboardKind.MidiSegments);
-        return ProjectDomainEditCommands.PasteMidiSegmentClipboard(data.Segments, targetTrackId, editCursorTick);
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteMidiSegmentClipboard(
+            data.Segments, targetTrackId, editCursorTick),
+            new(payload.Kind, targetTrackId, TargetIsDirectMidi: true));
     }
 
     public static IProjectEditCommand CreatePasteNotesCommand(
@@ -213,7 +216,7 @@ public static partial class ProjectObjectClipboard
             {
                 ProjectObjectClipboardKind.DirectMidiNotes when payload.Data is DirectMidiNoteClipboardData direct => direct.Notes,
                 ProjectObjectClipboardKind.LogicalNotes when payload.Data is LogicalNoteClipboardData logical =>
-                    logical.Notes.Select(value => new DirectMidiNoteClipboardSnapshot(
+                    new ProjectedClipboardList<LogicalNoteClipboardSnapshot, DirectMidiNoteClipboardSnapshot>(logical.Notes, value => new DirectMidiNoteClipboardSnapshot(
                         value.StartOffset,
                         value.LengthTicks,
                         value.Note,
@@ -221,20 +224,23 @@ public static partial class ProjectObjectClipboard
                         0,
                         0,
                         0,
-                        PreserveOrders: false)).ToArray(),
+                        PreserveOrders: false)),
                 _ => throw new ArgumentException("The clipboard payload does not contain MIDI-compatible Notes.", nameof(payload))
             };
-            return ProjectDomainEditCommands.PasteDirectMidiNoteClipboard(values, targetSegmentId, editCursorTick);
+            return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteDirectMidiNoteClipboard(
+                values, targetSegmentId, editCursorTick),
+                new(payload.Kind, targetSegmentId, TargetIsDirectMidi: true), independentlyPreparedContent: true);
         }
         IReadOnlyList<LogicalNoteClipboardSnapshot> logicalValues = payload.Kind switch
         {
             ProjectObjectClipboardKind.LogicalNotes when payload.Data is LogicalNoteClipboardData logical => logical.Notes,
             ProjectObjectClipboardKind.DirectMidiNotes when payload.Data is DirectMidiNoteClipboardData direct =>
-                direct.Notes.Select(value => new LogicalNoteClipboardSnapshot(
-                    value.StartOffset, value.LengthTicks, value.Key, value.NoteOnVelocity)).ToArray(),
+                new ProjectedClipboardList<DirectMidiNoteClipboardSnapshot, LogicalNoteClipboardSnapshot>(direct.Notes, value => new LogicalNoteClipboardSnapshot(
+                    value.StartOffset, value.LengthTicks, value.Key, value.NoteOnVelocity)),
             _ => throw new ArgumentException("The clipboard payload does not contain MIDI-compatible Notes.", nameof(payload))
         };
-        return ProjectDomainEditCommands.PasteLogicalNoteClipboard(logicalValues, targetSegmentId, editCursorTick);
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteLogicalNoteClipboard(
+            logicalValues, targetSegmentId, editCursorTick), new(payload.Kind, targetSegmentId), independentlyPreparedContent: true);
     }
 
     public static IProjectEditCommand CreatePasteDirectMidiEventsCommand(
@@ -245,8 +251,9 @@ public static partial class ProjectObjectClipboard
     {
         DirectMidiEventClipboardData data = RequirePayload<DirectMidiEventClipboardData>(
             document, payload, ProjectObjectClipboardKind.DirectMidiEvents);
-        return ProjectDomainEditCommands.PasteDirectMidiEventClipboard(
-            data.Events, targetSegmentId, editCursorTick);
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteDirectMidiEventClipboard(
+            data.Events, targetSegmentId, editCursorTick),
+            new(payload.Kind, targetSegmentId, TargetIsDirectMidi: true));
     }
 
     public static IProjectEditCommand CreatePasteOpaqueMidiEventsCommand(
@@ -257,15 +264,20 @@ public static partial class ProjectObjectClipboard
     {
         OpaqueMidiEventClipboardData data = RequirePayload<OpaqueMidiEventClipboardData>(
             document, payload, ProjectObjectClipboardKind.OpaqueMidiEvents);
-        return ProjectDomainEditCommands.PasteOpaqueMidiEventClipboard(
-            data.Events, targetSegmentId, editCursorTick);
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteOpaqueMidiEventClipboard(
+            data.Events, targetSegmentId, editCursorTick),
+            new(payload.Kind, targetSegmentId, TargetIsDirectMidi: true));
     }
 
-    private static PureMidiTrackClipboardSnapshot SnapshotPureMidiTrack(PureMidiTrack track) => new(
+    private static PureMidiTrackClipboardSnapshot SnapshotPureMidiTrack(PureMidiTrack track)
+    {
+        ClipboardCaptureScope.ReserveMetadata(track.Segments.Count, 2048);
+        return new(
         track.Name,
         track.Color,
         track.Segments.Select(segment => SnapshotMidiSegment(
             segment, 0, segment.ProjectStartTick)).ToArray());
+    }
 
     private static MidiSegmentClipboardSnapshot SnapshotMidiSegment(
         MidiSegment segment,
@@ -275,14 +287,17 @@ public static partial class ProjectObjectClipboard
             startOffset,
             segment.LengthTicks,
             segment.ContentOffsetTick,
-            segment.Notes.Select(note => new DirectMidiNoteClipboardSnapshot(
+            ClipboardCaptureScope.Capture(segment.Notes.CreateQuerySnapshot().QueryValues(0, long.MaxValue).Select(note => new DirectMidiNoteClipboardSnapshot(
                 note.StartTick, note.LengthTicks, note.Key, note.NoteOnVelocity,
                 note.NoteOffVelocity, note.NoteOnOrder, note.NoteOffOrder,
-                PreserveOrders: true)).ToArray(),
-            segment.ChannelEvents.Select(value => new DirectMidiEventClipboardSnapshot(
-                value.Tick, value.Kind, value.Data1, value.Data2, value.Order)).ToArray(),
-            segment.OpaqueEvents.Select(value => new OpaqueMidiEventClipboardSnapshot(
-                value.Tick, value.Kind, value.MetaType, value.Payload.ToArray(), value.Order)).ToArray());
+                PreserveOrders: true)), segment.Notes.Count),
+            ClipboardCaptureScope.Capture(EnumerateClipboardSource(segment.ChannelEvents.CreateObjectSource()).Select(value => new DirectMidiEventClipboardSnapshot(
+                value.Tick, value.Kind, value.Data1, value.Data2, value.Order)), segment.ChannelEvents.Count),
+            OpaqueClipboardList.Capture(EnumerateClipboardSource(segment.OpaqueEvents.CreateObjectSource())))
+            {
+                InstrumentChanges = ClipboardCaptureScope.Capture(InstrumentChangeCopies.Capture(
+                    segment.InstrumentChanges, segment.ChannelEvents.CreateObjectSource()), segment.InstrumentChanges.Count)
+            };
 
     private static MidiRouteClipboardSnapshot SnapshotMidiRoute(MidiChannelRoot root) => new(
         root.Name,
@@ -332,13 +347,16 @@ internal sealed record MidiSegmentClipboardSnapshot(
     long StartOffset,
     long LengthTicks,
     long ContentOffsetTick,
-    DirectMidiNoteClipboardSnapshot[] Notes,
-    DirectMidiEventClipboardSnapshot[] Events,
-    OpaqueMidiEventClipboardSnapshot[] OpaqueEvents);
-internal sealed record DirectMidiNoteClipboardData(DirectMidiNoteClipboardSnapshot[] Notes) : ProjectObjectClipboardData;
-internal sealed record DirectMidiEventClipboardData(DirectMidiEventClipboardSnapshot[] Events) : ProjectObjectClipboardData;
-internal sealed record OpaqueMidiEventClipboardData(OpaqueMidiEventClipboardSnapshot[] Events) : ProjectObjectClipboardData;
-internal sealed record DirectMidiNoteClipboardSnapshot(
+    IReadOnlyList<DirectMidiNoteClipboardSnapshot> Notes,
+    IReadOnlyList<DirectMidiEventClipboardSnapshot> Events,
+    IReadOnlyList<OpaqueMidiEventClipboardSnapshot> OpaqueEvents)
+{
+    public IReadOnlyList<InstrumentChangeClipboardRecord> InstrumentChanges { get; init; } = [];
+}
+internal sealed record DirectMidiNoteClipboardData(IReadOnlyList<DirectMidiNoteClipboardSnapshot> Notes) : ProjectObjectClipboardData;
+internal sealed record DirectMidiEventClipboardData(IReadOnlyList<DirectMidiEventClipboardSnapshot> Events) : ProjectObjectClipboardData;
+internal sealed record OpaqueMidiEventClipboardData(IReadOnlyList<OpaqueMidiEventClipboardSnapshot> Events) : ProjectObjectClipboardData;
+internal readonly record struct DirectMidiNoteClipboardSnapshot(
     long StartOffset,
     long LengthTicks,
     int Key,
@@ -347,7 +365,7 @@ internal sealed record DirectMidiNoteClipboardSnapshot(
     long NoteOnOrder,
     long NoteOffOrder,
     bool PreserveOrders);
-internal sealed record DirectMidiEventClipboardSnapshot(
+internal readonly record struct DirectMidiEventClipboardSnapshot(
     long Tick,
     DirectMidiChannelEventKind Kind,
     int Data1,
@@ -489,26 +507,28 @@ public static partial class ProjectDomainEditCommands
                 }
                 PureMidiTrack track = FindPureMidiTrack(project, targetReference.TrackId);
                 long start = checked(editCursorTick + snapshot.StartOffset);
-                EnsureNoMidiSegmentOverlap(track, null, start, snapshot.LengthTicks);
+                ValidateSegmentRange(start, snapshot.LengthTicks, snapshot.ContentOffsetTick);
                 return (Snapshot: snapshot, Track: track, Start: start);
             }).ToArray();
             foreach (IGrouping<PureMidiTrack, (MidiSegmentClipboardSnapshot Snapshot, PureMidiTrack Track, long Start)> group in placements.GroupBy(value => value.Track))
             {
-                var ordered = group.OrderBy(value => value.Start).ToArray();
-                for (int i = 1; i < ordered.Length; i++)
-                    if (checked(ordered[i - 1].Start + ordered[i - 1].Snapshot.LengthTicks) > ordered[i].Start)
-                        throw new InvalidOperationException("Pasted MIDI Segments would overlap each other.");
+                ValidateClipboardSegmentRanges(group.Select(value => new TickRange(value.Start,
+                    checked(value.Start + value.Snapshot.LengthTicks))),
+                    group.Key.Segments.Select(static value => value.ProjectRange));
             }
             MidiSegment[]? copies = null;
-            return Prepared(true, EverythingChange(), owner =>
+            return WithCreatedClipboardSelection(Prepared(true, EverythingChange(), owner =>
             {
                 copies ??= placements.Select(value => CreateMidiSegmentFromClipboard(owner, value.Snapshot, value.Start)).ToArray();
-                for (int i = 0; i < copies.Length; i++) InsertMidiSegmentByTime(placements[i].Track.Segments, copies[i]);
+                foreach (var group in placements.Select((value, index) => (value.Track, Copy: copies[index]))
+                    .GroupBy(static value => value.Track))
+                    MergeClipboardSegments(group.Key.Segments, group.Select(static value => value.Copy),
+                        static value => value.ProjectStartTick, static value => value.Id);
             }, _ =>
             {
                 if (copies is null) throw new InvalidOperationException("Pasted MIDI Segments do not exist.");
                 for (int i = 0; i < copies.Length; i++) RemoveRequired(placements[i].Track.Segments, copies[i], "pasted MIDI Segment");
-            });
+            }), () => copies!.Select(static value => value.Id).ToArray());
         });
 
     internal static IProjectEditCommand PasteDirectMidiNoteClipboard(
@@ -519,37 +539,24 @@ public static partial class ProjectDomainEditCommands
         {
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             if (snapshots.Count == 0 || editCursorTick < 0) throw new ArgumentOutOfRangeException(nameof(editCursorTick));
-            DirectMidiNote[]? created = null;
-            return ResolveTargetedExactDirectMidiCollisions(Prepared(true, PureMidiTrackChange(location.Track.Id), owner =>
+            return PrepareBoundedDirectMidiNoteAppend(project, segmentId, firstId => Values(firstId));
+            IEnumerable<DirectMidiNoteValue> Values(long firstId)
             {
-                created ??= snapshots.Select(value =>
+                long nextId = firstId;
+                long count = 0;
+                foreach (DirectMidiNoteClipboardSnapshot value in snapshots)
                 {
+                    BulkEditPreparationContext.Current?.Checkpoint(++count, snapshots.Count);
                     long tick = checked(editCursorTick + value.StartOffset);
                     ValidateDirectMidiNote(tick, value.LengthTicks, value.Key, value.NoteOnVelocity, value.NoteOffVelocity);
-                    DirectMidiNote note = new(owner)
-                    {
-                        StartTick = tick,
-                        LengthTicks = value.LengthTicks,
-                        Key = value.Key,
-                        NoteOnVelocity = value.NoteOnVelocity,
-                        NoteOffVelocity = value.NoteOffVelocity
-                    };
-                    note.NoteOnOrder = value.PreserveOrders
-                        ? value.NoteOnOrder
-                        : note.Id.Value * 2;
-                    note.NoteOffOrder = value.PreserveOrders
-                        ? value.NoteOffOrder
-                        : checked(note.NoteOnOrder + 1);
-                    return note;
-                }).ToArray();
-                location.Segment.Notes.AddRange(created);
-            }, _ =>
-            {
-                foreach (DirectMidiNote note in created ?? []) location.Segment.Notes.Remove(note);
-            }), noteTargets: snapshots.Select(value => new DirectMidiNoteCollisionTarget(
-                location.Segment,
-                checked(editCursorTick + value.StartOffset),
-                value.Key)));
+                    MidoraId id = new(nextId);
+                    nextId = checked(nextId + 1);
+                    long onOrder = value.PreserveOrders ? value.NoteOnOrder : checked(id.Value * 2);
+                    long offOrder = value.PreserveOrders ? value.NoteOffOrder : checked(onOrder + 1);
+                    yield return new(id, tick, value.LengthTicks, value.Key, value.NoteOnVelocity,
+                        value.NoteOffVelocity, onOrder, offOrder);
+                }
+            }
         });
 
     internal static IProjectEditCommand PasteDirectMidiEventClipboard(
@@ -560,32 +567,17 @@ public static partial class ProjectDomainEditCommands
         {
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             if (snapshots.Count == 0 || editCursorTick < 0) throw new ArgumentOutOfRangeException(nameof(editCursorTick));
-            DirectMidiChannelEvent[]? created = null;
-            return ResolveTargetedExactDirectMidiCollisions(Prepared(true, PureMidiTrackChange(location.Track.Id), owner =>
+            return PrepareBoundedDirectMidiEventAppend(project, segmentId, firstId => Values(firstId));
+            IEnumerable<DirectMidiChannelEventValue> Values(long nextId)
             {
-                created ??= snapshots.Select(value =>
+                foreach (DirectMidiEventClipboardSnapshot value in snapshots)
                 {
+                    BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
                     long tick = checked(editCursorTick + value.Tick);
                     ValidateDirectMidiEvent(tick, value.Kind, value.Data1, value.Data2);
-                    return new DirectMidiChannelEvent(owner)
-                    {
-                        Tick = tick,
-                        Kind = value.Kind,
-                        Data1 = value.Data1,
-                        Data2 = value.Data2,
-                        Order = value.Order
-                    };
-                }).ToArray();
-                location.Segment.ChannelEvents.AddRange(created);
-            }, _ =>
-            {
-                foreach (DirectMidiChannelEvent value in created ?? [])
-                    location.Segment.ChannelEvents.Remove(value);
-            }), eventTargets: snapshots.Select(value => new DirectMidiEventCollisionTarget(
-                location.Segment,
-                checked(editCursorTick + value.Tick),
-                value.Kind,
-                value.Data1)));
+                    yield return new(new MidoraId(checked(nextId++)), tick, value.Kind, value.Data1, value.Data2, value.Order);
+                }
+            }
         });
 
     internal static IProjectEditCommand PasteOpaqueMidiEventClipboard(
@@ -597,34 +589,20 @@ public static partial class ProjectDomainEditCommands
             ArgumentNullException.ThrowIfNull(snapshots);
             MidiSegmentLocation location = FindMidiSegment(project, targetSegmentId);
             if (snapshots.Count == 0) throw new ArgumentException("The imported MIDI event clipboard is empty.", nameof(snapshots));
-            OpaqueMidiEvent[]? created = null;
-            return Prepared(
-                true,
-                PureMidiTrackChange(location.Track.Id),
-                owner =>
+            return PrepareBoundedOpaqueMidiAppend(project, targetSegmentId, firstId => Values(firstId));
+            IEnumerable<Midora.Domain.OpaqueMidiEventValue> Values(long nextId)
+            {
+                foreach (OpaqueMidiEventClipboardSnapshot value in snapshots)
                 {
-                    created ??= snapshots.Select(value =>
-                    {
-                        long tick = checked(editCursorTick + value.Tick);
-                        if (tick < 0) throw new InvalidOperationException("Imported MIDI events cannot be pasted before tick 0.");
-                        if (!Enum.IsDefined(value.Kind))
-                            throw new InvalidOperationException("The imported MIDI event clipboard contains an invalid event kind.");
-                        return new OpaqueMidiEvent(owner)
-                        {
-                            Tick = tick,
-                            Kind = value.Kind,
-                            MetaType = value.MetaType,
-                            Payload = value.Payload.ToArray(),
-                            Order = value.Order
-                        };
-                    }).ToArray();
-                    location.Segment.OpaqueEvents.AddRange(created);
-                },
-                _ =>
-                {
-                    foreach (OpaqueMidiEvent value in created ?? [])
-                        location.Segment.OpaqueEvents.Remove(value);
-                });
+                    BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
+                    long tick = checked(editCursorTick + value.Tick);
+                    if (tick < 0) throw new InvalidOperationException("Imported MIDI events cannot be pasted before tick 0.");
+                    if (!Enum.IsDefined(value.Kind))
+                        throw new InvalidOperationException("The imported MIDI event clipboard contains an invalid event kind.");
+                    yield return new(new MidoraId(checked(nextId++)), tick, value.Kind,
+                        value.MetaType, value.Payload, value.Order);
+                }
+            }
         });
 
     private static PureMidiTrack CreatePureMidiTrackFromClipboard(
@@ -638,8 +616,9 @@ public static partial class ProjectDomainEditCommands
             MidiChannelRootId = rootId,
             Color = snapshot.Color
         };
-        foreach (MidiSegmentClipboardSnapshot segment in snapshot.Segments)
-            InsertMidiSegmentByTime(track.Segments, CreateMidiSegmentFromClipboard(project, segment, segment.StartOffset));
+        MergeClipboardSegments(track.Segments, snapshot.Segments.Select(segment =>
+            CreateMidiSegmentFromClipboard(project, segment, segment.StartOffset)),
+            static value => value.ProjectStartTick, static value => value.Id);
         return track;
     }
 
@@ -654,44 +633,24 @@ public static partial class ProjectDomainEditCommands
             LengthTicks = snapshot.LengthTicks,
             ContentOffsetTick = snapshot.ContentOffsetTick
         };
-        HashSet<(long Tick, int Key)> noteStarts = [];
-        foreach (DirectMidiNoteClipboardSnapshot note in snapshot.Notes)
+        using var scope = BulkEditPreparationContext.Enter(BulkEditPreparationContext.Current?.Token ?? default, project: project);
+        AdoptBoundedDirectMidiNotes(project, segment, FirstClipboardValues(snapshot.Notes,
+            static note => note.StartOffset, static note => note.Key).Select(note =>
         {
-            if (!noteStarts.Add((note.StartOffset, note.Key))) continue;
-            DirectMidiNote copy = new(project)
-            {
-                StartTick = note.StartOffset,
-                LengthTicks = note.LengthTicks,
-                Key = note.Key,
-                NoteOnVelocity = note.NoteOnVelocity,
-                NoteOffVelocity = note.NoteOffVelocity
-            };
-            copy.NoteOnOrder = note.PreserveOrders
-                ? note.NoteOnOrder
-                : copy.Id.Value * 2;
-            copy.NoteOffOrder = note.PreserveOrders
-                ? note.NoteOffOrder
-                : checked(copy.NoteOnOrder + 1);
-            segment.Notes.Add(copy);
-        }
-        foreach (DirectMidiEventClipboardSnapshot value in snapshot.Events)
-            segment.ChannelEvents.Add(new DirectMidiChannelEvent(project)
-            {
-                Tick = value.Tick,
-                Kind = value.Kind,
-                Data1 = value.Data1,
-                Data2 = value.Data2,
-                Order = value.Order
-            });
-        foreach (OpaqueMidiEventClipboardSnapshot value in snapshot.OpaqueEvents)
-            segment.OpaqueEvents.Add(new OpaqueMidiEvent(project)
-            {
-                Tick = value.Tick,
-                Kind = value.Kind,
-                MetaType = value.MetaType,
-                Payload = value.Payload.ToArray(),
-                Order = value.Order
-            });
+            MidoraId id = project.AllocateStableId();
+            long onOrder = note.PreserveOrders ? note.NoteOnOrder : checked(id.Value * 2);
+            long offOrder = note.PreserveOrders ? note.NoteOffOrder : checked(onOrder + 1);
+            return new DirectMidiNoteValue(id, note.StartOffset, note.LengthTicks, note.Key,
+                note.NoteOnVelocity, note.NoteOffVelocity, onOrder, offOrder);
+        }));
+        long firstEventId = project.NextStableId;
+        AdoptBoundedDirectMidiEvents(project, segment, snapshot.Events.Select(value =>
+            new DirectMidiChannelEventValue(project.AllocateStableId(), value.Tick, value.Kind, value.Data1, value.Data2, value.Order)));
+        segment.InstrumentChanges = InstrumentChangeCopies.Restore(project, snapshot.InstrumentChanges, firstEventId, true,
+            group => InstrumentChangeResolver.TryRead(segment, group, out _));
+        AdoptBoundedOpaqueMidiEvents(project, segment, snapshot.OpaqueEvents.Select(value =>
+            new Midora.Domain.OpaqueMidiEventValue(project.AllocateStableId(), value.Tick,
+                value.Kind, value.MetaType, value.Payload, value.Order)));
         return segment;
     }
 }

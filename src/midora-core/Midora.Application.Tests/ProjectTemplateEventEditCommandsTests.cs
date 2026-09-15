@@ -516,6 +516,55 @@ public sealed class ProjectTemplateEventEditCommandsTests
         AssertCurrentCompilationMatchesFull(compilation);
     }
 
+    [Fact]
+    public void EventLaneDeletionTargetsOnlyRequestedEventsAndRefreshesItsIndexAfterUndo()
+    {
+        MidoraProject project = CreateProject();
+        EventInstrument instrument = project.EventInstruments[0];
+        SubVoice voice = instrument.SubVoices[0];
+        TemplateEvent target = Event(
+            project,
+            TemplateEventKind.ControlChange,
+            tick: 120,
+            number: 74,
+            value: 64);
+        voice.Events.Add(target);
+        for (int index = 0; index < 2_000; index++)
+        {
+            voice.Events.Add(Event(
+                project,
+                TemplateEventKind.ControlChange,
+                tick: 240 + index,
+                number: 71,
+                value: index % 128));
+        }
+        TemplateEventMappingTarget targetMapping = TemplateEventMidiTargets.ToMappingTarget(
+            MidiValueTarget.ControlChange(74));
+        Assert.NotNull(voice.FindEventMapping(targetMapping));
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = PersistedDocument(compilation);
+
+        document.Execute(ProjectDomainEditCommands.DeleteSubVoiceEventLane(
+            instrument.Id,
+            voice.Id,
+            MidiValueTarget.ControlChange(74),
+            nonEmptyDeletionConfirmed: true));
+
+        Assert.DoesNotContain(target, voice.Events);
+        Assert.Equal(2_001, voice.Events.Count);
+        Assert.All(
+            voice.Events.Where(static value => value.Kind != TemplateEventKind.Note),
+            static value => Assert.Equal(71, value.Number));
+
+        document.Undo();
+        Assert.Contains(target, voice.Events);
+        Assert.NotNull(voice.FindEventMapping(targetMapping));
+
+        document.Redo();
+        Assert.DoesNotContain(target, voice.Events);
+        Assert.Equal(2_001, voice.Events.Count);
+    }
+
     private static TemplateEvent Event(
         MidoraProject project,
         TemplateEventKind kind,

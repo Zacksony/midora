@@ -91,7 +91,6 @@ public sealed class SingleApplicationInstanceCoordinatorTests
         string readyPath = Path.Combine(temporaryDirectory, "ready");
         string receivedPath = Path.Combine(temporaryDirectory, "received");
         string applicationId = NewApplicationId();
-        string configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Debug";
         ProcessStartInfo startInfo = new()
         {
             FileName = "dotnet",
@@ -101,20 +100,13 @@ public sealed class SingleApplicationInstanceCoordinatorTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        startInfo.ArgumentList.Add("test");
-        startInfo.ArgumentList.Add(Path.Combine(
-            repositoryRoot,
-            "src",
-            "midora-core",
-            "Midora.Application.Tests",
-            "Midora.Application.Tests.csproj"));
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add(configuration);
-        startInfo.ArgumentList.Add("--no-build");
-        startInfo.ArgumentList.Add("--no-restore");
-        startInfo.ArgumentList.Add("--filter");
+        // Reuse the assembly under test rather than inferring a Configuration
+        // or output directory from its path. This also supports isolated OutDir
+        // regression runs without accidentally executing a stale child binary.
+        startInfo.ArgumentList.Add("vstest");
+        startInfo.ArgumentList.Add(typeof(SingleApplicationInstanceCoordinatorTests).Assembly.Location);
         startInfo.ArgumentList.Add(
-            "FullyQualifiedName=Midora.Application.Tests.SingleApplicationInstanceCoordinatorTests.CrossProcessForwardingUsesOperatingSystemNamespace");
+            "--TestCaseFilter:FullyQualifiedName=Midora.Application.Tests.SingleApplicationInstanceCoordinatorTests.CrossProcessForwardingUsesOperatingSystemNamespace");
         startInfo.Environment[ChildModeEnvironmentVariable] = "1";
         startInfo.Environment[ChildApplicationIdEnvironmentVariable] = applicationId;
         startInfo.Environment[ChildReadyPathEnvironmentVariable] = readyPath;

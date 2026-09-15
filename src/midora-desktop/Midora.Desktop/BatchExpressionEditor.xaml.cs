@@ -66,6 +66,13 @@ public partial class BatchExpressionEditor : UserControl
         if (CompletionPopup.IsOpen) ShowCompletion();
     }
 
+    public void ConfigureProfile(NumericExpressionProfile profile, string? excludedVariable = null)
+    {
+        _variables = BatchExpressionCompletionProvider.CreateVariables(profile, excludedVariable);
+        ExpressionEditor.TextArea.TextView.Redraw();
+        if (CompletionPopup.IsOpen) ShowCompletion();
+    }
+
     public void FocusEditor()
     {
         if (_expressionMode)

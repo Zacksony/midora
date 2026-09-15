@@ -350,9 +350,9 @@ public sealed class MidoraProjectPackageV1Tests
     }
 
     [Theory]
-    [InlineData("fileFormatVersion", 2)]
-    [InlineData("minimumReadableVersion", 2)]
-    [InlineData("manifestSchemaVersion", 2)]
+    [InlineData("fileFormatVersion", 5)]
+    [InlineData("minimumReadableVersion", 5)]
+    [InlineData("manifestSchemaVersion", 5)]
     public async Task FutureManifestVersionIsRejectedDuringVersionPreflight(
         string propertyName,
         int futureVersion)
@@ -369,11 +369,11 @@ public sealed class MidoraProjectPackageV1Tests
 
         Assert.Equal(MidoraPackageStageV1.VersionPreflight, failure.Stage);
         Assert.Equal("manifest.json", failure.PackagePath);
-        Assert.Equal(1, failure.SupportedFileFormatVersion);
-        Assert.Equal(1, failure.SupportedManifestSchemaVersion);
-        Assert.Equal(propertyName == "fileFormatVersion" ? 2 : 1, failure.FileFormatVersion);
-        Assert.Equal(propertyName == "minimumReadableVersion" ? 2 : 1, failure.MinimumReadableVersion);
-        Assert.Equal(propertyName == "manifestSchemaVersion" ? 2 : 1, failure.ManifestSchemaVersion);
+        Assert.Equal(4, failure.SupportedFileFormatVersion);
+        Assert.Equal(4, failure.SupportedManifestSchemaVersion);
+        Assert.Equal(propertyName == "fileFormatVersion" ? 5 : 4, failure.FileFormatVersion);
+        Assert.Equal(propertyName == "minimumReadableVersion" ? 5 : 4, failure.MinimumReadableVersion);
+        Assert.Equal(propertyName == "manifestSchemaVersion" ? 5 : 4, failure.ManifestSchemaVersion);
     }
 
     [Fact]
@@ -453,7 +453,9 @@ public sealed class MidoraProjectPackageV1Tests
             "conductor-track.json",
             "settings/project-settings.json",
             "settings/global-reset-defaults.json",
-            "settings/global-event-scope-defaults.json"
+            "settings/global-event-scope-defaults.json",
+            "settings/project-presentation.json",
+            "settings/instrument-changes.pb"
         ];
         using ZipArchive archive = ZipFile.OpenRead(packagePath);
         Assert.Equal(expected, archive.Entries.Select(entry => entry.FullName));
@@ -464,7 +466,9 @@ public sealed class MidoraProjectPackageV1Tests
         using Stream manifestStream = manifestEntry.Open();
         using MemoryStream buffer = new();
         manifestStream.CopyTo(buffer);
-        ManifestJsonV1 manifest = ManifestCodecV1.Parse(buffer.ToArray());
+        ManifestJsonV4 manifest = ManifestCodecV4.Parse(buffer.ToArray());
+        Assert.Equal(PersistenceContractV4.FileFormatVersion, manifest.FileFormatVersion);
+        Assert.Equal(PersistenceContractV4.ManifestSchemaVersion, manifest.ManifestSchemaVersion);
         Assert.Equal(
             expected.Skip(1).OrderBy(path => path, StringComparer.Ordinal),
             manifest.Files.Select(item => item.Path));
@@ -474,7 +478,13 @@ public sealed class MidoraProjectPackageV1Tests
             using Stream content = entry.Open();
             string hash = Convert.ToHexStringLower(SHA256.HashData(content));
             Assert.Equal(item.Sha256, hash);
-            Assert.Equal(1, item.SchemaVersion);
+            Assert.Equal(
+                item.Kind == "event-instrument-pb"
+                    ? PersistenceContractV3.EventInstrumentSchemaVersion
+                    : item.Kind == "project-presentation-json"
+                        ? PersistenceContractV3.ProjectPresentationSchemaVersion
+                        : PersistenceContractV3.ReusedComponentSchemaVersion,
+                item.SchemaVersion);
         }
     }
 
@@ -501,7 +511,7 @@ public sealed class MidoraProjectPackageV1Tests
             json = reader.ReadToEnd();
         }
         original.Delete();
-        string current = $"\"{propertyName}\": 1";
+        string current = $"\"{propertyName}\": {PersistenceContractV4.FileFormatVersion}";
         string replacement = $"\"{propertyName}\": {value}";
         Assert.Contains(current, json, StringComparison.Ordinal);
         ZipArchiveEntry updated = archive.CreateEntry("manifest.json", CompressionLevel.Optimal);

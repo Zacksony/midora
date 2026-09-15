@@ -29,15 +29,27 @@ public static partial class ProjectDomainEditCommands
     {
         ArgumentNullException.ThrowIfNull(edit);
         ArgumentNullException.ThrowIfNull(edit.EnumItems);
+        // The input DTO owns its existing strings. Freeze only its reference
+        // directory here, and reject an oversized validation plan before any
+        // array/dictionary is constructed. The same conservative allowance is
+        // charged to the shared operation budget during preparation below.
+        const long metadataBytesPerEnumItem = 2048;
+        long maximumWorking = BulkEditPreparationContext.Current?.Resources.Budget.MaximumWorkingBytes
+            ?? new PagedEditResourceBudget().MaximumWorkingBytes;
+        if ((long)edit.EnumItems.Count * metadataBytesPerEnumItem > maximumWorking)
+            throw new InvalidOperationException("The Logical Parameter enum definition exceeds the edit working-memory budget.");
         LogicalParameterEnumItemDefinitionEdit[] frozenItems = edit.EnumItems.ToArray();
         return Command("Migrate logical parameter definition", project =>
         {
+            using var preparation = BulkEditPreparationContext.Enter(BulkEditPreparationContext.Current?.Token ?? default, project: project);
             if (!Enum.IsDefined(migrationMode))
             {
                 throw new ArgumentOutOfRangeException(nameof(migrationMode));
             }
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             LogicalParameterDefinition parameter = FindLogicalParameter(instrument, parameterId);
+            using var validationBudget = preparation.Resources.ReserveWorking(
+                checked(((long)parameter.EnumItems.Count + frozenItems.Length) * metadataBytesPerEnumItem));
             string targetName = name is null
                 ? parameter.Name
                 : NormalizeUniqueLogicalParameterName(instrument, parameterId, name);
@@ -49,6 +61,10 @@ public static partial class ProjectDomainEditCommands
                 throw new InvalidOperationException(
                     "Migrating a Logical Parameter to an Enum definition requires acknowledging that numeric compatibility does not preserve semantic meaning.");
             }
+
+            if (parameter.EnumItems.Count + (long)target.Items.Count + project.Tracks.SelectMany(track => track.Segments).SelectMany(segment => segment.ParameterLanes)
+                .Where(lane => lane.ParameterId == parameterId).Sum(lane => 1L + lane.Points.Count) >= BoundedNoteThreshold)
+                return PrepareBoundedLogicalParameterDefinitionMigration(project, instrument, parameter, target, migrationMode, targetName);
 
             LaneMigration[] laneMigrations = project.Tracks
                 .SelectMany(track => track.Segments.SelectMany(segment =>
@@ -152,6 +168,7 @@ public static partial class ProjectDomainEditCommands
         List<ValidatedEnumItemEdit> validated = [];
         for (int index = 0; index < items.Count; index++)
         {
+            if ((index & 255) == 0) BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
             LogicalParameterEnumItemDefinitionEdit item = items[index]
                 ?? throw new ArgumentException("Enum item definitions cannot be null.", nameof(edit));
             string name = ProjectTextRules.NormalizeShortText(

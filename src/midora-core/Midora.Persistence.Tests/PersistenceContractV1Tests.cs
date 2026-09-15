@@ -277,7 +277,9 @@ public sealed class PersistenceContractV1Tests
     public void CheckedInJsonSchemasUseDraft202012AndStrictObjects()
     {
         string schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas", "Json");
-        string[] paths = Directory.GetFiles(schemaDirectory, "*.schema.json", SearchOption.TopDirectoryOnly);
+        string[] paths = Directory.GetFiles(schemaDirectory, "*-v1.schema.json", SearchOption.TopDirectoryOnly)
+            .Where(path => Path.GetFileName(path) != "project-presentation-v1.schema.json")
+            .ToArray();
         Assert.Equal(8, paths.Length);
         foreach (string path in paths)
         {

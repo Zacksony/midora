@@ -9,6 +9,7 @@ public static partial class ProjectObjectClipboard
         MidoraId eventInstrumentId,
         MidoraId subVoiceId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         EventInstrument instrument = document.Project.EventInstruments
             .SingleOrDefault(value => value.Id == eventInstrumentId)
@@ -16,6 +17,10 @@ public static partial class ProjectObjectClipboard
         SubVoice voice = instrument.SubVoices
             .SingleOrDefault(value => value.Id == subVoiceId)
             ?? throw new ArgumentOutOfRangeException(nameof(subVoiceId));
+        ClipboardCaptureScope.ReserveMetadata(checked((long)voice.EventMappings.Count + voice.Curves.Count
+            + instrument.LogicalParameters.Count + instrument.Envelopes.Count + instrument.MappingFunctions.Count));
+        foreach (SubVoiceEventMapping mapping in voice.EventMappings)
+            ClipboardCaptureScope.ReserveMetadata(mapping.Steps.Count);
         MappingStepClipboardSnapshot[] mappingSteps = voice.EventMappings
             .SelectMany(value => value.Steps)
             .Select(SnapshotMappingStep)
@@ -42,14 +47,16 @@ public static partial class ProjectObjectClipboard
                 new(
                     value.TargetSettings.Rounding,
                     value.TargetSettings.Overflow))).ToArray(),
-            voice.Events.Select(value => SnapshotTemplateEvent(value, value.Tick)).ToArray(),
+            ClipboardCaptureScope.Capture(voice.Events.CreateQuerySnapshot().EnumerateAll().Select(value =>
+                new TemplateEventClipboardSnapshot(value.Kind, value.Tick, value.LengthTicks, value.Number,
+                    value.Value, value.SecondaryValue, value.HasBankMsb, value.HasBankLsb, value.FollowPitchDelta)), voice.Events.Count),
             voice.Curves.Select(value => new ValueCurveClipboardSnapshot(
                 value.Target,
                 new(value.TargetSettings.Rounding, value.TargetSettings.Overflow),
-                value.Points.Select(point => new CurvePointClipboardSnapshot(
+                ClipboardCaptureScope.Capture(value.Points.CreateQuerySnapshot().EnumerateAll().Select(point => new CurvePointClipboardSnapshot(
                     point.Tick,
                     point.Value,
-                    point.Interpolation)).ToArray())).ToArray(),
+                    point.Interpolation)), value.Points.Count))).ToArray(),
             instrument.LogicalParameters
                 .Where(value => parameterIds.Contains(value.Id))
                 .Select(SnapshotLogicalParameter)
@@ -61,7 +68,11 @@ public static partial class ProjectObjectClipboard
             instrument.MappingFunctions
                 .Where(value => functionIds.Contains(value.Id))
                 .Select(SnapshotMappingFunction)
-                .ToArray());
+                .ToArray())
+        {
+            InstrumentChanges = ClipboardCaptureScope.Capture(InstrumentChangeCopies.Capture(
+                voice.InstrumentChanges, voice.Events.CreateQuerySnapshot()), voice.InstrumentChanges.Count)
+        };
         string name = string.IsNullOrWhiteSpace(voice.Name) ? "SubVoice" : voice.Name;
         return new(
             document.ClipboardSessionIdentity,
@@ -81,10 +92,10 @@ public static partial class ProjectObjectClipboard
             targetDocument,
             payload,
             ProjectObjectClipboardKind.SubVoice);
-        return ProjectDomainEditCommands.PasteSubVoiceClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteSubVoiceClipboard(
             data,
             targetEventInstrumentId,
-            insertionIndex);
+            insertionIndex));
     }
 
     private static MappingStepClipboardSnapshot SnapshotMappingStep(ValueMappingStep value) => new(
@@ -102,7 +113,11 @@ public static partial class ProjectObjectClipboard
         value.InputOverflow,
         value.DivideByZero);
 
-    private static MidiInitialStateClipboardSnapshot SnapshotState(MidiInitialState value) => new(
+    private static MidiInitialStateClipboardSnapshot SnapshotState(MidiInitialState value)
+    {
+        ClipboardCaptureScope.ReserveMetadata(checked((long)value.Controllers.Count
+            + value.RegisteredParameters.Count + value.NonRegisteredParameters.Count), 128);
+        return new(
         value.BankMsb,
         value.BankLsb,
         value.Program,
@@ -112,9 +127,13 @@ public static partial class ProjectObjectClipboard
         value.Controllers.OrderBy(item => item.Key).ToArray(),
         value.RegisteredParameters.OrderBy(item => item.Key).ToArray(),
         value.NonRegisteredParameters.OrderBy(item => item.Key).ToArray());
+    }
 
     private static LogicalParameterClipboardSnapshot SnapshotLogicalParameter(
-        LogicalParameterDefinition value) => new(
+        LogicalParameterDefinition value)
+    {
+        ClipboardCaptureScope.ReserveMetadata(value.EnumItems.Count, 128);
+        return new(
         value.Id,
         value.Name,
         value.Type,
@@ -127,6 +146,7 @@ public static partial class ProjectObjectClipboard
         value.EnumItems.Select(item => new LogicalParameterEnumClipboardSnapshot(
             item.Name,
             item.Value)).ToArray());
+    }
 
     private static InstrumentEnvelopeClipboardSnapshot SnapshotEnvelope(InstrumentEnvelope value) => new(
         value.Id,
@@ -158,11 +178,14 @@ internal sealed record SubVoiceClipboardSnapshot(
     int? RootNoteOverride,
     MidiInitialStateClipboardSnapshot InitialState,
     SubVoiceEventMappingClipboardSnapshot[] EventMappings,
-    TemplateEventClipboardSnapshot[] Events,
+    IReadOnlyList<TemplateEventClipboardSnapshot> Events,
     ValueCurveClipboardSnapshot[] Curves,
     LogicalParameterClipboardSnapshot[] LogicalParameters,
     InstrumentEnvelopeClipboardSnapshot[] Envelopes,
-    MappingFunctionClipboardSnapshot[] MappingFunctions);
+    MappingFunctionClipboardSnapshot[] MappingFunctions)
+{
+    public IReadOnlyList<InstrumentChangeClipboardRecord> InstrumentChanges { get; init; } = [];
+}
 
 internal sealed record SubVoiceEventMappingClipboardSnapshot(
     TemplateEventMappingTarget Target,
@@ -183,7 +206,7 @@ internal sealed record MidiInitialStateClipboardSnapshot(
 internal sealed record ValueCurveClipboardSnapshot(
     MidiValueTarget Target,
     IntegerTargetSettingsClipboardSnapshot TargetSettings,
-    CurvePointClipboardSnapshot[] Points);
+    IReadOnlyList<CurvePointClipboardSnapshot> Points);
 
 internal sealed record LogicalParameterClipboardSnapshot(
     MidoraId SourceId,
@@ -331,21 +354,29 @@ public static partial class ProjectDomainEditCommands
                 new(value.TargetSettings.Rounding, value.TargetSettings.Overflow));
             result.EventMappings.Add(mapping);
         }
-        foreach (TemplateEventClipboardSnapshot value in snapshot.Events)
+        using var scope = BulkEditPreparationContext.Enter(BulkEditPreparationContext.Current?.Token ?? default, project: project);
+        long firstEventId = project.NextStableId;
+        var events = FreezeClipboardSource(FirstTemplateClipboardValues(snapshot.Events.Select(value =>
         {
-            result.Events.Add(CreateTemplateEventClipboardCopy(
-                project,
-                PrepareTemplateEventClipboardValue(value, editCursorTick: 0)));
-        }
+            _ = PrepareTemplateEventClipboardValue(value, editCursorTick: 0);
+            return new TemplateEventSnapshotValue(project.AllocateStableId(), value.Kind, value.TickOffset,
+                value.LengthTicks, value.Number, value.Value, value.SecondaryValue,
+                value.HasBankMsb, value.HasBankLsb, value.FollowPitchDelta);
+        })), static value => value.Id);
+        result.Events.AdoptSource(project, events, scope.Token);
+        result.InstrumentChanges = InstrumentChangeCopies.Restore(project, snapshot.InstrumentChanges, firstEventId, false,
+            group => InstrumentChangeResolver.TryRead(result, group, out _));
         foreach (ValueCurveClipboardSnapshot value in snapshot.Curves)
         {
+            scope.Token.ThrowIfCancellationRequested();
             ValueCurve curve = new(project) { Target = value.Target };
             SetTargetSettings(curve.TargetSettings, new(value.TargetSettings.Rounding, value.TargetSettings.Overflow));
-            foreach (CurvePointClipboardSnapshot point in value.Points)
-                curve.Points.Add(new(project, point.Tick, point.Value, point.Interpolation));
+            var points = FreezeClipboardSource(FirstClipboardValues(value.Points.Select(point =>
+                new CurvePointSnapshotValue(project.AllocateStableId(), point.Tick, point.Value, point.Interpolation)),
+                static point => point.Tick, static _ => 0), static point => point.Id);
+            curve.Points.AdoptSource(project, points, scope.Token);
             result.Curves.Add(curve);
         }
-        RemoveLaterExactTimelineCollisions(result);
         return result;
     }
 

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Midora Project presentation v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "allTracksMode", "trackOnionPresets", "subVoiceOnionPresets"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "allTracksMode": { "enum": ["raw", "compiled"] },
+    "trackOnionPresets": { "type": "array", "items": { "$ref": "#/$defs/trackPreset" } },
+    "subVoiceOnionPresets": { "type": "array", "items": { "$ref": "#/$defs/subVoicePreset" } }
+  },
+  "$defs": {
+    "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "sourceMode": { "enum": ["custom", "previous", "next"] },
+    "trackPreset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetTrackId", "enabled", "opacity", "sourceTrackIds", "sourceMode"],
+      "properties": {
+        "targetTrackId": { "$ref": "common-v1.schema.json#/$defs/stableId" },
+        "enabled": { "type": "boolean" },
+        "opacity": { "$ref": "#/$defs/opacity" },
+        "sourceTrackIds": { "type": "array", "items": { "$ref": "common-v1.schema.json#/$defs/stableId" } },
+        "sourceMode": { "$ref": "#/$defs/sourceMode" }
+      }
+    },
+    "subVoicePreset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventInstrumentId", "targetSubVoiceId", "enabled", "opacity", "sourceSubVoiceIds", "sourceMode"],
+      "properties": {
+        "eventInstrumentId": { "$ref": "common-v1.schema.json#/$defs/stableId" },
+        "targetSubVoiceId": { "$ref": "common-v1.schema.json#/$defs/stableId" },
+        "enabled": { "type": "boolean" },
+        "opacity": { "$ref": "#/$defs/opacity" },
+        "sourceSubVoiceIds": { "type": "array", "items": { "$ref": "common-v1.schema.json#/$defs/stableId" } },
+        "sourceMode": { "$ref": "#/$defs/sourceMode" }
+      }
+    }
+  }
+}

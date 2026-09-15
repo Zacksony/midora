@@ -164,7 +164,7 @@ single Project Undo per atomic gesture
 
 同一 Pure MIDI Track 内的 Midi Segment 不得重叠；不同 Pure MIDI Track 的 Segment 可以重叠，包括同一 Root 内的 Track。相邻 Segment 合法，不自动连接。
 
-Midi Segment 可在 Pure MIDI Track 之间移动或复制；目标 Track 不得产生 Segment 重叠。跨 Root 移动会将其直接 MIDI 内容归属到目标 Root 的 Unit，但不得改写事件值或把内容转换成 Logical 数据。Logical Segment 与 Midi Segment 之间不提供隐式移动、粘贴或转换。
+Midi Segment 可在 Pure MIDI Track 之间移动或复制；目标 Track 不得产生 Segment 重叠。同类型跨 Root 移动保留全部直接 MIDI 内容。Logical Segment 与 Midi Segment 之间的移动、复制和粘贴只通过第 20.6.14 节的正式转换与损失确认，不允许隐式丢弃数据或把转换当作编译展开。
 
 ### 23.5.2 Segment 内容
 
@@ -527,14 +527,16 @@ Track Name 用作 Pure MIDI Track 名称。MIDI Port 与 EOT 用于 Root/Segment
 同 tick 存在多个 Time Signature 或多个 Key Signature
   -> 各类型分别按 source MTrk index，再按该 MTrk 内原事件顺序排序，只保留最后一个
 
-Track Name 缺失、trim 后为空或所有 Track Name 都无法按严格 UTF-8 解码
+Track Name 缺失、trim 后为空或所有 Track Name 都无法按严格 UTF-8 / Windows-31J 解码
   -> 使用 `MIDI Track N`，N 为一基 source MTrk index
   -> 同一 source MTrk 拆分为多个派生 Track 时追加确定的 Port/Channel 后缀
 ```
 
 Tempo、Time Signature 与 Key Signature 的“后来者”只由源 MTrk 与原事件顺序决定，不得依赖集合枚举、稳定 ID 分配或导入时并发。每种类型内，值完全相同的同 tick 重复项作为冗余项移除并记录一条汇总 `Info`；存在不同值时因正式 Conductor 状态被改变而记录一条汇总 `Warning`。该归一化只发生在外部 SMF 导入边界，不放松 Midora Project 内部“同 tick 单一正式状态”的 semantic validation。
 
-单个 Track Name Meta Event 不是严格 UTF-8 时，只丢弃该名称事件；不使用 Unicode 替换字符，不将非法原始字节保存为 opaque event，也不因此拒绝整个 MIDI 文件。同一 MTrk 内仍有可用 Track Name 时按原顺序使用最后一个可用值；否则使用上述回退名称。该放宽仅适用于导入的 Track Name；Marker 等其他已建模文本 Meta 的非法编码仍是导入失败，SMF 导出仍只产生严格 UTF-8。
+导入器解释 Track Name 与 Marker 时必须先尝试严格 UTF-8；失败后再按固定 Windows-31J（Microsoft code page 932）严格解码，不读取系统区域设置，也不使用 Unicode 替换字符。Windows-31J 解码成功时把所得 Unicode 文本进入正式 Track Name / Marker 模型，并汇总记录 `Info`；后续 SMF 导出把该文本统一编码为严格 UTF-8，不承诺保留原字节编码。
+
+若两种编码都失败，单个 Track Name Meta Event 只丢弃该名称事件，并在需要时使用上述确定性回退名称；单个 Marker Meta Event 也只丢弃该 Marker，并因丢失已建模内容汇总记录 `Warning`。上述情况都不得拒绝其余结构合法的 MIDI。其他未被 Midora 建模的文本 Meta 不在导入时解码，继续按 single-owner opaque 原始 payload 保存；SMF 导出仍只产生严格 UTF-8 的正式文本 Meta。
 
 上述补全、去重、丢弃与回退命名不进入 Project、Undo/Redo 或 Compiler Diagnostics。它们只进入当次导入任务的结构化 `Info` / `Warning` 报告；成功提交 Project 后，UI 必须显示一份汇总且可复制的报告。
 
@@ -582,6 +584,8 @@ Pure MIDI MTrk 顺序固定为 global Arrangement order 过滤 Pure MIDI Track �
 
 Conductor、被选择 Pure MIDI Track 与实际 Logical Unit MTrk 的合计数量必须可由 SMF MThd 的 unsigned 16-bit `ntrks` 表示；超出时导出在创建 staging 文件前整体失败，不得合并用户 Track 规避上限。
 
+每个 MTrk 数据区固定受 `0xFFFFFFFF = 4,294,967,295` 字节上限约束，不包含 8 字节 chunk 头。不得为了容纳更多字节拆分 Pure MIDI Track、Logical Unit Track 或 Conductor；超限仅令本次导出原子失败，Compiler 不统计该编码大小或拒绝编译。这不是整个 SMF 文件大小上限，完整边界见 §14.12.8～9。
+
 ### 23.12.3 Track Name、Port 与 Root metadata
 
 Pure MIDI MTrk 的 Track Name 必须是冻结 canonical descriptor 中的用户 Track 名称，不得改成 `Port P / Channel C`。每个 MTrk 写对应 Root 的 MIDI Port Meta，Channel status 使用该 Root 的 Channel。
@@ -619,6 +623,8 @@ Percussion Root 的 Channel 10 MTrk 不得写 Normal Part 初始化。初始化�
 ### 23.12.6 Direct events 与 opaque events
 
 Pure MIDI MTrk 原样编码 canonical 中的完整 Channel Voice Event，包括 CC91、CC93、Channel Pressure、Poly Pressure 和 Channel Mode。合法 opaque SysEx/Meta 按冻结 payload、tick 和 Track 内顺序重新导出；导出器不得把 opaque payload 解释为 Midora 业务对象。
+
+仅为编码超长 delta，允许按 §14.12.2 插入固定空 Text Meta；不得改变上述原事件或将占位回写源 Project/canonical。重新导入时按合法 opaque Meta 保留，不能仅凭 `FF 01 00` 就删除用户原有空文本，不保证字节级 round-trip。单条 payload 长度超限仍拒绝，不能使用 delta 填充规则拆开 payload。
 
 ### 23.12.7 跨 MTrk 同 tick 兼容 Warning
 
@@ -691,6 +697,19 @@ Arrangement 固定显示 Conductor 第一行，随后按一个 global mixed orde
 Track Header 的 hover/pressed、重排、Rename、Copy/Cut/Paste/Duplicate、Delete、Mute/Solo 与 Segment 操作复用既有样式和交互。Root 不显示独立 Header 或 Mute/Solo；Event Instrument binding 命令不显示在 Pure MIDI Track 菜单。
 
 Pure MIDI Segment 除 Direct Note preview 外，还在 Note 上层绘制统一颜色、50% 透明度的 non-Note event 线；两层独立缓存和局部失效。Conductor 第一行使用独立缓存的按类型着色圆点概览。完整视觉、LOD 与性能边界见第 24.11、24.14 节。
+
+## 23.20 Pure MIDI Track 颜色分配
+
+新建与 SMF 导入的 Pure MIDI Track 必须获得固定八色低饱和调色板中的 concrete color。调色板及顺序固定为：
+
+```text
+#6d7fa8  #9b6a6a  #6f936f  #9a815f
+#806fa3  #60918c  #9a6f8a  #849064
+```
+
+选择颜色时，以 Track 最终插入的 global Arrangement 位置之前出现的 Pure MIDI Track 数量对 8 取模；不得按 Root、随机数、路径、名称或 hash 分配。中间插入、删除、重排或 Root 变化不得重染既有 Track。
+
+Duplicate 与 Copy/Paste 继承源 Track 的 concrete color。旧数据缺少颜色时只使用固定 fallback，不按当前 Arrangement order 动态推导。Properties 可原子修改颜色；颜色进入 Project Undo/Redo 和 Modified，但不影响 compiler、canonical、MIDI Export、Audio Render 或音频缓存。
 
 ### 23.14.2 共享 Segment/Piano Roll
 

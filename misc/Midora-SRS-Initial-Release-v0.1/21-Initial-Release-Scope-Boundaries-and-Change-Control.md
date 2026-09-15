@@ -58,7 +58,7 @@ Canonical Compiled Result 的最终内存布局
 BASSMIDI / BASSWASAPI 的具体封装与安全调用顺序和音频线程模型，但 WASAPI 模式、格式与 period 请求必须符合第 13.14.7 节，正式实时工作 block 与 ring 容量必须符合第 13.19.2、13.19.9 节
 内部音频子进程的类型拆分、轮询细节和共享内存字段打包，但不得改变第 13.30 节固定的完整子进程所有权、Native AOT、二进制 ABI 与零分配约束
 Limiter 的循环展开、SIMD 和状态存储实现，但算法与参数必须符合第 13.17.6 节版本 2 语义
-Roslyn 编译、缓存和 AssemblyLoadContext 方案
+Roslyn Expression-mode 解析与 `System.Linq.Expressions` 绑定/缓存的具体类型拆分；但 Mapping Function ABI v3 的白名单、资源上限、Context 依赖和“不 Emit/加载 Project 源码程序集”不属于实现自由度
 JSON Schema、protobuf .proto 的其他最终字段名、字段号与代码生成方式；16.5.3 已固定的 `nextStableId`、16.13.2 已固定的稳定 ID 表示和既有外层 ID 字段号除外
 具体 WPF 控件、Visual Tree、MVVM 类型和 Timeline 虚拟化实现
 错误码编号和自动化测试框架
@@ -133,3 +133,7 @@ Midora 产品版本使用 `MAJOR.MINOR.PATCH[-prerelease]`。首个产品版本�
 正式版本使用不可移动的 annotated Git tag `v<version>`。发布 commit 必须工作区干净、通过版本一致性门、Format 兼容门、自动/人工发布门，并更新 Changelog、兼容说明、许可证与第三方 notices。RC 后不得加入未完成的大型能力；正式 tag 不得重打、移动或复用。
 
 新 1.x 软件必须持续读取本产品线此前正式发布的 Project Format；旧软件不承诺读取未来格式。Project Format 是否提升只由持久化表示和语义变化决定，不由产品 MAJOR/MINOR/PATCH 机械决定。用户填写的 Project Version 只属于作品 metadata，不参与任何兼容判断。
+
+当前 writer 为 Project Format 4。Format 1 是首个冻结兼容基线，Format 2 冻结 Event Instrument Pre-Roll 表示，Format 3 新增独立 Project presentation entry，Format 4 新增严格的 Instrument Change 编辑关联 source component（§16.35）；四个 reader/schema/golden 必须并存。Format 1/2/3 通过 detached migration 打开，普通 Save 只在用户确认、精确旧字节永久副本已安全存在后才可原路径升级；Save Copy 只写 Format 4 且不改变迁移状态。产品仍处于 `1.0.0-dev` 不构成破坏既有冻结格式的许可。
+
+Midora 的程序级持久化采用 ProgramRoot portable layout；这属于部署/数据归属契约，不与产品 SemVer 或 Project Format 共用版本号。不同 ProgramRoot 必须互相隔离，且不得用隐式用户目录 fallback 掩盖不可写安装位置。

@@ -111,6 +111,111 @@ public sealed class ProjectMetadataAndDisplayEditCommandsTests
     }
 
     [Fact]
+    public void PureMidiTrackColorCanBeSetClearedAndUndoneWithoutTrackRecompile()
+    {
+        MidoraProject project = new(480);
+        MidiChannelRoot root = new(project)
+        {
+            Name = "Root",
+            RoutingMode = MidiChannelRootRoutingMode.Auto,
+            ChannelMode = MidiChannelMode.Melodic
+        };
+        PureMidiTrack track = new(project)
+        {
+            Name = "MIDI Track",
+            MidiChannelRootId = root.Id
+        };
+        project.MidiChannelRoots.Add(root);
+        project.PureMidiTracks.Add(track);
+        project.ArrangementTracks.Add(new(ArrangementTrackKind.PureMidiTrack, track.Id));
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = new(compilation, ProjectDocumentOrigin.Persisted);
+        CanonicalCompiledResult before = compilation.LastAttempt;
+        MidoraColor color = new(4, 5, 6);
+
+        document.Execute(ProjectDomainEditCommands.UpdatePureMidiTrackColor(track.Id, color));
+
+        Assert.Equal(color, track.Color);
+        Assert.Same(before, compilation.LastAttempt);
+        Assert.Equal(0, compilation.LastCompilationTelemetry.RecompiledTrackCount);
+        ProjectEditExecution noOp = document.Execute(
+            ProjectDomainEditCommands.UpdatePureMidiTrackColor(track.Id, color));
+        Assert.False(noOp.Changed);
+
+        document.Execute(ProjectDomainEditCommands.UpdatePureMidiTrackColor(track.Id, color: null));
+
+        Assert.Null(track.Color);
+        Assert.Same(before, compilation.LastAttempt);
+        Assert.Equal(0, compilation.LastCompilationTelemetry.RecompiledTrackCount);
+        document.Undo();
+        Assert.Equal(color, track.Color);
+        document.Undo();
+        Assert.Null(track.Color);
+        document.Redo();
+        Assert.Equal(color, track.Color);
+        AssertCurrentCompilationMatchesFull(compilation);
+    }
+
+    [Fact]
+    public void LogicalTrackPropertiesCommitNameAndOverrideAsOneUndo()
+    {
+        MidoraProject project = CreateProject(out LogicalTrack track);
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = new(compilation, ProjectDocumentOrigin.Persisted);
+        MidoraColor color = new(7, 8, 9);
+
+        document.Execute(ProjectDomainEditCommands.UpdateLogicalTrackProperties(
+            track.Id,
+            "Renamed",
+            color));
+
+        Assert.Equal("Renamed", track.Name);
+        Assert.Equal(color, track.ColorOverride);
+        Assert.Single(document.History);
+        document.Undo();
+        Assert.Equal("Track", track.Name);
+        Assert.Null(track.ColorOverride);
+        Assert.False(document.CanUndo);
+    }
+
+    [Fact]
+    public void PureMidiTrackPropertiesColorOnlyCommitDoesNotRecompile()
+    {
+        MidoraProject project = new(480);
+        MidiChannelRoot root = new(project)
+        {
+            Name = "Root",
+            RoutingMode = MidiChannelRootRoutingMode.Auto,
+            ChannelMode = MidiChannelMode.Melodic
+        };
+        PureMidiTrack track = new(project)
+        {
+            Name = "MIDI Track",
+            MidiChannelRootId = root.Id
+        };
+        project.MidiChannelRoots.Add(root);
+        project.PureMidiTracks.Add(track);
+        project.ArrangementTracks.Add(new(ArrangementTrackKind.PureMidiTrack, track.Id));
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = new(compilation, ProjectDocumentOrigin.Persisted);
+        CanonicalCompiledResult before = compilation.LastAttempt;
+        MidoraColor color = new(10, 11, 12);
+
+        document.Execute(ProjectDomainEditCommands.UpdatePureMidiTrackProperties(
+            track.Id,
+            track.Name,
+            color));
+
+        Assert.Equal(color, track.Color);
+        Assert.Same(before, compilation.LastAttempt);
+        Assert.Equal(0, compilation.LastCompilationTelemetry.RecompiledTrackCount);
+        Assert.Single(document.History);
+        document.Undo();
+        Assert.Null(track.Color);
+        Assert.Same(before, compilation.LastAttempt);
+    }
+
+    [Fact]
     public void IdenticalMetadataAndTrackColorAreNoOperations()
     {
         MidoraProject project = CreateProject(out LogicalTrack track);

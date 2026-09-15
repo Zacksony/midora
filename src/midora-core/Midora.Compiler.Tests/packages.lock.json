@@ -121,19 +121,24 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "midora.common": {
+        "type": "Project"
+      },
       "midora.compiler": {
         "type": "Project",
         "dependencies": {
           "Microsoft.CodeAnalysis.CSharp": "[5.3.0, )",
-          "Midora.Domain": "[1.0.0, )",
-          "Midora.Mapping.Contract.V2": "[1.0.0, )",
-          "Midora.Midi": "[1.0.0, )"
+          "Midora.Common": "[1.0.0-dev, )",
+          "Midora.Domain": "[1.0.0-dev, )",
+          "Midora.Mapping.Contract.V2": "[1.0.0-dev, )",
+          "Midora.Midi": "[1.0.0-dev, )"
         }
       },
       "midora.domain": {
         "type": "Project",
         "dependencies": {
-          "Midora.Mapping.Contract.V2": "[1.0.0, )"
+          "Midora.Common": "[1.0.0-dev, )",
+          "Midora.Mapping.Contract.V2": "[1.0.0-dev, )"
         }
       },
       "midora.mapping.contract.v2": {

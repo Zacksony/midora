@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Midora manifest.json v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "magic",
+    "fileFormatVersion",
+    "minimumReadableVersion",
+    "manifestSchemaVersion",
+    "createdWithSoftwareVersion",
+    "lastSavedWithSoftwareVersion",
+    "files"
+  ],
+  "properties": {
+    "magic": {
+      "const": "midora-project"
+    },
+    "fileFormatVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "minimumReadableVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "manifestSchemaVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "createdWithSoftwareVersion": {
+      "$ref": "common-v1.schema.json#/$defs/requiredShortText"
+    },
+    "lastSavedWithSoftwareVersion": {
+      "$ref": "common-v1.schema.json#/$defs/requiredShortText"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fileEntry"
+      }
+    }
+  },
+  "$defs": {
+    "fileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "schemaVersion", "sha256"],
+      "properties": {
+        "path": {
+          "$ref": "common-v1.schema.json#/$defs/relativePath"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+        },
+        "schemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "common-v1.schema.json#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "event-instrument-pb"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "schemaVersion": {
+                "const": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "core-json",
+                  "settings-json",
+                  "conductor-json",
+                  "event-instrument-usage-pb",
+                  "logical-track-pb",
+                  "midi-channel-root-pb",
+                  "pure-midi-track-pb",
+                  "pure-midi-content-pack"
+                ]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "schemaVersion": {
+                "$ref": "common-v1.schema.json#/$defs/schemaVersion"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

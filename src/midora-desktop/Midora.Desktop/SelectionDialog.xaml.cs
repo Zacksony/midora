@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
+using Midora.Desktop.Presentation.Interaction;
 
 namespace Midora.Desktop;
 
@@ -12,11 +13,17 @@ public partial class SelectionDialog : Window
         string title,
         string prompt,
         IEnumerable<SelectionDialogItem> options,
-        object? selectedValue = null)
+        object? selectedValue = null,
+        bool useSingleItemWheel = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(options);
         InitializeComponent();
+        if (useSingleItemWheel)
+        {
+            System.Windows.Controls.ScrollViewer.SetCanContentScroll(OptionsList, true);
+            ScrollViewerWheelRouter.SetUseSingleItemWheel(OptionsList, true);
+        }
         Title = title;
         Prompt = prompt ?? string.Empty;
         foreach (SelectionDialogItem option in options) Options.Add(option);

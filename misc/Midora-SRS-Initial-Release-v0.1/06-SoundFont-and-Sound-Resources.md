@@ -115,7 +115,7 @@ MIDI 导入/导出
 Program/Bank/CC/RPN/NRPN 语义
 ```
 
-Midora 不假设 SoundFont 符合 GM，不解析 preset 名称，也不根据当前列表验证 Program/Bank 是否存在。Program Change 与 Bank Select 始终是 Project MIDI 语义；列表变化不得改写它们。
+Midora 不假设 SoundFont 符合 GM，也不在 SoundFont 配置、Project 打开、编译、播放或渲染路径中隐式解析 preset 名称，更不根据当前列表验证 Program/Bank 是否存在。只有第 6.10 节规定的用户显式 `Scan Presets...` 可以读取 SF2 `phdr` 元数据并生成程序级名称快照。Program Change 与 Bank Select 始终是 Project MIDI 语义；列表或 Catalog 变化不得改写它们。
 
 MIDI Export Readme 不记录程序级 SoundFont 路径、名称、列表或可用状态。MIDI 产物不依赖当前机器的 SoundFont 设置。
 
@@ -142,3 +142,50 @@ SFZ include/sample 缺失、不可读或格式不受支持
 初版只支持本机 `.sf2`、`.sfz` 文件和一个全局有序列表。不支持 DLS、VST、网络路径、Project 内嵌资源、Project 相对引用、每 Project 列表、每 Port/Track/Instrument 独立列表或运行中热切换。SFZ 仅采用 BASSMIDI 原生支持范围；Midora 不承诺实现独立 SFZ parser、依赖快照、依赖可移植性或附加 sample codec 自动加载。
 
 SoundFont 授权仍由用户和分发者负责。Midora 仓库和 `.midora` 项目不包含用户 SF2/SFZ 或 sample 字节；这不构成对第三方 SoundFont 使用或分发权利的判断。
+
+## 6.10 Instrument Catalogs
+
+### 6.10.1 作用域与模型
+
+Instrument Catalog 是程序级 Bank/Program 名称辅助数据，不是 Project 或音频资源验证。程序允许多个有序、可启用 Profile，来源分为：
+
+```text
+Built-in General MIDI
+User Override
+User Profile
+Imported SF2 snapshot
+```
+
+每个条目以合法 MIDI `Bank MSB 0..127 + Bank LSB 0..127 + Program 0..127` 三元组为键。名称只影响 UI 展示；Project、canonical、MIDI Export 与 Audio Render 始终保留原数值。另一份 portable Midora 没有相同 Catalog 时，Project 仍必须完整打开并回退为数值名称。
+
+Catalog 只写 `<ProgramRoot>\Data\Catalogs`，不进入 `.midora`、Project Undo/Redo、Project Modified、compiler fingerprint、音频缓存或 Worker 配置。
+
+### 6.10.2 名称解析顺序
+
+同一三元组的确定解析优先级固定为：
+
+1. User Override；
+2. 当前 Enabled SoundFont 列表正式顺序所绑定的 Imported SF2 Profile；
+3. Enabled User Profile 的明确顺序；
+4. 内置 General MIDI Profile；
+5. `Bank MSB n / LSB n / Program n` 数值 fallback。
+
+解析结果必须携带可见来源，例如 `Acoustic Grand Piano (General MIDI)`；UI 不展示任何内部 Profile ID 或 SoundFont Entry ID。Disabled SoundFont 对应 Profile 可浏览但不参与播放上下文名称解析；删除 SoundFont 后的 orphan Profile同理保留可浏览性。
+
+### 6.10.3 SoundFont Entry 身份
+
+每个程序级 SoundFont 项必须保存稳定、非空 GUID `SoundFontEntryId`，仅用于 Imported SF2 Profile 关联。重排、Enabled、路径或 target 修改必须保留该 ID；新加项分配新 ID。ID 不参与音频配置等价比较、Worker rebuild、SoundFont descriptor/cache identity，也不进入 Project 或导出。
+
+读取缺少该字段的旧 Application Preferences 时必须确定性补齐并允许下一次 Apply 持久化；不得因此丢弃 SoundFont 配置。
+
+### 6.10.4 显式 SF2 metadata scan
+
+`Scan Presets...` 只允许由用户显式启动，并只读取 RIFF `sfbk` 中 `pdta/phdr` 的 38-byte records；sample、modulator 与其他 chunk 必须 seek 跳过，不得完整载入内存或调用 BASS。扫描必须校验 RIFF/chunk 边界、偶数字节 padding、唯一 `phdr`、record 整除与终止 `EOP`，并支持取消。
+
+扫描快照保留 raw `ushort sf2Bank` 与 preset。raw bank `0..127` 默认预览为 `MSB=bank, LSB=0`；raw bank `128..65535` 必须在提交前显式映射，禁止截断、取模或自动解释。扫描失败只取消本次 Catalog 操作，不影响 Worker 继续使用同一文件；文件变化不自动 Rescan。
+
+### 6.10.5 Store 与导入导出
+
+Catalog store 和独立交换文件必须采用版本化、source-generated JSON，确定排序并明确限制文件字节、Profile、Bank 与 Program 数量。未知字段、重复 JSON property、重复 Profile ID 与 Profile 内重复 triple 必须拒绝。活动 store 损坏时保留原文件、回退到内置 GM 并显示 Application notice，禁止用默认值覆盖损坏字节。
+
+编辑只作用于 draft；OK 通过临时文件、flush、校验和原子替换一次发布。导入只提供显式 `Replace Profile` 或 `Merge With Preview`；Merge 必须先显示新增、保持与覆盖摘要，确认前不得写活动状态。

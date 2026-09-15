@@ -8,6 +8,7 @@ Microsoft's Fluent System Icons repository at revision
 
 Assets used:
 
+- `ic_fluent_layer_diagonal_20_regular.svg`
 - `ic_fluent_add_20_regular.svg`
 - `ic_fluent_zoom_in_20_regular.svg`
 - `ic_fluent_zoom_out_20_regular.svg`

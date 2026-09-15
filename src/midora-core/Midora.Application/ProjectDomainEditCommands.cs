@@ -424,6 +424,8 @@ public static partial class ProjectDomainEditCommands
             {
                 throw new InvalidOperationException("Only Segments on the same Logical Track can be joined.");
             }
+            if (LogicalSegmentRecordCount(first.Segment) + LogicalSegmentRecordCount(second.Segment) >= BoundedNoteThreshold)
+                return PrepareBoundedLogicalSegmentJoin(project, first, second);
             long nextStableId = project.NextStableId;
             Segment joined = SegmentEditing.Join(project, first.Segment, second.Segment);
             if (project.NextStableId != nextStableId)
@@ -483,45 +485,56 @@ public static partial class ProjectDomainEditCommands
         Action<MidoraProject> undo) =>
         new DelegatePreparedEdit(hasChanges, changes, apply, undo);
 
-    private static IPreparedProjectEdit ResolveExactLogicalNoteCollisions(
-        IPreparedProjectEdit source,
-        Segment segment) =>
-        ExactTimelineCollisionPolicy.Scope(source, logicalNoteSegments: [segment]);
-
-    private static IPreparedProjectEdit ResolveExactLogicalNoteCollisions(
-        IPreparedProjectEdit source,
-        IEnumerable<Segment> segments) =>
-        ExactTimelineCollisionPolicy.Scope(source, logicalNoteSegments: segments);
-
     private static IPreparedProjectEdit ResolveTargetedExactLogicalNoteCollisions(
         IPreparedProjectEdit source,
         IEnumerable<LogicalNoteCollisionTarget> targets) =>
         ExactTimelineCollisionPolicy.Scope(source, logicalNoteTargets: targets);
 
-    private static IPreparedProjectEdit ResolveExactLogicalParameterPointCollisions(
+    private static IPreparedProjectEdit ResolveTargetedExactLogicalParameterPointCollisions(
         IPreparedProjectEdit source,
-        LogicalParameterLane lane) =>
-        ExactTimelineCollisionPolicy.Scope(source, logicalParameterLanes: [lane]);
-
-    private static IPreparedProjectEdit ResolveExactLogicalParameterPointCollisions(
-        IPreparedProjectEdit source,
-        IEnumerable<LogicalParameterLane> lanes) =>
-        ExactTimelineCollisionPolicy.Scope(source, logicalParameterLanes: lanes);
-
-    private static IPreparedProjectEdit ResolveExactSubVoiceEventCollisions(
-        IPreparedProjectEdit source,
-        SubVoice subVoice) =>
-        ExactTimelineCollisionPolicy.Scope(source, subVoices: [subVoice]);
+        LogicalParameterLane lane,
+        IEnumerable<long> ticks) =>
+        ExactTimelineCollisionPolicy.Scope(
+            source,
+            logicalParameterPointTargets: ticks.Select(tick =>
+                new LogicalParameterPointCollisionTarget(lane, tick)));
 
     private static IPreparedProjectEdit ResolveTargetedExactTemplateNoteCollisions(
         IPreparedProjectEdit source,
         IEnumerable<TemplateNoteCollisionTarget> targets) =>
         ExactTimelineCollisionPolicy.Scope(source, templateNoteTargets: targets);
 
-    private static IPreparedProjectEdit ResolveExactValueCurvePointCollisions(
+    private static IPreparedProjectEdit ResolveTargetedExactTemplateEventPointCollisions(
         IPreparedProjectEdit source,
-        ValueCurve valueCurve) =>
-        ExactTimelineCollisionPolicy.Scope(source, valueCurves: [valueCurve]);
+        IEnumerable<TemplateEventPointCollisionTarget> targets) =>
+        ExactTimelineCollisionPolicy.Scope(source, templateEventPointTargets: targets);
+
+    private static IEnumerable<TemplateEventPointCollisionTarget> CreateTemplateEventPointCollisionTargets(
+        SubVoice voice,
+        TemplateEventValue value) => TemplateEventExactCollision.GetNonNoteDetails(
+            value.Kind,
+            value.Number,
+            value.HasBankMsb,
+            value.HasBankLsb)
+        .Select(detail => new TemplateEventPointCollisionTarget(voice, value.Tick, detail));
+
+    private static IEnumerable<TemplateEventPointCollisionTarget> CreateTemplateEventPointCollisionTargets(
+        SubVoice voice,
+        TemplateEvent value) => TemplateEventExactCollision.GetNonNoteDetails(
+            value.Kind,
+            value.Number,
+            value.HasBankMsb,
+            value.HasBankLsb)
+        .Select(detail => new TemplateEventPointCollisionTarget(voice, value.Tick, detail));
+
+    private static IPreparedProjectEdit ResolveTargetedExactValueCurvePointCollisions(
+        IPreparedProjectEdit source,
+        ValueCurve valueCurve,
+        IEnumerable<long> ticks) =>
+        ExactTimelineCollisionPolicy.Scope(
+            source,
+            valueCurvePointTargets: ticks.Select(tick =>
+                new ValueCurvePointCollisionTarget(valueCurve, tick)));
 
     private static IPreparedProjectEdit ResolveTargetedExactDirectMidiCollisions(
         IPreparedProjectEdit source,
@@ -614,24 +627,9 @@ public static partial class ProjectDomainEditCommands
 
     private static SegmentLocation FindSegment(MidoraProject project, MidoraId segmentId)
     {
-        SegmentLocation? result = null;
-        foreach (LogicalTrack track in project.Tracks)
-        {
-            for (int index = 0; index < track.Segments.Count; index++)
-            {
-                Segment segment = track.Segments[index];
-                if (segment.Id != segmentId)
-                {
-                    continue;
-                }
-                if (result.HasValue)
-                {
-                    throw new InvalidOperationException("The Segment stable ID is duplicated.");
-                }
-                result = new(track, segment, index);
-            }
-        }
-        return result ?? throw new ArgumentOutOfRangeException(nameof(segmentId));
+        LogicalSegmentIndexEntry result = ProjectSegmentIndex.FindLogical(project, segmentId)
+            ?? throw new ArgumentOutOfRangeException(nameof(segmentId));
+        return new(result.Track, result.Segment, result.Index);
     }
 
     private static void ValidateSegmentRange(
@@ -812,6 +810,21 @@ public static partial class ProjectDomainEditCommands
     {
         ProjectChangeSet result = new();
         result.EventInstrumentIds.Add(eventInstrumentId);
+        return result;
+    }
+
+    private static ProjectChangeSet TrackPresentationChange(params MidoraId[] trackIds)
+    {
+        ProjectChangeSet result = new();
+        result.PresentationTrackIds.UnionWith(trackIds);
+        return result;
+    }
+
+    private static ProjectChangeSet EventInstrumentPresentationChange(
+        MidoraId eventInstrumentId)
+    {
+        ProjectChangeSet result = new();
+        result.PresentationEventInstrumentIds.Add(eventInstrumentId);
         return result;
     }
 

@@ -120,6 +120,7 @@ public sealed class MidiSegment
     public DirectMidiNoteCollection Notes => _notes;
     public DirectMidiChannelEventCollection ChannelEvents => _channelEvents;
     public OpaqueMidiEventCollection OpaqueEvents => _opaqueEvents;
+    public InstrumentChangeSet InstrumentChanges { get; set; } = InstrumentChangeSet.Empty;
 
     public TickRange ProjectRange => new(ProjectStartTick, checked(ProjectStartTick + LengthTicks));
     public long ContentEndTick => checked(ContentOffsetTick + LengthTicks);
@@ -143,7 +144,22 @@ public sealed class MidiSegment
         _opaqueEvents.AttachSource(source);
     }
 
-    public string? PagedContentFingerprint => _pagedContentSource?.ContentFingerprint;
+    public string? PagedContentFingerprint
+    {
+        get
+        {
+            IPureMidiSegmentContentSource? notes = _notes.PagedSource;
+            IPureMidiSegmentContentSource? events = _channelEvents.PagedSource;
+            IPureMidiSegmentContentSource? opaque = _opaqueEvents.PagedSource;
+            if (ReferenceEquals(notes, events) && ReferenceEquals(notes, opaque)) return notes?.ContentFingerprint;
+            static string Part(IPureMidiSegmentContentSource? source)
+            {
+                string value = source?.ContentFingerprint ?? string.Empty;
+                return $"{value.Length}:{value}";
+            }
+            return $"collection-roots-v1:{Part(notes)}{Part(events)}{Part(opaque)}";
+        }
+    }
 
     internal PureMidiContentPack? TryGetPristineContentPack()
     {
@@ -166,6 +182,7 @@ public sealed class MidiSegment
         _notes.CloneTo(target._notes, cancellationToken);
         _channelEvents.CloneTo(target._channelEvents, cancellationToken);
         _opaqueEvents.CloneTo(target._opaqueEvents, cancellationToken);
+        target.InstrumentChanges = InstrumentChanges;
     }
 }
 
@@ -203,6 +220,25 @@ public sealed class DirectMidiNote
     public long NoteOffOrder { get => _noteOffOrder; set { _noteOffOrder = value; Changed(); } }
 
     internal void SetChangeSink(IDirectMidiNoteChangeSink? value) => _changeSink = value;
+
+    internal void SetValues(
+        long startTick,
+        long lengthTicks,
+        int key,
+        int noteOnVelocity,
+        int noteOffVelocity,
+        long noteOnOrder,
+        long noteOffOrder)
+    {
+        _startTick = startTick;
+        _lengthTicks = lengthTicks;
+        _key = key;
+        _noteOnVelocity = noteOnVelocity;
+        _noteOffVelocity = noteOffVelocity;
+        _noteOnOrder = noteOnOrder;
+        _noteOffOrder = noteOffOrder;
+        Changed();
+    }
 
     private void Changed() => _changeSink?.OnChanged(this);
 }
@@ -248,6 +284,30 @@ public sealed class DirectMidiChannelEvent
     public long Order { get => _order; set { _order = value; Changed(); } }
 
     internal void SetChangeSink(IDirectMidiChannelEventChangeSink? value) => _changeSink = value;
+
+    internal void SetValues(
+        long tick,
+        DirectMidiChannelEventKind kind,
+        int data1,
+        int data2,
+        long order)
+    {
+        if (_tick == tick
+            && _kind == kind
+            && _data1 == data1
+            && _data2 == data2
+            && _order == order)
+        {
+            return;
+        }
+
+        _tick = tick;
+        _kind = kind;
+        _data1 = data1;
+        _data2 = data2;
+        _order = order;
+        Changed();
+    }
 
     private void Changed() => _changeSink?.OnChanged(this);
 }

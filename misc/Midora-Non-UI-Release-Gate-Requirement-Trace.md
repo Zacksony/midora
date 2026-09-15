@@ -8,7 +8,7 @@
 
 ## 1. 输入
 
-- 仓库固定 `.NET SDK 10.0.302`、`global.json`、32 个 `packages.lock.json` 和六个 `.slnx`。
+- 仓库固定 `.NET SDK 10.0.400`、`global.json`、38 个 `packages.lock.json` 和六个 `.slnx`。
 - 操作员显式提供的 win-x64 BASS 原生目录；必须逐文件匹配 `bass-native-baseline.win-x64.json`。
 - 操作员显式提供的现存 SF2，仅作为真实 BASS/BASSMIDI 集成测试资源，不进入仓库或正式产品默认值。
 - `misc/Midora-Non-UI-Test-Baseline.json` 固定的十个非 UI 测试项目、逐项目计数与总计数。

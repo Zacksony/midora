@@ -39,7 +39,7 @@ public sealed class AudioRenderCompilationItem
     public AudioRenderTrackSnapshot? Track { get; }
     public CanonicalCompiledResult CompiledResult { get; }
     public bool Succeeded => CompiledResult.IsConsumable && !CompiledResult.IsPartial;
-    public IReadOnlyList<CompilerDiagnostic> Diagnostics => CompiledResult.Diagnostics;
+    public ICompilerDiagnosticSequence Diagnostics => CompiledResult.Diagnostics;
 }
 
 public sealed class AudioRenderCompilationResult

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using Microsoft.Win32.SafeHandles;
 using Midora.Domain;
+using Midora.Common;
 
 namespace Midora.Compiler;
 
@@ -15,7 +16,7 @@ internal sealed class BoundedCanonicalOpaqueEventSorter : IDisposable
     private readonly int _maximumMergeFanIn;
     private readonly List<CanonicalOpaqueMidiEvent> _buffer;
     private readonly List<RunDescriptor> _runs = [];
-    private readonly string _directory;
+    private MidoraOwnedTemporaryDirectoryLease? _runDirectoryLease;
     private FileStream? _runFile;
     private string? _runPath;
     private int _bufferPayloadByteCount;
@@ -42,11 +43,6 @@ internal sealed class BoundedCanonicalOpaqueEventSorter : IDisposable
         _maximumRunPayloadByteCount = maximumRunPayloadByteCount;
         _maximumMergeFanIn = maximumMergeFanIn;
         _buffer = new(maximumRunRecordCount);
-        _directory = Path.Combine(
-            Path.GetTempPath(),
-            "Midora",
-            "CanonicalRuns",
-            Guid.NewGuid().ToString("N"));
     }
 
     public void Add(CanonicalOpaqueMidiEvent value)
@@ -101,16 +97,8 @@ internal sealed class BoundedCanonicalOpaqueEventSorter : IDisposable
         _disposed = true;
         _runFile?.Dispose();
         _runFile = null;
-        try
-        {
-            if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        _runDirectoryLease?.Dispose();
+        _runDirectoryLease = null;
     }
 
     private void FlushRun()
@@ -131,7 +119,9 @@ internal sealed class BoundedCanonicalOpaqueEventSorter : IDisposable
         while (_runs.Count > _maximumMergeFanIn)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string nextPath = Path.Combine(_directory, $"opaque-pass-{++pass}.runs");
+            string nextPath = Path.Combine(
+                _runDirectoryLease!.DirectoryPath,
+                $"opaque-pass-{++pass}.runs");
             FileStream next = OpenRunFile(nextPath);
             List<RunDescriptor> nextRuns = [];
             try
@@ -174,8 +164,10 @@ internal sealed class BoundedCanonicalOpaqueEventSorter : IDisposable
     private void EnsureRunFile()
     {
         if (_runFile is not null) return;
-        Directory.CreateDirectory(_directory);
-        _runPath = Path.Combine(_directory, "opaque-pass-0.runs");
+        _runDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.CompilerRunsDirectory,
+            "opaque-sort");
+        _runPath = Path.Combine(_runDirectoryLease.DirectoryPath, "opaque-pass-0.runs");
         _runFile = OpenRunFile(_runPath);
     }
 

@@ -124,6 +124,7 @@ public sealed class ProjectEndMarker
 
 public sealed class ConductorTrack
 {
+    private ConductorTrack() { }
     internal ConductorTrack(MidoraProject project, bool createInitialState)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -134,10 +135,21 @@ public sealed class ConductorTrack
         }
     }
 
-    public List<TempoChange> Tempos { get; } = [];
-    public List<TimeSignatureChange> TimeSignatures { get; } = [];
-    public List<KeySignatureChange> KeySignatures { get; } = [];
-    public List<ProjectMarker> Markers { get; } = [];
+    public ConductorCollection<TempoChange> Tempos { get; internal set; } = [];
+    public ConductorCollection<TimeSignatureChange> TimeSignatures { get; internal set; } = [];
+    public ConductorCollection<KeySignatureChange> KeySignatures { get; internal set; } = [];
+    public ConductorCollection<ProjectMarker> Markers { get; internal set; } = [];
     public ProjectEndMarker? EndMarker { get; set; }
     public long? EndMarkerTick => EndMarker?.Tick;
+
+    public ConductorTrack CloneFrozen()
+    {
+        ConductorTrack result = new();
+        result.Tempos.AdoptSnapshot(Tempos.CaptureQuerySnapshot());
+        result.TimeSignatures.AdoptSnapshot(TimeSignatures.CaptureQuerySnapshot());
+        result.KeySignatures.AdoptSnapshot(KeySignatures.CaptureQuerySnapshot());
+        result.Markers.AdoptSnapshot(Markers.CaptureQuerySnapshot());
+        result.EndMarker = EndMarker is { } marker ? new(marker.Id, marker.Tick) : null;
+        return result;
+    }
 }

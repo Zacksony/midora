@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
+using Midora.Common;
 
 namespace Midora.Audio.Bass;
 
@@ -11,6 +12,7 @@ public readonly record struct BassMidiAudioWorkerProbeResult(
 [SupportedOSPlatform("windows")]
 public sealed class BassMidiAudioWorkerSession : IDisposable, IBassMidiAudioWorkerSession
 {
+    private readonly MidoraOwnedTemporaryDirectoryLease _ownedTemporaryDirectoryLease;
     private readonly string _ownedTemporaryDirectory;
     private readonly SharedAudioWorkerControl _control;
     private readonly Process _process;
@@ -137,15 +139,15 @@ public sealed class BassMidiAudioWorkerSession : IDisposable, IBassMidiAudioWork
         _audioCache = audioCache;
         _totalFrameCount = plan.TotalFrameCount;
 
-        _ownedTemporaryDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"midora-audio-worker-{Guid.NewGuid():N}");
+        _ownedTemporaryDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.AudioWorkerExchangeDirectory,
+            "midora-audio-worker");
+        _ownedTemporaryDirectory = _ownedTemporaryDirectoryLease.DirectoryPath;
         SharedAudioWorkerControl? createdControl = null;
         Process? startedProcess = null;
         Thread? startedMonitorThread = null;
         try
         {
-            Directory.CreateDirectory(_ownedTemporaryDirectory);
             if (playbackSpanCacheEnabled)
             {
                 try
@@ -254,7 +256,7 @@ public sealed class BassMidiAudioWorkerSession : IDisposable, IBassMidiAudioWork
             _cacheStaging?.Dispose();
             _playbackSpanCacheStaging?.Dispose();
             _eventStreamProducer?.Dispose();
-            CleanupOwnedTemporaryDirectory(_ownedTemporaryDirectory);
+            _ownedTemporaryDirectoryLease.Dispose();
             throw;
         }
     }
@@ -481,7 +483,7 @@ public sealed class BassMidiAudioWorkerSession : IDisposable, IBassMidiAudioWork
         _cacheStaging?.Dispose();
         _playbackSpanCacheStaging?.Dispose();
         _eventStreamProducer?.Dispose();
-        CleanupOwnedTemporaryDirectory(_ownedTemporaryDirectory);
+        _ownedTemporaryDirectoryLease.Dispose();
     }
 
     private static Process StartProbe(
@@ -759,22 +761,4 @@ public sealed class BassMidiAudioWorkerSession : IDisposable, IBassMidiAudioWork
             or AudioWorkerState.Completed
             or AudioWorkerState.OutputDeviceUnavailable;
 
-    private static void CleanupOwnedTemporaryDirectory(string path)
-    {
-        try
-        {
-            string fullPath = Path.GetFullPath(path);
-            string expectedPrefix = Path.TrimEndingDirectorySeparator(
-                Path.GetFullPath(Path.GetTempPath())) + Path.DirectorySeparatorChar;
-            if (fullPath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileName(fullPath).StartsWith("midora-audio-worker-", StringComparison.Ordinal))
-            {
-                Directory.Delete(fullPath, recursive: true);
-            }
-        }
-        catch
-        {
-            // The playback result remains primary; startup cleanup can remove stale owned directories later.
-        }
-    }
 }

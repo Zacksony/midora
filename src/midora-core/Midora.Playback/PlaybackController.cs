@@ -22,7 +22,8 @@ public enum PlaybackTaskKind
     MainTimeline,
     SegmentPreview,
     EventInstrumentPreview,
-    SubVoicePreview
+    SubVoicePreview,
+    InstrumentPresetPreview
 }
 
 public interface IRealtimePlaybackBackend : IDisposable
@@ -137,8 +138,31 @@ public sealed class PlaybackController : IDisposable
     private Task _prewarmTask = Task.CompletedTask;
     private long _prewarmRequestGeneration;
     private int _knownSampleRate;
-    private CanonicalCompiledResult? _activeResult;
-    private MidiRenderPlan? _activePlan;
+    private CanonicalCompiledResult? _activeResultValue;
+    private MidiRenderPlan? _activePlanValue;
+    private IDisposable? _activeResultStorage;
+    private IDisposable? _activePlanStorage;
+    private CanonicalCompiledResult? _activeResult
+    {
+        get => _activeResultValue;
+        set => ReplaceActiveStorage(ref _activeResultValue, ref _activeResultStorage, value);
+    }
+    private MidiRenderPlan? _activePlan
+    {
+        get => _activePlanValue;
+        set => ReplaceActiveStorage(ref _activePlanValue, ref _activePlanStorage, value);
+    }
+
+    private void ReplaceActiveStorage<T>(ref T? target, ref IDisposable? lease, T? value)
+        where T : class, Midora.Common.IRetainedStorageSource
+    {
+        if (ReferenceEquals(target, value)) return;
+        IDisposable? next = value is null ? null : _session.RetainPreparationStorage(value);
+        IDisposable? previous = lease;
+        target = value;
+        lease = next;
+        previous?.Dispose();
+    }
     private TempoSampleMap? _activeTempoMap;
     private long _taskStartTick;
     private long _cursorTick;
@@ -308,6 +332,50 @@ public sealed class PlaybackController : IDisposable
                 : PlaybackTaskKind.EventInstrumentPreview);
     }
 
+    private Guid? _instrumentPresetPreviewOwner;
+
+    public void StartInstrumentPresetPreview(Guid owner, InstrumentPresetPreviewRequest request, bool held)
+    {
+        if (owner == Guid.Empty) throw new ArgumentException("A preview owner is required.", nameof(owner));
+        request.Validate();
+        EnsureCanStartTask();
+        _instrumentPresetPreviewOwner = owner;
+        try
+        {
+        if (held)
+            StartHeldPreviewCore(window => InstrumentPresetPreviewCompiler.Compile(request, heldWindowEndTick: window),
+                (_, effective) => InstrumentPresetPreviewCompiler.Compile(request, effectiveGateEndTick: effective),
+                InstrumentPresetPreviewCompiler.Tempo, PlaybackTaskKind.InstrumentPresetPreview, false,
+                InstrumentPresetPreviewCompiler.TicksPerQuarterNote);
+        else StartPreview(() => InstrumentPresetPreviewCompiler.Compile(request), PlaybackTaskKind.InstrumentPresetPreview);
+        }
+        catch (Exception exception)
+        {
+            // Only this newly acquired preview can have touched the backend.
+            // A failed Start must not leave a partially started native task.
+            FailHeldPreview(exception);
+            _instrumentPresetPreviewOwner = null;
+            throw;
+        }
+    }
+
+    public void StopInstrumentPresetPreview(Guid owner)
+    {
+        if (_instrumentPresetPreviewOwner != owner) return;
+        try
+        {
+            if (ActiveTaskKind == PlaybackTaskKind.InstrumentPresetPreview)
+                StopCore(applyCursorBehavior: false, releaseEditLock: true);
+        }
+        finally { _instrumentPresetPreviewOwner = null; }
+    }
+
+    public void ReleaseInstrumentPresetPreviewKey(Guid owner)
+    {
+        if (_instrumentPresetPreviewOwner == owner && ActiveTaskKind == PlaybackTaskKind.InstrumentPresetPreview
+            && IsHeldPreviewGateOpen) EndHeldPreviewGate();
+    }
+
     public void BeginPitchAudition(int pitch, int velocity)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -425,7 +493,8 @@ public sealed class PlaybackController : IDisposable
         Func<long, long, CanonicalCompiledResult> compileEnd,
         decimal previewTempo,
         PlaybackTaskKind taskKind,
-        bool releaseEditLockAtGateEnd)
+        bool releaseEditLockAtGateEnd,
+        int? ticksPerQuarterNote = null)
     {
         ArgumentNullException.ThrowIfNull(compileOpen);
         ArgumentNullException.ThrowIfNull(compileEnd);
@@ -444,7 +513,7 @@ public sealed class PlaybackController : IDisposable
             SetState(PlaybackState.Preparing);
             string soundFont = RequireEffectiveSoundFont("Held Preview");
             long initialWindowEndTick = CalculateHeldPreviewWindowTicks(
-                _session.Project.TicksPerQuarterNote,
+                ticksPerQuarterNote ?? _session.Project.TicksPerQuarterNote,
                 previewTempo,
                 HeldPreviewWindowSeconds);
             CanonicalCompiledResult compiled = compileOpen(initialWindowEndTick);
@@ -456,9 +525,9 @@ public sealed class PlaybackController : IDisposable
                 actualSampleRate);
             ConfigureNextBufferingRecovery(compiled, plan);
             SetNextPlaybackCacheMode(RealtimePlaybackCacheMode.Disabled);
-            _backend.Start(plan, soundFont, _masterConfiguration);
             _activeResult = compiled;
             _activePlan = plan;
+            _backend.Start(plan, soundFont, _masterConfiguration);
             _activeTempoMap = new(compiled.TicksPerQuarterNote, compiled.Tempos);
             _heldPreviewOpenCompiler = compileOpen;
             _heldPreviewEndCompiler = compileEnd;
@@ -535,6 +604,8 @@ public sealed class PlaybackController : IDisposable
                     _activePlan,
                     continuationPlan,
                     producerFrontier);
+            using IDisposable replacementResultStorage = _session.RetainPreparationStorage(continuation);
+            using IDisposable replacementPlanStorage = _session.RetainPreparationStorage(replacement);
             heldBackend.ReplaceHeldPreviewFutureAndResume(
                 replacement,
                 producerFrontier,
@@ -914,9 +985,14 @@ public sealed class PlaybackController : IDisposable
                 ReleaseEditLock();
             }
         }
-        _backend.Dispose();
-        _prewarmCancellation.Dispose();
-        _disposed = true;
+        try { _backend.Dispose(); }
+        finally
+        {
+            _activeResult = null;
+            _activePlan = null;
+            _prewarmCancellation.Dispose();
+            _disposed = true;
+        }
     }
 
     public void SetSharedGroupMuted(MidoraId sharedGroupId, bool muted)
@@ -997,8 +1073,7 @@ public sealed class PlaybackController : IDisposable
             CanonicalCompiledResult compiled = _session.CompileForPlayback(cursorTick, endTick);
             if (!compiled.IsConsumable)
             {
-                throw new InvalidOperationException(string.Join(Environment.NewLine,
-                    compiled.Diagnostics.Select(value => $"{value.Code}: {value.Message}")));
+                throw new CompilationRejectedException(compiled.Diagnostics);
             }
             if (compiled.EndTick < compiled.StartTick)
             {
@@ -1027,9 +1102,9 @@ public sealed class PlaybackController : IDisposable
                 _audibleTracks);
             ConfigureNextBufferingRecovery(compiled, plan);
             SetNextPlaybackCacheMode(RealtimePlaybackCacheMode.UnitPcmAndPlaybackSpan);
-            _backend.Start(plan, soundFont, _masterConfiguration);
             _activeResult = compiled;
             _activePlan = plan;
+            _backend.Start(plan, soundFont, _masterConfiguration);
             _activeTempoMap = new(compiled.TicksPerQuarterNote, compiled.Tempos);
             LastError = null;
             SetState(_backend.IsBuffering ? PlaybackState.Buffering : PlaybackState.Playing);
@@ -1067,8 +1142,7 @@ public sealed class PlaybackController : IDisposable
             CanonicalCompiledResult compiled = compile();
             if (!compiled.IsConsumable)
             {
-                throw new InvalidOperationException(string.Join(Environment.NewLine,
-                    compiled.Diagnostics.Select(value => $"{value.Code}: {value.Message}")));
+                throw new CompilationRejectedException(compiled.Diagnostics);
             }
             int actualSampleRate = PrepareBackend();
             _session.InvalidateSampleDomainCaches();
@@ -1084,9 +1158,9 @@ public sealed class PlaybackController : IDisposable
             SetNextPlaybackCacheMode(taskKind == PlaybackTaskKind.SegmentPreview
                 ? RealtimePlaybackCacheMode.UnitPcm
                 : RealtimePlaybackCacheMode.Disabled);
-            _backend.Start(plan, soundFont, _masterConfiguration);
             _activeResult = compiled;
             _activePlan = plan;
+            _backend.Start(plan, soundFont, _masterConfiguration);
             _activeTempoMap = new(compiled.TicksPerQuarterNote, compiled.Tempos);
             LastError = null;
             SetState(_backend.IsBuffering ? PlaybackState.Buffering : PlaybackState.Playing);
@@ -1126,7 +1200,7 @@ public sealed class PlaybackController : IDisposable
             long producerFrontier = heldBackend.PauseHeldPreviewAtProducerFrontier(
                 HeldPreviewBackendTimeout);
             long extensionTicks = CalculateHeldPreviewWindowTicks(
-                _session.Project.TicksPerQuarterNote,
+                _activeResult?.TicksPerQuarterNote ?? _session.Project.TicksPerQuarterNote,
                 _heldPreviewTempo,
                 HeldPreviewWindowSeconds);
             long replacementWindowEndTick = _heldPreviewWindowEndTick >= long.MaxValue - extensionTicks
@@ -1147,6 +1221,8 @@ public sealed class PlaybackController : IDisposable
                 _activePlan,
                 expandedPlan,
                 producerFrontier);
+            using IDisposable replacementResultStorage = _session.RetainPreparationStorage(expanded);
+            using IDisposable replacementPlanStorage = _session.RetainPreparationStorage(replacement);
             heldBackend.ReplaceHeldPreviewFutureAndResume(
                 replacement,
                 producerFrontier,
@@ -1220,9 +1296,7 @@ public sealed class PlaybackController : IDisposable
     {
         if (!compiled.IsConsumable)
         {
-            throw new InvalidOperationException(string.Join(
-                Environment.NewLine,
-                compiled.Diagnostics.Select(value => $"{value.Code}: {value.Message}")));
+            throw new CompilationRejectedException(compiled.Diagnostics);
         }
     }
 
@@ -1572,7 +1646,8 @@ public sealed class PlaybackController : IDisposable
             int sourceIndex = plan.FindSourceIndex(trackId.Value);
             if (sourceIndex < 0) continue;
             commands.Add(MidiMonitoringCommand.EnableSource(sourceIndex));
-            foreach (CanonicalMidiEvent value in restoreResult!.Events)
+            foreach (CanonicalMidiEvent value in restoreResult!.EnumerateResidentAndLogicalEvents(
+                restoreResult.StartTick, restoreResult.StartTick, includeEnd: true))
             {
                 if (value.Tick == restoreResult.StartTick
                     && value.Role == CanonicalEventRole.RangeRestore
@@ -1617,39 +1692,16 @@ public sealed class PlaybackController : IDisposable
         return MidiMessage.FromPackedValue(packed);
     }
 
-    private static void AppendTrackCleanup(
+    private readonly MonitoringNoteBalance _monitoringNoteBalance = new();
+
+    private void AppendTrackCleanup(
         List<MidiMonitoringCommand> commands,
         CanonicalCompiledResult compiled,
         MidoraId trackId,
         long tick)
     {
-        Dictionary<(byte Port, byte Channel, byte Key), int> activeNotes = [];
-        foreach (CanonicalMidiEvent value in compiled.Events)
-        {
-            if (value.Tick >= tick || value.Source.TrackId != trackId)
-            {
-                continue;
-            }
-            MidiMessage message = value.Message;
-            bool noteOn = message.MessageType == MidiMessageType.NoteOn && message.Byte2 != 0;
-            bool noteOff = message.MessageType == MidiMessageType.NoteOff
-                || message.MessageType == MidiMessageType.NoteOn && message.Byte2 == 0;
-            if (!noteOn && !noteOff) continue;
-            var key = (value.ZeroBasedPort, value.ZeroBasedChannel, message.Byte1);
-            activeNotes.TryGetValue(key, out int count);
-            if (noteOn)
-            {
-                activeNotes[key] = checked(count + 1);
-            }
-            else if (count > 1)
-            {
-                activeNotes[key] = count - 1;
-            }
-            else
-            {
-                activeNotes.Remove(key);
-            }
-        }
+        Dictionary<(byte Port, byte Channel, byte Key), int> activeNotes =
+            _monitoringNoteBalance.Read(compiled, trackId, tick);
 
         foreach (((byte port, byte channel, byte key), int count) in activeNotes
             .OrderBy(value => value.Key.Port)
@@ -1662,6 +1714,46 @@ public sealed class PlaybackController : IDisposable
                     port,
                     MidiMessage.NoteOff(channel, key, 0)));
             }
+        }
+    }
+
+    /// <summary>Incremental prefix counts, not retained MIDI events or live source readers.</summary>
+    private sealed class MonitoringNoteBalance
+    {
+        private WeakReference<CanonicalCompiledResult>? _source;
+        private long _tick;
+        private readonly Dictionary<(MidoraId Track, byte Port, byte Channel, byte Key), int> _counts = [];
+
+        public Dictionary<(byte Port, byte Channel, byte Key), int> Read(
+            CanonicalCompiledResult source, MidoraId track, long tick)
+        {
+            if (_source is null || !_source.TryGetTarget(out var previous)
+                || !ReferenceEquals(previous, source) || tick < _tick)
+            {
+                _source = new(source); _tick = source.StartTick; _counts.Clear();
+            }
+            try
+            {
+                foreach (CanonicalMidiEvent value in source.EnumerateResidentAndLogicalEvents(_tick, tick, false))
+                {
+                    MidiMessage message = value.Message;
+                    bool on = message.MessageType == MidiMessageType.NoteOn && message.Byte2 != 0;
+                    bool off = message.MessageType == MidiMessageType.NoteOff
+                        || message.MessageType == MidiMessageType.NoteOn && message.Byte2 == 0;
+                    if (!on && !off) continue;
+                    var key = (value.Source.TrackId, value.ZeroBasedPort, value.ZeroBasedChannel, message.Byte1);
+                    int count = _counts.GetValueOrDefault(key);
+                    if (on) _counts[key] = checked(count + 1);
+                    else if (count > 1) _counts[key] = count - 1;
+                    else _counts.Remove(key);
+                }
+                _tick = tick;
+            }
+            catch { _source = null; _counts.Clear(); throw; }
+            Dictionary<(byte Port, byte Channel, byte Key), int> result = [];
+            foreach (var (key, count) in _counts)
+                if (key.Track == track) result[(key.Port, key.Channel, key.Key)] = count;
+            return result;
         }
     }
 

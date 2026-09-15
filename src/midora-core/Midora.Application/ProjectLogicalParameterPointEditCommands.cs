@@ -22,6 +22,8 @@ public static partial class ProjectDomainEditCommands
 
             SegmentLocation segment = FindSegment(project, segmentId);
             LogicalParameterLane lane = FindLogicalParameterLane(segment.Segment, laneId);
+            if (points.Count >= BoundedPointThreshold || lane.Points.Count >= BoundedPointThreshold)
+                return UpsertBoundedLogicalParameterPoints(segmentId, laneId, points).Prepare(project);
             LogicalParameterDefinition definition = FindBoundLogicalParameter(
                 project,
                 segment.Track,
@@ -39,6 +41,15 @@ public static partial class ProjectDomainEditCommands
             List<ExistingLogicalParameterPointEdit> replacements = [];
             List<LogicalParameterPointEdit> additions = [];
             const CurveInterpolation additionInterpolation = CurveInterpolation.Step;
+            HashSet<long> editedTicks = edits.Select(static value => value.Tick).ToHashSet();
+            HashSet<MidoraId> existingIds = lane.Points.CreateQuerySnapshot()
+                .QueryTicks(editedTicks)
+                .Select(static value => value.Id)
+                .ToHashSet();
+            Dictionary<long, CurvePoint> existingByTick = lane.Points
+                .ResolveByIdsInCollectionOrder(existingIds)
+                .GroupBy(static value => value.Tick)
+                .ToDictionary(static values => values.Key, static values => values.Single());
             foreach (LogicalParameterPointEdit edit in edits)
             {
                 if (edit.Tick < 0 || edit.Tick == long.MaxValue || !double.IsFinite(edit.Value))
@@ -46,8 +57,7 @@ public static partial class ProjectDomainEditCommands
                     throw new ArgumentOutOfRangeException(nameof(points));
                 }
                 ValidatePointValue(definition, edit.Value, additionInterpolation);
-                CurvePoint? existing = lane.Points.SingleOrDefault(value => value.Tick == edit.Tick);
-                if (existing is null)
+                if (!existingByTick.TryGetValue(edit.Tick, out CurvePoint? existing))
                 {
                     additions.Add(edit);
                 }
@@ -76,14 +86,10 @@ public static partial class ProjectDomainEditCommands
                 TrackChange(segment.Track.Id),
                 owner =>
                 {
-                    for (int index = 0; index < replacements.Count; index++)
-                    {
-                        ReplaceRequired(
-                            lane.Points,
-                            replacements[index].Point,
-                            replacementPoints[index],
-                            "Logical Parameter point");
-                    }
+                    using IDisposable batch = lane.Points.BeginBatchChange();
+                    lane.Points.ReplaceRange(
+                        replacements.Select(static value => value.Point).ToArray(),
+                        replacementPoints);
                     created ??= additions
                         .Select(value => new CurvePoint(
                             owner,
@@ -91,10 +97,7 @@ public static partial class ProjectDomainEditCommands
                             value.Value,
                             CurveInterpolation.Step))
                         .ToArray();
-                    foreach (CurvePoint point in created)
-                    {
-                        InsertCurvePoint(lane.Points, point);
-                    }
+                    InsertCurvePoints(lane.Points, created);
                 },
                 _ =>
                 {
@@ -103,20 +106,70 @@ public static partial class ProjectDomainEditCommands
                         throw new InvalidOperationException(
                             "Logical Parameter points do not exist before the first Apply.");
                     }
-                    foreach (CurvePoint point in created)
-                    {
-                        RemoveRequired(lane.Points, point, "Logical Parameter point");
-                    }
-                    for (int index = 0; index < replacements.Count; index++)
-                    {
-                        ReplaceRequired(
-                            lane.Points,
-                            replacementPoints[index],
-                            replacements[index].Point,
-                            "Logical Parameter point");
-                    }
+                    using IDisposable batch = lane.Points.BeginBatchChange();
+                    int removed = lane.Points.RemoveRange(created);
+                    if (removed != created.Length)
+                        throw new InvalidOperationException(
+                            "The drawn Logical Parameter point set is no longer present.");
+                    lane.Points.ReplaceRange(
+                        replacementPoints,
+                        replacements.Select(static value => value.Point).ToArray());
                 });
         });
 
+    private static void InsertCurvePoints(
+        CurvePointCollection points,
+        IReadOnlyCollection<CurvePoint> additions)
+    {
+        if (additions.Count == 0) return;
+
+        CurvePoint[] ordered = additions
+            .OrderBy(static value => value.Tick)
+            .ThenBy(static value => value.Id.Value)
+            .ToArray();
+        List<CurvePointInsertionRun> runs = [];
+        int existingIndex = 0;
+        int additionIndex = 0;
+        while (additionIndex < ordered.Length)
+        {
+            CurvePoint addition = ordered[additionIndex];
+            while (existingIndex < points.Count
+                && CompareCurvePointOrder(points[existingIndex], addition) < 0)
+            {
+                existingIndex++;
+            }
+
+            int runStart = additionIndex;
+            while (additionIndex < ordered.Length
+                && (existingIndex >= points.Count
+                    || CompareCurvePointOrder(ordered[additionIndex], points[existingIndex]) < 0))
+            {
+                additionIndex++;
+            }
+            if (additionIndex == runStart)
+            {
+                throw new InvalidOperationException(
+                    "The Logical Parameter point insertion set conflicts with existing ordering.");
+            }
+            runs.Add(new(
+                existingIndex,
+                ordered[runStart..additionIndex]));
+        }
+
+        for (int index = runs.Count - 1; index >= 0; index--)
+        {
+            CurvePointInsertionRun run = runs[index];
+            points.InsertRange(run.Index, run.Points);
+        }
+    }
+
+    private static int CompareCurvePointOrder(CurvePoint left, CurvePoint right)
+    {
+        int tick = left.Tick.CompareTo(right.Tick);
+        return tick != 0 ? tick : left.Id.Value.CompareTo(right.Id.Value);
+    }
+
     private sealed record ExistingLogicalParameterPointEdit(CurvePoint Point, double Value);
+
+    private sealed record CurvePointInsertionRun(int Index, CurvePoint[] Points);
 }

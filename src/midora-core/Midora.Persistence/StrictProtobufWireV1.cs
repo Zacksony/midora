@@ -38,6 +38,8 @@ internal static class StrictProtobufWireV1
         }
 
         int offset = 0;
+        ulong seen = 0;
+        HashSet<int>? highFields = null;
         while (offset < data.Length)
         {
             ulong tag = ReadVarint(data, ref offset, path);
@@ -52,6 +54,18 @@ internal static class StrictProtobufWireV1
             if (field is null)
             {
                 throw new InvalidDataException($"Unknown protobuf field {fieldNumber} at {path}.");
+            }
+            if (!field.IsRepeated)
+            {
+                bool duplicate;
+                if (fieldNumber < 64)
+                {
+                    ulong mask = 1UL << fieldNumber;
+                    duplicate = (seen & mask) != 0;
+                    seen |= mask;
+                }
+                else duplicate = !(highFields ??= []).Add(fieldNumber);
+                if (duplicate) throw new InvalidDataException($"Duplicate protobuf field {fieldNumber} at {path}.");
             }
 
             int expectedWireType = field.IsRepeated && field.IsPacked && IsPackable(field.FieldType)
@@ -73,7 +87,9 @@ internal static class StrictProtobufWireV1
         string path,
         int depth)
     {
-        string fieldPath = $"{path}.{field.Name}";
+        // Descriptor names are already cached. Do not allocate a new full path
+        // for every successfully validated scalar in a million-record source.
+        string fieldPath = field.FullName;
         if (field.IsRepeated && field.IsPacked && IsPackable(field.FieldType))
         {
             ReadOnlySpan<byte> packed = ReadLengthDelimited(data, ref offset, fieldPath);

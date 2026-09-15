@@ -300,6 +300,9 @@ public sealed class ProjectMusicContentEditCommandsTests
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
         long initialFingerprint = compilation.LastAttempt.Fingerprint;
+        long initialSourceRevision = compilation.SourceRevision;
+        ProjectContentChangedEventArgs? contentChange = null;
+        document.ContentChanged += (_, args) => contentChange = args;
 
         string description = "First line\n\tSecond line\r\n";
         document.Execute(ProjectDomainEditCommands.UpdateEventInstrumentDescription(
@@ -307,11 +310,20 @@ public sealed class ProjectMusicContentEditCommandsTests
             description));
         Assert.Equal(description, instrument.Description);
         Assert.Equal(initialFingerprint, compilation.LastAttempt.Fingerprint);
+        Assert.Equal(initialSourceRevision, compilation.SourceRevision);
+        Assert.Contains(instrument.Id, Assert.IsType<ProjectContentChangedEventArgs>(contentChange)
+            .PresentationEventInstrumentIds);
+        Assert.Empty(contentChange.EventInstrumentIds);
 
         MidoraColor color = new(1, 2, 3);
+        contentChange = null;
         document.Execute(ProjectDomainEditCommands.UpdateEventInstrumentColor(instrument.Id, color));
         Assert.Equal(color, instrument.Color);
         Assert.Equal(initialFingerprint, compilation.LastAttempt.Fingerprint);
+        Assert.Equal(initialSourceRevision, compilation.SourceRevision);
+        Assert.Contains(instrument.Id, Assert.IsType<ProjectContentChangedEventArgs>(contentChange)
+            .PresentationEventInstrumentIds);
+        Assert.Empty(contentChange.EventInstrumentIds);
 
         document.Execute(ProjectDomainEditCommands.UpdateEventInstrumentRootNote(instrument.Id, 72));
         Assert.Equal(72, instrument.RootNote);

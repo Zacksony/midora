@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -20,8 +21,74 @@ using Xunit;
 
 namespace Midora.Desktop.Tests;
 
-public sealed class WpfInteractionRegressionTests
+[Collection(DesktopSharedPresentationStateCollection.Name)]
+public sealed partial class WpfInteractionRegressionTests
 {
+    private static void AssertSharedTaskProgressStyleResolvesInPropertiesBamlAndRealMainWindowOverlayMarkup(
+        System.Windows.Application application)
+    {
+        // Reuse the theme test's one Application on its owning STA. WPF does
+        // not permit constructing a second Application after Shutdown.
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XDocument appXaml = XDocument.Load(Path.Combine(FindRepositoryRoot(),
+            "src", "midora-desktop", "Midora.Desktop", "App.xaml"));
+        XElement applicationDictionary = appXaml.Root!
+            .Element(presentation + "Application.Resources")!
+            .Element(presentation + "ResourceDictionary")!;
+        XElement localEntries = new(presentation + "ResourceDictionary",
+            applicationDictionary.Elements()
+                .Where(element => element.Name != presentation + "ResourceDictionary.MergedDictionaries")
+                .Select(element => new XElement(element)));
+        localEntries.SetAttributeValue(XNamespace.Xmlns + "x", x.NamespaceName);
+        // Palette/icons/Controls are already installed in their actual order;
+        // parse only App.xaml's own entries against those application resources.
+        ResourceDictionary localResources = (ResourceDictionary)System.Windows.Markup.XamlReader.Parse(localEntries.ToString());
+        foreach (System.Collections.DictionaryEntry entry in localResources)
+            application.Resources[entry.Key] = entry.Value;
+        Style shared = Assert.IsType<Style>(application.Resources["TaskProgressBar"]);
+        ObjectPropertiesDialog properties = new(new ObjectPropertiesViewModel(), _ => true);
+        try
+        {
+            AssertProgressTemplate(Assert.IsType<Border>(properties.FindName("PropertyTaskOverlay")), shared);
+            XDocument mainXaml = XDocument.Load(Path.Combine(FindRepositoryRoot(),
+                "src", "midora-desktop", "Midora.Desktop", "MainWindow.xaml"));
+            XElement taskMarkup = new(mainXaml.Descendants(presentation + "Border")
+                .Single(element => (string?)element.Attribute(x + "Name") == "TaskLockOverlay"));
+            taskMarkup.SetAttributeValue(XNamespace.Xmlns + "x", x.NamespaceName);
+            // Event handlers require MainWindow's code-behind connector;
+            // this isolated template test verifies resources and controls.
+            foreach (XAttribute handler in taskMarkup.DescendantsAndSelf().Attributes("Click").ToArray())
+                handler.Remove();
+            Border taskOverlay = (Border)System.Windows.Markup.XamlReader.Parse(taskMarkup.ToString());
+            AssertProgressTemplate(taskOverlay, shared);
+        }
+        finally
+        {
+            properties.Close();
+            DrainDispatcher();
+        }
+
+        static void AssertProgressTemplate(Border overlay, Style shared)
+        {
+            ProgressBar progress = Assert.Single(LogicalDescendants(overlay).OfType<ProgressBar>());
+            Assert.Same(shared, progress.Style.BasedOn);
+            progress.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+            Assert.True(progress.ApplyTemplate());
+            Assert.IsType<Border>(progress.Template.FindName("PART_Track", progress));
+            Assert.IsType<Border>(progress.Template.FindName("PART_Indicator", progress));
+        }
+        static IEnumerable<DependencyObject> LogicalDescendants(DependencyObject root)
+        {
+            foreach (object child in LogicalTreeHelper.GetChildren(root))
+            {
+                if (child is not DependencyObject value) continue;
+                yield return value;
+                foreach (var descendant in LogicalDescendants(value)) yield return descendant;
+            }
+        }
+    }
+
     [Fact]
     public void SingleLineCodeEditorPasteRemainsSafeInsideAnOpenUndoGroup()
     {
@@ -135,12 +202,15 @@ public sealed class WpfInteractionRegressionTests
                 List<int> collectionChangeThreads = [];
                 session.ProjectTree.CollectionChanged += (_, _) =>
                     collectionChangeThreads.Add(Environment.CurrentManagedThreadId);
+                long refreshPassBeforeEdit = session.ModelRefreshPassCount;
 
                 session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track", instrument.Id));
 
                 Assert.Single(session.Project!.Tracks);
                 Assert.Empty(tracks.Children);
+                Assert.Equal(refreshPassBeforeEdit, session.ModelRefreshPassCount);
                 DrainDispatcher();
+                Assert.Equal(refreshPassBeforeEdit + 1, session.ModelRefreshPassCount);
 
                 ProjectTreeNode refreshedTracks = session.ProjectTree.Single(
                     item => item.Kind == ProjectTreeNodeKind.LogicalTracks);
@@ -165,6 +235,94 @@ public sealed class WpfInteractionRegressionTests
                     WorkspaceKind.ConductorTrack,
                     session.OpenWorkspace(session.ProjectTree.Single(
                         item => item.Kind == ProjectTreeNodeKind.Conductor)).Kind);
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    [Fact]
+    public void MultipleContentChangesInOneDispatcherFrameMergeWithoutLosingAffectedWorkspaces()
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "Merged content refresh",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
+                EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
+                session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track A", instrument.Id));
+                session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track B", instrument.Id));
+                LogicalTrack firstTrack = session.Project.Tracks[0];
+                LogicalTrack secondTrack = session.Project.Tracks[1];
+                session.Execute(ProjectDomainEditCommands.CreateSegment(firstTrack.Id, 0, 480));
+                session.Execute(ProjectDomainEditCommands.CreateSegment(secondTrack.Id, 0, 480));
+                Segment firstSegment = Assert.Single(firstTrack.Segments);
+                Segment secondSegment = Assert.Single(secondTrack.Segments);
+                session.Execute(ProjectDomainEditCommands.CreateLogicalNote(
+                    firstSegment.Id,
+                    0,
+                    120,
+                    60,
+                    100));
+                session.Execute(ProjectDomainEditCommands.CreateLogicalNote(
+                    secondSegment.Id,
+                    0,
+                    120,
+                    64,
+                    100));
+                LogicalNote firstNote = Assert.Single(firstSegment.Notes);
+                LogicalNote secondNote = Assert.Single(secondSegment.Notes);
+                DrainDispatcher();
+
+                TimelineWorkspaceViewModel firstWorkspace = session.OpenSegment(firstSegment.Id);
+                TimelineWorkspaceViewModel secondWorkspace = session.OpenSegment(secondSegment.Id);
+                long passesBeforeEdits = session.ModelRefreshPassCount;
+                long rebuildsBeforeEdits = session.WorkspaceRebuildCount;
+
+                session.Execute(ProjectDomainEditCommands.MoveLogicalNotes(
+                    firstSegment.Id,
+                    [firstNote.Id],
+                    24,
+                    0));
+                session.Execute(ProjectDomainEditCommands.MoveLogicalNotes(
+                    secondSegment.Id,
+                    [secondNote.Id],
+                    48,
+                    0));
+
+                Assert.Equal(passesBeforeEdits, session.ModelRefreshPassCount);
+                Assert.True(firstWorkspace.Snapshot!.TryGetItem(
+                    firstNote.Id,
+                    out TimelineRenderItem firstBeforeDrain));
+                Assert.True(secondWorkspace.Snapshot!.TryGetItem(
+                    secondNote.Id,
+                    out TimelineRenderItem secondBeforeDrain));
+                Assert.Equal(0, firstBeforeDrain.StartTick);
+                Assert.Equal(0, secondBeforeDrain.StartTick);
+
+                DrainDispatcher();
+
+                Assert.Equal(passesBeforeEdits + 1, session.ModelRefreshPassCount);
+                Assert.Equal(rebuildsBeforeEdits + 3, session.WorkspaceRebuildCount);
+                Assert.True(firstWorkspace.Snapshot!.TryGetItem(
+                    firstNote.Id,
+                    out TimelineRenderItem firstAfterDrain));
+                Assert.True(secondWorkspace.Snapshot!.TryGetItem(
+                    secondNote.Id,
+                    out TimelineRenderItem secondAfterDrain));
+                Assert.Equal(24, firstAfterDrain.StartTick);
+                Assert.Equal(48, secondAfterDrain.StartTick);
             }
             finally
             {
@@ -334,7 +492,7 @@ public sealed class WpfInteractionRegressionTests
                 new Uri("/Midora.Desktop.Presentation;component/Themes/WindowControlIcons.xaml", UriKind.Relative));
             ResourceDictionary palette = (ResourceDictionary)System.Windows.Application.LoadComponent(
                 new Uri("/Midora.Desktop.Presentation;component/Themes/Palette.xaml", UriKind.Relative));
-            System.Windows.Application application = new();
+            System.Windows.Application application = new() { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             application.Resources.MergedDictionaries.Add(palette);
             application.Resources.MergedDictionaries.Add(icons);
             application.Resources.MergedDictionaries.Add(windowControlIcons);
@@ -344,6 +502,8 @@ public sealed class WpfInteractionRegressionTests
             try
             {
                 Style combo = Assert.IsType<Style>(controls[typeof(ComboBox)]);
+                AssertA1DialogLayoutsAndInitialSettingsPage();
+                AssertInstrumentSelectionDialogBamlAndDraft();
                 Style comboItem = Assert.IsType<Style>(controls[typeof(ComboBoxItem)]);
                 Style scrollBar = Assert.IsType<Style>(controls[typeof(ScrollBar)]);
                 Style menuSeparator = Assert.IsType<Style>(
@@ -416,6 +576,97 @@ public sealed class WpfInteractionRegressionTests
                     _ => null);
                 Assert.NotNull(mappingFunctionDialog.Content);
 
+                MidoraProject bindingProject = new(480);
+                EventInstrument bindingInstrument = new(bindingProject)
+                {
+                    Name = "Binding Instrument",
+                    TemplateLengthTicks = 480
+                };
+                SubVoice bindingSubVoice = new(bindingProject) { Name = "Main" };
+                bindingInstrument.SubVoices.Add(bindingSubVoice);
+                for (int index = 1; index < 256; index++)
+                {
+                    bindingInstrument.SubVoices.Add(new SubVoice(bindingProject)
+                    {
+                        Name = $"SubVoice {index + 1}"
+                    });
+                }
+
+                bindingProject.EventInstruments.Add(bindingInstrument);
+                LogicalParameterEventBindingDialog bindingDialog = new(
+                    bindingInstrument,
+                    bindingSubVoice.Id);
+                Assert.NotNull(bindingDialog.Content);
+                Assert.Equal(
+                    MidiValueKind.ControlChange,
+                    Assert.IsType<ComboBox>(bindingDialog.FindName("KindBox")).SelectedItem);
+                ComboBox bindingControllerBox = Assert.IsType<ComboBox>(
+                    bindingDialog.FindName("ControllerBox"));
+                Assert.Same(MidiControlChangeCatalog.EditableControllers, bindingControllerBox.ItemsSource);
+                MidiControlChangeInfo selectedBindingController = Assert.IsType<MidiControlChangeInfo>(
+                    bindingControllerBox.SelectedItem);
+                Assert.Equal(11, selectedBindingController.Number);
+                Assert.Equal("11 - Expression (MSB)", selectedBindingController.DisplayName);
+                Assert.Equal(
+                    0,
+                    Assert.IsType<ComboBox>(bindingDialog.FindName("ScopeBox")).SelectedIndex);
+                Assert.Equal(
+                    LogicalParameterEventBindingOperation.Override,
+                    Assert.IsType<ComboBox>(bindingDialog.FindName("OperationBox")).SelectedItem);
+                Assert.False(string.IsNullOrWhiteSpace(
+                    Assert.IsType<TextBox>(bindingDialog.FindName("NameBox")).Text));
+                Assert.Equal(
+                    "0",
+                    Assert.IsType<TextBox>(bindingDialog.FindName("SourceMinimumBox")).Text);
+                Assert.Equal(
+                    "127",
+                    Assert.IsType<TextBox>(bindingDialog.FindName("SourceMaximumBox")).Text);
+                ComboBox conflictBox = Assert.IsType<ComboBox>(
+                    bindingDialog.FindName("ConflictBox"));
+                Assert.Same(comboItem, Assert.IsType<Style>(conflictBox.ItemContainerStyle).BasedOn);
+                ItemsControl subVoiceList = Assert.IsType<ItemsControl>(
+                    bindingDialog.FindName("SubVoiceList"));
+                Assert.IsNotAssignableFrom<Selector>(subVoiceList);
+                Assert.False(subVoiceList.IsEnabled);
+                Assert.True(VirtualizingPanel.GetIsVirtualizing(subVoiceList));
+                Assert.Equal(
+                    VirtualizationMode.Recycling,
+                    VirtualizingPanel.GetVirtualizationMode(subVoiceList));
+                Assert.True(ScrollViewer.GetCanContentScroll(subVoiceList));
+                Assert.True(subVoiceList.ApplyTemplate());
+                ScrollViewer subVoiceScrollViewer = Assert.IsType<ScrollViewer>(
+                    subVoiceList.Template.FindName("PART_ScrollViewer", subVoiceList));
+                Assert.Equal(
+                    Colors.Transparent,
+                    Assert.IsType<SolidColorBrush>(subVoiceScrollViewer.Background).Color);
+                Assert.IsType<ComboBox>(bindingDialog.FindName("ScopeBox")).SelectedIndex = 1;
+                Assert.True(subVoiceList.IsEnabled);
+                subVoiceList.Measure(new Size(320, 150));
+                subVoiceList.Arrange(new Rect(0, 0, 320, 150));
+                subVoiceList.UpdateLayout();
+                ItemsPresenter subVoiceItemsPresenter = Assert.IsType<ItemsPresenter>(
+                    subVoiceList.Template.FindName("PART_ItemsPresenter", subVoiceList));
+                subVoiceItemsPresenter.ApplyTemplate();
+                VirtualizingStackPanel subVoiceItemsPanel = Assert.IsType<VirtualizingStackPanel>(
+                    VisualTreeHelper.GetChild(subVoiceItemsPresenter, 0));
+                Assert.InRange(VisualTreeHelper.GetChildrenCount(subVoiceItemsPanel), 1, 64);
+                bindingDialog.Close();
+
+                MidoraProject emptyBindingProject = new(480);
+                EventInstrument emptyBindingInstrument = new(emptyBindingProject)
+                {
+                    Name = "Empty Binding Instrument",
+                    TemplateLengthTicks = 480
+                };
+                emptyBindingProject.EventInstruments.Add(emptyBindingInstrument);
+                LogicalParameterEventBindingDialog emptyBindingDialog = new(
+                    emptyBindingInstrument,
+                    currentSubVoiceId: null);
+                Assert.Equal(
+                    2,
+                    Assert.IsType<ComboBox>(emptyBindingDialog.FindName("ScopeBox")).SelectedIndex);
+                emptyBindingDialog.Close();
+
                 MouseWheelEventArgs closedWheel = new(Mouse.PrimaryDevice, 0, 120)
                 {
                     RoutedEvent = UIElement.PreviewMouseWheelEvent,
@@ -439,12 +690,489 @@ public sealed class WpfInteractionRegressionTests
                     Assert.IsType<System.Windows.Media.SolidColorBrush>(palette["Brush.Segment.PianoNote"]).Color);
                 Assert.IsType<System.Windows.Media.SolidColorBrush>(palette["Brush.PianoKey.White"]);
                 Assert.IsType<System.Windows.Media.SolidColorBrush>(palette["Brush.PianoKey.Black"]);
+                AssertSharedTaskProgressStyleResolvesInPropertiesBamlAndRealMainWindowOverlayMarkup(application);
+                TimelineGenerationDialogTests.VerifyThemeConstructionDraftAndValidation();
+                TimelineObjectListIntegrationTests.VerifyActualMainWindowTemplatesAndHandlers();
+                HostedWorkspaceLifecycleTests.VerifyLoadedTemplatesAndModalReturnTargets();
             }
             finally
             {
                 application.Shutdown();
             }
         });
+    }
+
+    [Fact]
+    public void ColdUndoRestoresSelectionInsideTheCoalescedWorkspaceRebuild()
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "Undo selection",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
+                EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
+                session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track", instrument.Id));
+                LogicalTrack track = Assert.Single(session.Project.Tracks);
+                session.Execute(ProjectDomainEditCommands.CreateSegment(track.Id, 0, 480));
+                Segment segment = Assert.Single(track.Segments);
+                session.Execute(ProjectDomainEditCommands.CreateLogicalNote(
+                    segment.Id,
+                    0,
+                    120,
+                    60,
+                    100));
+                LogicalNote note = Assert.Single(segment.Notes);
+                DrainDispatcher();
+
+                TimelineWorkspaceViewModel workspace = session.OpenSegment(segment.Id);
+                _ = session.OpenInstrument(instrument.Id);
+                workspace.Selection.Replace(note.Id);
+                session.RefreshWorkspaceSelection(workspace);
+                long projectTreeRefreshesBeforeMove = session.ProjectTreeRefreshCount;
+                long workspaceRebuildsBeforeMove = session.WorkspaceRebuildCount;
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.MoveLogicalNotes(
+                        segment.Id,
+                        [note.Id],
+                        24,
+                        0),
+                    workspace);
+                DrainDispatcher();
+
+                Assert.Equal(projectTreeRefreshesBeforeMove, session.ProjectTreeRefreshCount);
+                Assert.Equal(workspaceRebuildsBeforeMove + 2, session.WorkspaceRebuildCount);
+
+                workspace.Selection.Clear();
+                session.RefreshWorkspaceSelection(workspace);
+                long selectionRefreshesBeforeUndo = session.WorkspaceSelectionRefreshCount;
+                long passesBeforeUndo = session.ModelRefreshPassCount;
+
+                session.Undo();
+
+                Assert.Equal(selectionRefreshesBeforeUndo, session.WorkspaceSelectionRefreshCount);
+                Assert.Equal(passesBeforeUndo, session.ModelRefreshPassCount);
+                Assert.Empty(workspace.Selection.Ids);
+
+                DrainDispatcher();
+
+                Assert.Contains(note.Id, workspace.Selection.Ids);
+                Assert.Equal(passesBeforeUndo + 1, session.ModelRefreshPassCount);
+                Assert.Equal(selectionRefreshesBeforeUndo, session.WorkspaceSelectionRefreshCount);
+
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.MoveLogicalNotes(
+                        segment.Id,
+                        [note.Id],
+                        48,
+                        0),
+                    workspace);
+                DrainDispatcher();
+                Assert.Equal(2, session.WorkspaceSelectionHistoryStateCount);
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    [Fact]
+    public void SelectionHistoryCapturesThePostRebuildSelectionForRedo()
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "Post rebuild selection",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                session.Execute(ProjectDomainEditCommands.CreateEventInstrument("Instrument"));
+                EventInstrument instrument = Assert.Single(session.Project!.EventInstruments);
+                session.Execute(ProjectDomainEditCommands.CreateLogicalTrack("Track", instrument.Id));
+                LogicalTrack track = Assert.Single(session.Project.Tracks);
+                session.Execute(ProjectDomainEditCommands.CreateSegment(track.Id, 0, 480));
+                Segment segment = Assert.Single(track.Segments);
+                session.Execute(ProjectDomainEditCommands.CreateLogicalNote(
+                    segment.Id,
+                    0,
+                    120,
+                    60,
+                    100));
+                session.Execute(ProjectDomainEditCommands.CreateLogicalNote(
+                    segment.Id,
+                    120,
+                    120,
+                    70,
+                    100));
+                LogicalNote retained = segment.Notes[0];
+                LogicalNote discarded = segment.Notes[1];
+                DrainDispatcher();
+
+                TimelineWorkspaceViewModel workspace = session.OpenSegment(segment.Id);
+                workspace.Selection.Add(retained.Id, makePrimary: false);
+                workspace.Selection.Add(discarded.Id, makePrimary: true);
+                session.RefreshWorkspaceSelection(workspace);
+
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.TransposeLogicalNotes(
+                        segment.Id,
+                        [retained.Id, discarded.Id],
+                        semitones: 64),
+                    workspace);
+
+                // The WPF projection intentionally rebuilds at Render priority. The
+                // history bookmark for the new state must be captured after that
+                // rebuild has pruned the note deleted by the transform.
+                Assert.Contains(discarded.Id, workspace.Selection.Ids);
+                DrainDispatcher();
+                Assert.Equal([retained.Id], workspace.Selection.Ids);
+
+                session.Undo();
+                DrainDispatcher();
+                Assert.Equal([retained.Id, discarded.Id], workspace.Selection.Ids);
+                Assert.Equal(discarded.Id, workspace.Selection.Primary);
+
+                session.Redo();
+                DrainDispatcher();
+                Assert.Equal([retained.Id], workspace.Selection.Ids);
+                Assert.Equal(retained.Id, workspace.Selection.Primary);
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    [Fact]
+    public void SelectionHistoryRestoresEveryOpenWorkspaceBookmark()
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "All workspace selections",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                TestSelectionWorkspaceViewModel first = new();
+                TestSelectionWorkspaceViewModel second = new(WorkspaceKind.ProjectSettings);
+                session.Workspaces.Add(first);
+                session.Workspaces.Add(second);
+                MidoraId firstId = new(20_000_001);
+                MidoraId secondId = new(20_000_002);
+                first.Selection.Replace(firstId);
+                second.Selection.Replace(secondId);
+
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.CreateProjectMarker(120, "All workspaces"),
+                    first);
+                DrainDispatcher();
+                first.Selection.Clear();
+                second.Selection.Clear();
+
+                session.Undo();
+                DrainDispatcher();
+
+                Assert.Equal([firstId], first.Selection.Ids);
+                Assert.Equal([secondId], second.Selection.Ids);
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    [Fact]
+    public void SequentialEditsFlushPendingSelectionBookmarksBeforeTheNextEdit()
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "Sequential selection history",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                TestSelectionWorkspaceViewModel workspace = new();
+                session.Workspaces.Add(workspace);
+                MidoraId firstId = new(30_000_001);
+                MidoraId secondId = new(30_000_002);
+                MidoraId thirdId = new(30_000_003);
+                workspace.Selection.Replace(firstId);
+
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.CreateProjectMarker(120, "First"),
+                    workspace);
+                workspace.Selection.Replace(secondId);
+
+                // This second edit runs before the Render-priority callback for the
+                // first edit. It must synchronously finish the first bookmark rather
+                // than overwrite the pending state id.
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.CreateProjectMarker(240, "Second"),
+                    workspace);
+                workspace.Selection.Replace(thirdId);
+                DrainDispatcher();
+
+                session.Undo();
+                DrainDispatcher();
+                Assert.Equal([secondId], workspace.Selection.Ids);
+
+                session.Redo();
+                DrainDispatcher();
+                Assert.Equal([thirdId], workspace.Selection.Ids);
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    [Fact]
+    public void ColdUndoWithSixtyThousandSelectedIdsDoesNotResolveOnTheCallStack()
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "Large selection undo",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                TestSelectionWorkspaceViewModel workspace = new();
+                session.Workspaces.Add(workspace);
+                MidoraId[] ids = Enumerable.Range(0, 60_000)
+                    .Select(index => new MidoraId(1_000_000L + index))
+                    .ToArray();
+                workspace.Selection.ReplaceAll(ids, ids[0]);
+                session.RefreshWorkspaceSelection(workspace);
+                session.ExecutePreservingWorkspaceSelection(
+                    ProjectDomainEditCommands.CreateProjectMarker(120, "Undo target"),
+                    workspace);
+                DrainDispatcher();
+                workspace.Selection.Clear();
+                session.RefreshWorkspaceSelection(workspace);
+                long selectionRefreshesBeforeUndo = session.WorkspaceSelectionRefreshCount;
+
+                Stopwatch stopwatch = Stopwatch.StartNew();
+                session.Undo();
+                stopwatch.Stop();
+
+                Assert.True(
+                    stopwatch.Elapsed < TimeSpan.FromSeconds(1),
+                    $"Undo call stack took {stopwatch.Elapsed.TotalMilliseconds:F1} ms.");
+                Assert.Empty(workspace.Selection.Ids);
+                Assert.Equal(selectionRefreshesBeforeUndo, session.WorkspaceSelectionRefreshCount);
+
+                DrainDispatcher();
+
+                Assert.Equal(ids.Length, workspace.Selection.Ids.Count);
+                Assert.Equal(
+                    selectionRefreshesBeforeUndo + 1,
+                    session.WorkspaceSelectionRefreshCount);
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    [Fact]
+    public void LargeTimelineSelectionPublishesIdsImmediatelyThenRestoresFullMetrics()
+    {
+        RunOnSta(() =>
+        {
+            const int noteCount = 4_097;
+            using MidoraProject project = new(192);
+            MidiChannelRoot root = new(project) { Name = "Root" };
+            PureMidiTrack track = new(project) { Name = "Track" };
+            MidiSegment segment = new(project)
+            {
+                LengthTicks = noteCount * 4L + 4
+            };
+            DirectMidiNote[] notes = Enumerable.Range(0, noteCount)
+                .Select(index => new DirectMidiNote(project)
+                {
+                    StartTick = index * 4L,
+                    LengthTicks = 2,
+                    Key = index % 128,
+                    NoteOnVelocity = 1 + index % 127,
+                    NoteOnOrder = index * 2L,
+                    NoteOffOrder = index * 2L + 1
+                })
+                .ToArray();
+            segment.Notes.AddRange(notes);
+            track.Segments.Add(segment);
+            ProjectGraphConstruction.AddPureMidiTrack(
+                project,
+                root,
+                track,
+                addRoot: true);
+
+            TimelineWorkspaceViewModel workspace = new(
+                WorkspaceKey.ForObject(WorkspaceKind.SegmentEditor, segment.Id),
+                "MIDI Segment",
+                TimelineWorkspaceMode.Segment);
+            workspace.Rebuild(project, revision: 1);
+            MidoraId[] ids = notes.Select(static note => note.Id).ToArray();
+            workspace.Selection.ReplaceAll(ids, ids[0]);
+            TaskCompletionSource metricsPublished = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            workspace.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(WorkspaceViewModel.SelectionSnapshot)
+                    && workspace.SelectionSnapshot.TryGetMetrics(
+                        TimelineItemKind.DirectMidiNote,
+                        out TimelineSelectionMetrics noteMetrics)
+                    && noteMetrics.Count == noteCount
+                    && workspace.SelectionSnapshot.TryGetMetrics(
+                        TimelineItemKind.Velocity,
+                        out TimelineSelectionMetrics velocityMetrics)
+                    && velocityMetrics.Count == noteCount)
+                {
+                    metricsPublished.TrySetResult();
+                }
+            };
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            workspace.RefreshSelectionPresentation();
+            stopwatch.Stop();
+
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
+                $"Large selection refresh blocked for {stopwatch.Elapsed.TotalMilliseconds:F1} ms.");
+            Assert.Equal(noteCount, workspace.SelectionSnapshot.Count);
+            Assert.False(workspace.SelectionSnapshot.TryGetMetrics(
+                TimelineItemKind.DirectMidiNote,
+                out _));
+
+            PumpUntil(metricsPublished.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+
+            Assert.True(workspace.SelectionSnapshot.TryGetMetrics(
+                TimelineItemKind.DirectMidiNote,
+                out TimelineSelectionMetrics finalNoteMetrics));
+            Assert.Equal(noteCount, finalNoteMetrics.Count);
+            Assert.Equal(0, finalNoteMetrics.MinimumStartTick);
+            Assert.Equal((noteCount - 1) * 4L + 2, finalNoteMetrics.MaximumEndTick);
+            Assert.True(workspace.SelectionSnapshot.TryGetMetrics(
+                TimelineItemKind.Velocity,
+                out TimelineSelectionMetrics finalVelocityMetrics));
+            Assert.Equal(noteCount, finalVelocityMetrics.Count);
+        });
+    }
+
+    [Theory]
+    [InlineData(60_000)]
+    [InlineData(1_000_000)]
+    public void FirstEditBookmarksLargePersistentSelectionWithoutCopyingEveryId(int idCount)
+    {
+        RunOnSta(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(dispatcher));
+            DesktopSessionController session = new();
+            try
+            {
+                PumpUntil(session.CreateProjectAsync(new NewProjectCreationRequest
+                {
+                    ProjectName = "Persistent selection bookmark",
+                    PersistenceMode = NewProjectPersistenceMode.CreateUnsaved
+                }));
+                TestSelectionWorkspaceViewModel workspace = new();
+                session.Workspaces.Add(workspace);
+                CompressedMidoraIdSet ids = CompressedMidoraIdSet.Create(
+                    Enumerable.Range(0, idCount)
+                        .Select(static index => new MidoraId(10_000_000L + index)));
+                MidoraId primary = new(10_000_000);
+                workspace.Selection.AdoptMaterialized(ids, primary, primary);
+                session.RefreshWorkspaceSelection(workspace);
+                IProjectEditCommand command =
+                    ProjectDomainEditCommands.CreateProjectMarker(120, "Bookmark");
+
+                long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                Stopwatch stopwatch = Stopwatch.StartNew();
+                session.ExecutePreservingWorkspaceSelection(command, workspace);
+                stopwatch.Stop();
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+                Assert.True(
+                    stopwatch.Elapsed < TimeSpan.FromSeconds(2),
+                    $"Bookmarking {idCount:N0} selected IDs took {stopwatch.Elapsed.TotalMilliseconds:F1} ms.");
+                Assert.True(
+                    allocated < 1_000_000,
+                    $"Bookmarking {idCount:N0} selected IDs allocated {allocated:N0} UI-thread bytes.");
+                Assert.Same(ids, workspace.Selection.IdSet);
+
+                DrainDispatcher();
+            }
+            finally
+            {
+                PumpUntil(session.DisposeAsync().AsTask());
+            }
+        });
+    }
+
+    private sealed class TestSelectionWorkspaceViewModel(
+        WorkspaceKind kind = WorkspaceKind.EventInstrumentLibrary) : WorkspaceViewModel(
+        WorkspaceKey.ForType(kind),
+        "Selection Test")
+    {
+        public override void Rebuild(MidoraProject project, long revision)
+        {
+        }
+    }
+
+    [Fact]
+    public void DiagnosticsUseSingleItemWheelScrollingWithoutDisablingVirtualization()
+    {
+        XDocument document = XDocument.Load(Path.Combine(FindRepositoryRoot(),
+            "src", "midora-desktop", "Midora.Desktop", "MainWindow.xaml"));
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement list = document.Descendants(presentation + "ListBox")
+            .Single(element => (string?)element.Attribute(x + "Name") == "DiagnosticList");
+
+        Assert.Equal("OnDiagnosticListPreviewMouseWheel", (string?)list.Attribute("PreviewMouseWheel"));
+        Assert.Equal("True", (string?)list.Attribute("ScrollViewer.CanContentScroll"));
+        Assert.Equal("Item", (string?)list.Attribute("VirtualizingPanel.ScrollUnit"));
+        Assert.Equal("True", (string?)list.Attribute("VirtualizingPanel.IsVirtualizing"));
+        Assert.Equal("Recycling", (string?)list.Attribute("VirtualizingPanel.VirtualizationMode"));
+        Assert.Equal("OnDiagnosticDoubleClick", (string?)list.Attribute("MouseDoubleClick"));
     }
 
     [Fact]
@@ -717,7 +1445,7 @@ public sealed class WpfInteractionRegressionTests
     }
 
     [Fact]
-    public void SubVoiceLowerEditorsDisableTimeRangeSelectionAndSplitUsesOpticalSize()
+    public void AllSubVoiceEditorsDisableTimeRangeSelectionAndSplitUsesOpticalSize()
     {
         string path = Path.Combine(
             FindRepositoryRoot(),
@@ -728,7 +1456,7 @@ public sealed class WpfInteractionRegressionTests
         XDocument document = XDocument.Load(path);
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
 
-        foreach (string name in new[] { "SubVoiceVelocityTimeline", "SubVoiceEventTimeline" })
+        foreach (string name in new[] { "SubVoiceNoteTimeline", "SubVoiceVelocityTimeline", "SubVoiceEventTimeline" })
         {
             XElement timeline = document.Descendants().Single(element =>
                 string.Equals((string?)element.Attribute(x + "Name"), name, StringComparison.Ordinal));
@@ -746,7 +1474,7 @@ public sealed class WpfInteractionRegressionTests
         Assert.Equal("Center", (string?)splitIcon.Attribute("VerticalAlignment"));
 
         XElement subVoiceLowerEditor = document.Descendants().Single(element =>
-            element.Name.LocalName == "TabControl"
+            element.Name.LocalName == "LaneTabHost"
             && ((string?)element.Attribute("SelectedIndex"))?.Contains(
                 "ActiveLowerEditorIndex",
                 StringComparison.Ordinal) == true);
@@ -903,12 +1631,12 @@ public sealed class WpfInteractionRegressionTests
         XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 
         Assert.Equal(
-            "pack://application:,,,/Assets/midora.ico",
+            "pack://application:,,,/Midora;component/Assets/midora.ico",
             (string?)windowDocument.Root?.Attribute("Icon"));
         XElement applicationMark = windowDocument.Descendants(presentation + "Image").Single(element =>
             string.Equals(
                 (string?)element.Attribute("Source"),
-                "pack://application:,,,/Assets/midora-note-transparent-256x256.png",
+            "pack://application:,,,/Midora;component/Assets/midora-note-transparent-256x256.png",
                 StringComparison.Ordinal)
             && string.Equals(
                 (string?)element.Attribute("Grid.Column"),
@@ -1196,7 +1924,11 @@ public sealed class WpfInteractionRegressionTests
                 StringComparison.Ordinal))
             .ToArray();
 
-        Assert.Equal(4, snapButtons.Length);
+        Assert.Equal(2, snapButtons.Length); // Piano/Arrangement template buttons.
+        XDocument header = XDocument.Load(Path.Combine(Path.GetDirectoryName(path)!, "LaneTabHeader.xaml"));
+        snapButtons = snapButtons.Concat(header.Descendants(presentation + "ToggleButton")
+            .Where(element => (string?)element.Attribute("Content") == "Snap")).ToArray();
+        Assert.Equal(3, snapButtons.Length); // One shared header serves all event hosts.
         Assert.All(snapButtons, button => Assert.Equal(
             "Enable/Disable Snap (A)",
             (string?)button.Attribute("ToolTip")));

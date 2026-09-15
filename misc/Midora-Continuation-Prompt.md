@@ -202,7 +202,7 @@ Project Source Data
 
    - SMF Type 1 导出与 SMF Format 0/1 导入的 Tempo/Time Signature/Bank/Program/UTF-8/Running Status/EOT/Track 拓扑规则见 AGENTS.md 与 SRS 第 23 章。
    - Logical Channel 10 必须 melodic；Pure MIDI Root 使用显式 Melodic/Percussion mode。仅 Logical Channel 10 与 Melodic Pure MIDI Channel 10 MTrk 在 tick 0 写 GS→XG Normal Part SysEx，不发送 Reset。
-   - 单 delta 超过 0x0FFFFFFF 时结构化失败，不插入 Meta spacer。
+   - 2026-09-10 已定案、代码待实施：单 delta 超过 `0x0FFFFFFF` 时仅在 SMF 编码插入空 Text Meta `FF 01 00`，不修改 canonical、不加编译扫描。MTrk 数据区最多 `0xFFFFFFFF` 字节（不含 8 字节头），不拆分，超限仅导出失败。详见 SRS §14.12.2/8/9、INV-118 和 `misc/Midora-SMF-Export-Timing-Padding-and-Size-Limits-Architecture-Decisions.md`；旧严格 delta 拒绝测试不代表新规则已完成。
 
 9. 持久化：
 
@@ -440,7 +440,7 @@ D:\Programing\midora\misc\Midora-Non-UI-Decision-Question-Library.md
 十二、构建、测试和 Git 规则
 ================================================================
 
-1. 仓库固定 .NET SDK 10.0.302；使用 locked restore。缺少固定 SDK/包时报告真实环境问题，不静默换版本。
+1. 仓库固定 .NET SDK 10.0.400；使用 locked restore。缺少固定 SDK/包时报告真实环境问题，不静默换版本。
 
 2. 各 solution 共享跨目录 ProjectReference 和 obj/Release。构建必须串行，避免 CS2012 文件锁；不要并行 build 六个 solution。
 

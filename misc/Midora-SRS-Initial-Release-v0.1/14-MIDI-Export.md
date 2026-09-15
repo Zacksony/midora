@@ -19,7 +19,7 @@ MIDI 导出系统不得为了性能绕过编译系统。
 MIDI 导出系统可以在 compiled result 之上构建：
 ```text
 MIDI 文件结构
-MIDI Track 拆分
+按冻结 SMF Track Projection 组织 MIDI Track（不得因 MTrk 字节超限再拆分）
 Port / Device / Track Name 信息
 Readme 信息
 文件命名
@@ -609,11 +609,22 @@ Note Off velocity = 0
 Note On velocity = 0 不作为普通 Note On 输出。
 ### 14.12.2 Absolute tick 到 delta time
 `canonical compiled result` 内部事件以绝对 tick 表示。
-导出阶段按每条 MIDI Track 内事件顺序转换为：
+导出阶段先按导出范围起点重基，再按每条 MIDI Track 内的最终编码顺序转换为：
 ```text
 delta time
 ```
-delta time 必须非负。
+每个实际写入 SMF 的 delta time 必须位于 `0..0x0FFFFFFF`（四字节 VLQ，最大 268,435,455）。该限制不是 Project/canonical 的绝对 Tick、总时长、Note Gate 或相邻事件间隔上限。
+
+对于相邻输出事件之间大于该上限的非负间隔，导出器必须插入零长度 Text Meta `FF 01 00`，将其分成可编码的 delta；原事件的绝对位置、同 tick 相对顺序、payload 与 Track 归属保持不变。具体规则：
+
+- 每个 MTrk 独立处理，包括 Conductor、Pure MIDI 和 Logical Unit Track；覆盖首个事件之前、事件之间，以及最后一个事件到 EOT 的间隔。不能借其他 Track 的事件替本 Track 累计时间。
+- 设间隔为 `D`、上限为 `M = 0x0FFFFFFF`。`D=0` 不插入；`D>0` 时插入 `N = floor((D-1)/M)` 个占位事件，每个前置 delta 固定为 `M`，原事件前置 delta 为 `D-N×M`。因此 `D=M` 不插入，`D=2M` 只插入一个，不能额外生成零间隔占位。
+- 占位只存在于 SMF 编码产物，不写回源 Project，不进入 canonical、编译诊断/统计、fingerprint、增量编译 dirty range、播放、预览或音频渲染。不得为了该策略增加全量或增量编译的事件间隔扫描。
+- 不得用 Note、CC、Tempo、Port、Track Name、EOT 或其他有状态/结构含义的事件充当占位，也不得改变 TPQ、移动原事件、提前 EOT、缩短 Gate 或删减内容来规避上限。
+- 这是 **delta-time 编码** 的特例，不适用于 Meta/SysEx 的 payload 长度 VLQ；后者超限仍严格失败，见 §14.12.8。
+- 插入前必须按 §14.12.9 检查占位成本及当前 MTrk 字节预算；若因此超限，导出失败，不能无限填充，也不能拆分 MTrk。
+
+成功填充产生导出级汇总 Info，按 §14.15.7 展示。第三方编辑器可能显示这些空文本；重新导入时仍按合法 opaque Meta 的既有保留规则处理，不能把所有空 Text Meta 当作 Midora 占位而删除，也不新增隐藏私有识别协议。
 ### 14.12.3 Bank Select 与 Program Change
 同 tick 下：
 ```text
@@ -673,6 +684,34 @@ Track Name / MIDI Port / Midora Pure MIDI 结构 Meta
 ```
 
 Pure MIDI canonical 中显式存在的 CC91/CC93 必须继续按冻结 tick/order 原样写出；若也位于相对 tick 0，则它们在系统零值初始化后生效。导出器不得借此删除、覆盖或折叠用户事件。Event Instrument/SubVoice canonical 仍服从第 14.12.5 节的禁止规则。
+
+### 14.12.8 SMF 硬限制与检查归属
+
+以下限制必须明确拒绝，不能通过占位、截断、取模、clamp、拆分记录/Track 或改变原事件语义绕过：
+
+| 对象 | 限制 | 检查归属 |
+| --- | --- | --- |
+| TPQ division | `1..32767`；不改为 SMPTE、不自动降低 TPQ | 保持 Project/语义验证的既有约束，导出再次防御检查 |
+| Tempo | 按 §14.9.1 十进制计算并仅一次 AwayFromZero 后，microseconds-per-quarter-note 必须为 `1..0xFFFFFF` | 保持语义验证，导出再次防御检查；不能夹到端点 |
+| Channel Event 与已解释 Meta | 保持各正式类型的值域、固定 payload 长度、拍号/调号及 TPQ 组合约束 | 保持既有语义/结构验证；编码阶段发现仍为 Error，不改变 opaque 未知事件的保留边界 |
+| 单个 Meta/SysEx 记录的 payload | 长度 VLQ 为 `0..0x0FFFFFFF` 字节，且仍需满足该类型的结构约束；SysEx 按线格式 length 字段实际覆盖的字节计数 | 导出编码硬检查；不拆记录，不把长度超限误报为 delta 超限 |
+| 单个 SMF 的 MTrk 数量 | `1..65535`，包含 Conductor 和全部实际输出的 Track | 只属于导出；写入文件前检查，不合并或删除 Track |
+| 单个 MTrk 数据区 | 最多 `0xFFFFFFFF = 4,294,967,295` 字节，即 **4 GiB − 1 byte** | **只属于 MIDI 导出，不作为编译错误或编译预检条件**；按 §14.12.9 检查 |
+
+MTrk 数据区包括全部 delta、状态/事件字节、结构与初始化 Meta/SysEx、占位事件和最终 EOT；不包括该 chunk 自身的 4 字节 `MTrk` 标识和 4 字节 length 字段。这不是整个 `.mid` 文件的 4 GiB 上限：由多个合法 MTrk 组成的文件可以更大，但仍受文件系统、空间和实现中明确检查的安全计数边界约束。
+
+**MTrk 不因大小而拆分**：Pure MIDI 仍一用户 Track 一个 MTrk，Logical/Event Instrument 仍一实际 Unit 一个 MTrk，Conductor 仍一个 MTrk。任意 MTrk 超限时，本次 MIDI 导出按原有原子事务整体失败，不自动拆成多个 Track/文件、不改为其他格式、不发布截断产物。既有由用户显式选择的导出模式不受改变，但不得作为超限后的静默 fallback。
+
+编译不计算 MTrk 编码大小，不因其超限改变成功判定、canonical 或 Full/Incremental 结果。Project 音乐语义、Int64 Tick 算术及消费者各自的既有资源限制仍独立成立；SMF 导出失败不使原本合法的播放/音频渲染变为失败。
+
+### 14.12.9 有界编码、取消与失败原子性
+
+- 编码器必须在写入下一个事件/占位批次之前检查精确字节增量与当前 Track 剩余预算；EOT 本身及其 delta 也计入，不能写完整个超大 MTrk 后才检查 `uint` 长度，更不能在长度字段回填时截断高位。未确认事件枚举结束时，不能把尚未读取的剩余时间视作 EOT 前空白，避免重复计费或误报超限。
+- 对可由冻结 descriptor 或当前间隔直接证明不可能装入合法 MTrk 的情形应立即失败。一次超长间隔的占位成本用整数算术计算，不得先循环构造或写出巨量占位才发现失败；不要求为此在编译阶段或导出前额外遍历完整 canonical。
+- Track 累计字节、文件位置、占位数量/增量、Tick 差与累计必须使用可安全表示的计数并在运算前防溢出。接近 Int64 Tick 上界的合法输入不能引起回绕、无界分配或失控写盘；若填充最低成本已超 MTrk 上限，直接报告 MTrk 大小 Error。
+- 正常与超长间隔路径共用有界流式写入、进度和取消；不把整条 Track 或全部占位物化到内存，也不让巨大占位循环长时间不检查取消。具体表示允许优化，但输出字节、原事件顺序和失败边界必须等价。
+- 分页、非分页、延迟枚举写入路径均须把编码硬限制失败归为可读的导出编码 Error，指出目标文件、Track 和超限项；有来源时附带来源。不得只显示笼统的 staging 文件写入失败或使异常越过 UI 边界。
+- 任意编码、校验、写入失败或取消均不发布本任务的 partial 文件，保留原有目标和 Project/canonical；临时输出清理及多文件发布遵循 §14.1.4、§14.18。
 ---
 ## 14.13 同 tick 排序与编码优化边界
 ### 14.13.1 状态恢复事件与用户事件
@@ -811,6 +850,10 @@ Error 导致导出失败时：
 ```text
 不生成成功 Readme。
 ```
+Readme 的 Diagnostics 区按本次冻结编译结果的既有确定顺序，合计最多列出前 **1000 条 Warning / Info**。不按严重程度重排，也不聚合重复诊断。超过时在正文前明确显示准确总数、已展示数和省略数，并提示到 Midora 查看完整诊断；上述计数使用 Int64。无诊断、恰好 1000 条及更少时不得误报省略。
+
+这个上限仅限制 README 文本；正式编译诊断仍完整保留，Error / Warning-as-error 判定使用全部诊断。准备、冻结和写入不得先展开整份超大报告再截断；允许保留有界文本前缀及精确总数。取消、编码或文件写入失败仍服从原有原子输出事务。
+
 ### 14.15.5 Readme 不影响 MIDI 语义
 Readme 是辅助说明。
 规则：
@@ -822,6 +865,12 @@ Readme 不用于还原路由语义。
 ### 14.15.6 文件哈希
 初版不要求 Readme 记录文件哈希。
 文件哈希可作为未来增强。
+
+### 14.15.7 超长间隔填充摘要
+
+若本次成功导出插入了 §14.12.2 的占位 Text Meta，README 必须在独立的兼容性摘要中记录：新增占位事件总数、涉及的 MTrk 数和输出文件数，并说明它们只用于编码超长 delta、原事件 Tick 与音乐数据未改变。只写汇总，不列出每个占位或间隔，不生成与占位数等长的诊断集合。
+
+该摘要属于导出级 Info，不受 Warning-as-error 阻止，也不挤占 §14.15.4 的前 1000 条编译诊断展示名额；它不得改写 canonical 的诊断总数或 `Notes` 数。未插入时不显示多余提示。README 关闭时，导出结果摘要仍须提供这项汇总；导出失败不生成成功 README。
 ---
 ## 14.16 MIDI 导出任务参数
 ### 14.16.1 归属
@@ -993,7 +1042,7 @@ MIDI 编码完成后需要基本自校验。
 文件头
 Track 数
 MThd 声明的 Track 数必须可由 unsigned 16-bit `ntrks` 表示；超出时任务在写文件前失败
-delta time 非负
+每个 delta time 在 0..0x0FFFFFFF 内；占位与原事件累计 Tick 不溢出，且原事件和 EOT 位置不变
 事件可编码
 每个 Track 恰有一个合法 End Of Track
 Conductor/Logical Unit EOT 与统一 endTick 一致，Pure MIDI EOT 与冻结 descriptor 一致
@@ -1001,7 +1050,7 @@ Conductor/Logical Unit EOT 与统一 endTick 一致，Pure MIDI EOT 与冻结 de
 每个事件 Track 的全部 Channel Event 使用同一个 Channel
 Logical/Event Instrument 同一实际 Unit 只对应一个事件 Track
 每个 Pure MIDI ExportTrackId 恰对应一个 MTrk；共享 Root Unit 的多个 MTrk 保持独立
-声明的 Track chunk 长度与实际字节一致
+每个 Track 数据区不超过 0xFFFFFFFF 字节，声明的 chunk 长度与实际字节一致，且未按大小拆分 Track
 文件末尾不存在未声明字节
 ```
 具体校验项实现设计阶段定义。
@@ -1017,6 +1066,7 @@ Logical/Event Instrument 同一实际 Unit 只对应一个事件 Track
 生成文件数量
 导出范围
 是否生成 Readme
+超长间隔填充汇总（仅实际发生时）
 ```
 导出成功后不自动打开输出文件夹。
 可提供按钮让用户打开。
@@ -1093,6 +1143,12 @@ MIDI 导出失败属于导出流程诊断。
 与失败导出上下文相关的无效缓存可丢弃。
 ```
 导出失败后，用户可在诊断面板查看编译 / 编码 / 文件写入错误。
+
+### 14.19.8 SMF 边界诊断
+
+满足 §14.12.2 填充规则且字节预算可容纳的超长 delta 不产生 Error/Warning，只产生汇总 Info。MTrk 大小、MTrk 数量、单条 payload 编码超限等必须是明确的导出编码 Error，不是“编译失败”或普通文件 I/O 错误。信息至少说明限制名称、上限、实际值或已经足以证明超限的字节下界，以及可用的文件/Track/事件位置；不能为了报告完整预计大小而继续扫描已确定失败的整条 Track。
+
+错误归属必须贯穿立即编码与分页延迟写入两条路径。语义验证已拒绝的非法 TPQ、Tempo、事件值等仍为原编译/语义诊断，不因这次文件编码兼容而放宽。具体诊断代码由实施时统一定义，不得把异常类名或堆栈作为用户唯一说明。
 ---
 ## 14.20 缓存、确定性与进度
 ### 14.20.1 编码缓存

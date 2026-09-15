@@ -256,6 +256,14 @@ public static class SemanticValidator
         {
             AddError("MIDORA1210", "The Event Instrument Root Note or Template Length is invalid.", source, diagnostics);
         }
+        if (instrument.PreRollTicks < 0 || instrument.PreRollTicks > instrument.TemplateLengthTicks)
+        {
+            AddError(
+                "MIDORA1217",
+                "Event Instrument Pre-Roll Ticks must be between zero and Template Length Ticks.",
+                source,
+                diagnostics);
+        }
         if (instrument.SubVoices.Count is < 1 or > 256)
         {
             AddError("MIDORA1211", "An Event Instrument must contain 1–256 SubVoices.", source, diagnostics);
@@ -342,7 +350,7 @@ public static class SemanticValidator
                     AddError("MIDORA1223", "Bank and Program do not support Curves.", curveSource, diagnostics);
                 }
                 long previous = -1;
-                foreach (CurvePoint point in curve.Points.OrderBy(point => point.Tick))
+                foreach (CurvePointSnapshotValue point in curve.Points.CreateQuerySnapshot().EnumerateAll().OrderBy(point => point.Tick))
                 {
                     if (point.Tick < 0 || point.Tick >= instrument.TemplateLengthTicks
                         || point.Tick == previous || !double.IsFinite(point.Value)
@@ -418,7 +426,7 @@ public static class SemanticValidator
                     subSource,
                     diagnostics);
             }
-            foreach (TemplateEvent templateEvent in subVoice.Events)
+            foreach (TemplateEventSnapshotValue templateEvent in subVoice.Events.CreateQuerySnapshot().EnumerateAll())
             {
                 ValidateTemplateEvent(templateEvent, instrument.TemplateLengthTicks, subSource, diagnostics);
                 if (TemplateEventMappingTarget.Enumerate(templateEvent)
@@ -499,7 +507,7 @@ public static class SemanticValidator
         }
     }
 
-    private static void ValidateTemplateEvent(TemplateEvent value, long templateLength, SourceReference source, List<CompilerDiagnostic> diagnostics)
+    private static void ValidateTemplateEvent(TemplateEventSnapshotValue value, long templateLength, SourceReference source, List<CompilerDiagnostic> diagnostics)
     {
         SourceReference eventSource = source with { SourceEventId = value.Id, Tick = value.Tick };
         if (!Enum.IsDefined(value.Kind))
@@ -949,7 +957,7 @@ public static class SemanticValidator
                     }
                     long prior = -1;
                     parameters.TryGetValue(lane.ParameterId, out LogicalParameterDefinition? definition);
-                    foreach (CurvePoint point in lane.Points.OrderBy(point => point.Tick))
+                    foreach (CurvePointSnapshotValue point in lane.Points.CreateQuerySnapshot().EnumerateAll().OrderBy(point => point.Tick))
                     {
                         if (point.Tick < 0 || point.Tick == prior || !double.IsFinite(point.Value)
                             || !Enum.IsDefined(point.Interpolation))
@@ -984,7 +992,7 @@ public static class SemanticValidator
                         prior = point.Tick;
                     }
                 }
-                foreach (LogicalNote note in segment.Notes)
+                foreach (LogicalNoteSnapshotValue note in segment.Notes.CreateQuerySnapshot().EnumerateAll())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     SourceReference noteSource = segmentSource with
@@ -999,6 +1007,20 @@ public static class SemanticValidator
                         || note.StartTick > long.MaxValue - Math.Max(note.LengthTicks, 0))
                     {
                         AddError("MIDORA1320", "The Logical Note position, length, note, or velocity is invalid, or its time range exceeds Int64.", noteSource, diagnostics);
+                    }
+                    if (boundInstrument is not null
+                        && boundInstrument.PreRollTicks is >= 0
+                        && boundInstrument.PreRollTicks <= boundInstrument.TemplateLengthTicks
+                        && contentRangeRepresentable
+                        && note.StartTick >= segment.ContentOffsetTick
+                        && note.StartTick < segment.ContentOffsetTick + segment.LengthTicks
+                        && note.StartTick - segment.ContentOffsetTick < boundInstrument.PreRollTicks)
+                    {
+                        AddError(
+                            "MIDORA1321",
+                            "The Logical Note does not leave enough active Segment content before its anchor for the Event Instrument Pre-Roll.",
+                            noteSource,
+                            diagnostics);
                     }
                 }
             }
@@ -1069,7 +1091,7 @@ public static class SemanticValidator
                     Add(mapping.Steps.Id, voiceSource);
                     foreach (ValueMappingStep step in mapping.Steps) Add(step.Id, voiceSource);
                 }
-                foreach (TemplateEvent value in voice.Events)
+                foreach (TemplateEventSnapshotValue value in voice.Events.CreateQuerySnapshot().EnumerateAll())
                 {
                     SourceReference eventSource = voiceSource with { SourceEventId = value.Id, Tick = value.Tick };
                     Add(value.Id, eventSource);
@@ -1077,7 +1099,7 @@ public static class SemanticValidator
                 foreach (ValueCurve curve in voice.Curves)
                 {
                     Add(curve.Id, voiceSource);
-                    foreach (CurvePoint point in curve.Points) Add(point.Id, voiceSource with { Tick = point.Tick });
+                    foreach (CurvePointSnapshotValue point in curve.Points.CreateQuerySnapshot().EnumerateAll()) Add(point.Id, voiceSource with { Tick = point.Tick });
                 }
             }
         }
@@ -1105,7 +1127,7 @@ public static class SemanticValidator
                 cancellationToken.ThrowIfCancellationRequested();
                 SourceReference segmentSource = trackSource with { SegmentId = segment.Id, Tick = segment.ProjectStartTick };
                 Add(segment.Id, segmentSource);
-                foreach (LogicalNote note in segment.Notes)
+                foreach (LogicalNoteSnapshotValue note in segment.Notes.CreateQuerySnapshot().EnumerateAll())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     Add(note.Id, segmentSource with { LogicalNoteId = note.Id });
@@ -1113,7 +1135,7 @@ public static class SemanticValidator
                 foreach (LogicalParameterLane lane in segment.ParameterLanes)
                 {
                     Add(lane.Id, segmentSource);
-                    foreach (CurvePoint point in lane.Points) Add(point.Id, segmentSource with { Tick = point.Tick });
+                    foreach (CurvePointSnapshotValue point in lane.Points.CreateQuerySnapshot().EnumerateAll()) Add(point.Id, segmentSource with { Tick = point.Tick });
                 }
             }
         }
@@ -1152,10 +1174,7 @@ public static class SemanticValidator
                     Tick = segment.ProjectStartTick
                 };
                 Add(segment.Id, segmentSource);
-                IEnumerable<DirectMidiNote> stableIdNotes = segment.UsesPagedContent
-                    ? segment.Notes.EditedItems
-                    : segment.Notes;
-                foreach (DirectMidiNote note in stableIdNotes)
+                foreach (DirectMidiNoteValue note in segment.Notes.EditedValues)
                 {
                     Add(note.Id, segmentSource with
                     {
@@ -1164,10 +1183,8 @@ public static class SemanticValidator
                         Origin = SourceOrigin.DirectMidiNote
                     });
                 }
-                IEnumerable<DirectMidiChannelEvent> stableIdChannelEvents = segment.UsesPagedContent
-                    ? segment.ChannelEvents.EditedItems
-                    : segment.ChannelEvents;
-                foreach (DirectMidiChannelEvent directEvent in stableIdChannelEvents)
+                foreach (DirectMidiChannelEventValue directEvent in
+                    segment.ChannelEvents.EditedValues)
                 {
                     Add(directEvent.Id, segmentSource with
                     {
@@ -1176,10 +1193,7 @@ public static class SemanticValidator
                         Origin = SourceOrigin.DirectMidiChannelEvent
                     });
                 }
-                IEnumerable<OpaqueMidiEvent> stableIdOpaqueEvents = segment.UsesPagedContent
-                    ? segment.OpaqueEvents.EditedItems
-                    : segment.OpaqueEvents;
-                foreach (OpaqueMidiEvent opaque in stableIdOpaqueEvents)
+                foreach (OpaqueMidiEventValue opaque in segment.OpaqueEvents.EditedValues)
                 {
                     Add(opaque.Id, segmentSource with
                     {
@@ -1439,10 +1453,7 @@ public static class SemanticValidator
                 {
                     previousEndTick = segment.ProjectStartTick + segment.LengthTicks;
                 }
-                IEnumerable<DirectMidiNote> notesToValidate = segment.UsesPagedContent
-                    ? segment.Notes.EditedItems
-                    : segment.Notes;
-                foreach (DirectMidiNote note in notesToValidate)
+                foreach (DirectMidiNoteValue note in segment.Notes.EditedValues)
                 {
                     if (note.StartTick < 0
                         || note.LengthTicks <= 0
@@ -1465,10 +1476,8 @@ public static class SemanticValidator
                             diagnostics);
                     }
                 }
-                IEnumerable<DirectMidiChannelEvent> channelEventsToValidate = segment.UsesPagedContent
-                    ? segment.ChannelEvents.EditedItems
-                    : segment.ChannelEvents;
-                foreach (DirectMidiChannelEvent directEvent in channelEventsToValidate)
+                foreach (DirectMidiChannelEventValue directEvent in
+                    segment.ChannelEvents.EditedValues)
                 {
                     bool oneByte = directEvent.Kind is DirectMidiChannelEventKind.ProgramChange
                         or DirectMidiChannelEventKind.ChannelPressure;
@@ -1491,16 +1500,12 @@ public static class SemanticValidator
                             diagnostics);
                     }
                 }
-                IEnumerable<OpaqueMidiEvent> opaqueEventsToValidate = segment.UsesPagedContent
-                    ? segment.OpaqueEvents.EditedItems
-                    : segment.OpaqueEvents;
-                foreach (OpaqueMidiEvent opaque in opaqueEventsToValidate)
+                foreach (OpaqueMidiEventValue opaque in segment.OpaqueEvents.EditedValues)
                 {
                     if (opaque.Tick < 0
                         || !Enum.IsDefined(opaque.Kind)
                         || opaque.Kind == OpaqueMidiEventKind.Meta
                             && opaque.MetaType == 0x2f
-                        || opaque.Payload is null
                         || opaque.Order < 0)
                     {
                         AddError(

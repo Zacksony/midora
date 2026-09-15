@@ -78,6 +78,12 @@ public sealed class MidiImportPortMappingRequiredException : IOException
 public static partial class MidiProjectImportService
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly Encoding StrictWindows31J =
+        CodePagesEncodingProvider.Instance.GetEncoding(
+            932,
+            EncoderFallback.ExceptionFallback,
+            DecoderFallback.ExceptionFallback)
+        ?? throw new InvalidOperationException("Windows-31J encoding is unavailable.");
     private static ReadOnlySpan<byte> RolandGsChannel10NormalPart =>
         [0x41, 0x10, 0x42, 0x12, 0x40, 0x10, 0x15, 0x00, 0x1b, 0xf7];
     private static ReadOnlySpan<byte> YamahaXgChannel10NormalPart =>
@@ -96,7 +102,7 @@ public static partial class MidiProjectImportService
         List<MidiProjectImportDiagnostic> diagnostics = [];
         TrackScan[] scans = NormalizeMidoraMetadata(
             parsed.Tracks.Select(ScanTrack).ToArray());
-        AddInvalidTrackNameDiagnostic(scans, diagnostics);
+        AddTrackNameEncodingDiagnostics(scans, diagnostics);
         byte[] sourcePorts = scans
             .SelectMany(value => value.ChannelEvents.Select(item => item.SourcePort)
                 .Concat(value.OpaqueEvents.Select(item => item.SourcePort))
@@ -192,6 +198,7 @@ public static partial class MidiProjectImportService
         Dictionary<int, int> bucketCountBySourceTrack = orderedBuckets
             .GroupBy(value => value.Key.SourceTrackIndex)
             .ToDictionary(value => value.Key, value => value.Count());
+        int pureMidiTrackOrdinal = 0;
         foreach (ImportBucket bucket in orderedBuckets)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -231,8 +238,11 @@ public static partial class MidiProjectImportService
             PureMidiTrack track = new(project)
             {
                 Name = name,
-                MidiChannelRootId = root.Id
+                MidiChannelRootId = root.Id,
+                Color = ProjectTrackColorPolicy.ColorForPureMidiTrackOrdinal(
+                    pureMidiTrackOrdinal)
             };
+            pureMidiTrackOrdinal = checked(pureMidiTrackOrdinal + 1);
             project.PureMidiTracks.Add(track);
             project.ArrangementTracks.Add(new(
                 ArrangementTrackKind.PureMidiTrack,
@@ -296,6 +306,8 @@ public static partial class MidiProjectImportService
     {
         byte port = 0;
         string trackName = string.Empty;
+        int windows31JTrackNameCount = 0;
+        int? firstWindows31JTrackNameByteOffset = null;
         int invalidTrackNameCount = 0;
         int? firstInvalidTrackNameByteOffset = null;
         List<ScannedChannelEvent> channel = [];
@@ -318,8 +330,16 @@ public static partial class MidiProjectImportService
             if (value.Kind == StandardMidiFileEventKind.Meta
                 && value.Type == StandardMidiFile.TrackNameMetaType)
             {
-                if (TryDecodeUtf8(value.Data.Span, out string decodedTrackName))
+                if (TryDecodeImportedText(
+                        value.Data.Span,
+                        out string decodedTrackName,
+                        out ImportedTextEncoding encoding))
                 {
+                    if (encoding == ImportedTextEncoding.Windows31J)
+                    {
+                        windows31JTrackNameCount++;
+                        firstWindows31JTrackNameByteOffset ??= value.SourceByteOffset;
+                    }
                     string normalizedTrackName = decodedTrackName.Trim();
                     if (normalizedTrackName.Length != 0)
                     {
@@ -363,14 +383,33 @@ public static partial class MidiProjectImportService
             conductor,
             midoraMetadataCandidates,
             MidoraMetadata: null,
+            windows31JTrackNameCount,
+            firstWindows31JTrackNameByteOffset,
             invalidTrackNameCount,
             firstInvalidTrackNameByteOffset);
     }
 
-    private static void AddInvalidTrackNameDiagnostic(
+    private static void AddTrackNameEncodingDiagnostics(
         IReadOnlyList<TrackScan> scans,
         ICollection<MidiProjectImportDiagnostic> diagnostics)
     {
+        TrackScan[] decodedWindows31J = scans
+            .Where(value => value.Windows31JTrackNameCount != 0)
+            .OrderBy(value => value.Track.SourceTrackIndex)
+            .ToArray();
+        if (decodedWindows31J.Length != 0)
+        {
+            TrackScan firstDecoded = decodedWindows31J[0];
+            diagnostics.Add(new(
+                "MIDORA-MIDI-IMPORT-WINDOWS-31J-TRACK-NAME",
+                DiagnosticSeverity.Info,
+                $"Decoded {decodedWindows31J.Sum(value => value.Windows31JTrackNameCount)} "
+                + $"non-UTF-8 Track Name Meta event(s) from {decodedWindows31J.Length} "
+                + "source MTrk(s) as Windows-31J (code page 932).",
+                firstDecoded.Track.SourceTrackIndex,
+                firstDecoded.FirstWindows31JTrackNameByteOffset));
+        }
+
         TrackScan[] affected = scans
             .Where(value => value.InvalidTrackNameCount != 0)
             .OrderBy(value => value.Track.SourceTrackIndex)
@@ -386,6 +425,7 @@ public static partial class MidiProjectImportService
             "MIDORA-MIDI-IMPORT-INVALID-TRACK-NAME",
             DiagnosticSeverity.Info,
             $"Discarded {count} Track Name Meta event(s) from {affected.Length} source MTrk(s) because the payload was not strict UTF-8. "
+            + "The payload also could not be decoded as Windows-31J. "
             + "A remaining valid name was used when available; otherwise a deterministic fallback name was assigned.",
             first.Track.SourceTrackIndex,
             first.FirstInvalidTrackNameByteOffset));
@@ -579,6 +619,10 @@ public static partial class MidiProjectImportService
         int conflictingKeySignatureDuplicateCount = 0;
         HashSet<long> keySignatureDuplicateTicks = [];
         ImportedConductorDuplicate? firstKeySignatureDuplicate = null;
+        int windows31JMarkerCount = 0;
+        ImportedTextLocation? firstWindows31JMarker = null;
+        int invalidMarkerCount = 0;
+        ImportedTextLocation? firstInvalidMarker = null;
         foreach (TrackScan scan in scans.OrderBy(value => value.Track.SourceTrackIndex))
         {
             foreach (ParsedStandardMidiFileEvent value in scan.ConductorEvents
@@ -680,10 +724,14 @@ public static partial class MidiProjectImportService
                         keySignaturesByTick[value.Tick] = importedKeySignature;
                         break;
                     case StandardMidiFile.MarkerMetaType:
-                        project.Conductor.Markers.Add(new(
+                        ImportMarker(
                             project,
-                            value.Tick,
-                            DecodeUtf8(value, scan.Track.SourceTrackIndex, "Marker")));
+                            value,
+                            scan.Track.SourceTrackIndex,
+                            ref windows31JMarkerCount,
+                            ref firstWindows31JMarker,
+                            ref invalidMarkerCount,
+                            ref firstInvalidMarker);
                         break;
                 }
             }
@@ -708,6 +756,12 @@ public static partial class MidiProjectImportService
                 value.SharpsFlats,
                 value.IsMinor));
         }
+        AppendMarkerEncodingDiagnostics(
+            diagnostics,
+            windows31JMarkerCount,
+            firstWindows31JMarker,
+            invalidMarkerCount,
+            firstInvalidMarker);
         if (!temposByTick.ContainsKey(0))
         {
             project.Conductor.Tempos.Insert(0, new(project, 0, 120m));
@@ -962,34 +1016,97 @@ public static partial class MidiProjectImportService
             or StandardMidiFile.KeySignatureMetaType
             or StandardMidiFile.MarkerMetaType;
 
-    private static string DecodeUtf8(
+    private static void ImportMarker(
+        MidoraProject project,
         ParsedStandardMidiFileEvent value,
         int trackIndex,
-        string kind)
+        ref int windows31JCount,
+        ref ImportedTextLocation? firstWindows31J,
+        ref int invalidCount,
+        ref ImportedTextLocation? firstInvalid)
     {
-        try
+        ImportedTextLocation location = new(trackIndex, value.SourceByteOffset, value.Tick);
+        if (!TryDecodeImportedText(
+                value.Data.Span,
+                out string marker,
+                out ImportedTextEncoding encoding))
         {
-            return StrictUtf8.GetString(value.Data.Span);
+            invalidCount++;
+            firstInvalid ??= location;
+            return;
         }
-        catch (DecoderFallbackException exception)
+
+        if (encoding == ImportedTextEncoding.Windows31J)
         {
-            throw new InvalidDataException(
-                $"SMF MTrk {trackIndex} {kind} is not strict UTF-8 at byte {value.SourceByteOffset}.",
-                exception);
+            windows31JCount++;
+            firstWindows31J ??= location;
         }
+        project.Conductor.Markers.Add(new(project, value.Tick, marker));
     }
 
-    private static bool TryDecodeUtf8(ReadOnlySpan<byte> value, out string result)
+    private static bool TryDecodeImportedText(
+        ReadOnlySpan<byte> value,
+        out string result,
+        out ImportedTextEncoding encoding)
     {
         try
         {
             result = StrictUtf8.GetString(value);
+            encoding = ImportedTextEncoding.Utf8;
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+        }
+
+        try
+        {
+            result = StrictWindows31J.GetString(value);
+            encoding = ImportedTextEncoding.Windows31J;
             return true;
         }
         catch (DecoderFallbackException)
         {
             result = string.Empty;
+            encoding = default;
             return false;
+        }
+    }
+
+    private static void AppendMarkerEncodingDiagnostics(
+        ICollection<MidiProjectImportDiagnostic> diagnostics,
+        int windows31JCount,
+        ImportedTextLocation? firstWindows31J,
+        int invalidCount,
+        ImportedTextLocation? firstInvalid)
+    {
+        if (windows31JCount != 0)
+        {
+            ImportedTextLocation first = firstWindows31J
+                ?? throw new InvalidOperationException(
+                    "A Windows-31J Marker count has no source location.");
+            diagnostics.Add(new(
+                "MIDORA-MIDI-IMPORT-WINDOWS-31J-MARKER",
+                DiagnosticSeverity.Info,
+                $"Decoded {windows31JCount} non-UTF-8 Marker Meta event(s) as "
+                + "Windows-31J (code page 932). MIDI export will encode the imported text as UTF-8.",
+                first.SourceTrackIndex,
+                first.SourceByteOffset,
+                first.Tick));
+        }
+        if (invalidCount != 0)
+        {
+            ImportedTextLocation first = firstInvalid
+                ?? throw new InvalidOperationException(
+                    "An invalid Marker count has no source location.");
+            diagnostics.Add(new(
+                "MIDORA-MIDI-IMPORT-INVALID-MARKER",
+                DiagnosticSeverity.Warning,
+                $"Discarded {invalidCount} Marker Meta event(s) whose payload was neither "
+                + "strict UTF-8 nor valid Windows-31J; the remaining MIDI content was imported.",
+                first.SourceTrackIndex,
+                first.SourceByteOffset,
+                first.Tick));
         }
     }
 
@@ -1133,8 +1250,21 @@ public static partial class MidiProjectImportService
         List<ParsedStandardMidiFileEvent> ConductorEvents,
         List<MidoraMetadataCandidate> MidoraMetadataCandidates,
         MidoraTrackMetadata? MidoraMetadata,
+        int Windows31JTrackNameCount,
+        int? FirstWindows31JTrackNameByteOffset,
         int InvalidTrackNameCount,
         int? FirstInvalidTrackNameByteOffset);
+
+    private enum ImportedTextEncoding
+    {
+        Utf8,
+        Windows31J
+    }
+
+    private readonly record struct ImportedTextLocation(
+        int SourceTrackIndex,
+        int SourceByteOffset,
+        long Tick);
 
     private readonly record struct ImportedTempo(
         long Tick,

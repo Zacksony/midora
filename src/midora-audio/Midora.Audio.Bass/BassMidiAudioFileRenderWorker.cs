@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
+using Midora.Common;
 
 namespace Midora.Audio.Bass;
 
@@ -61,30 +62,25 @@ public sealed class BassMidiAudioFileRenderWorker : IAudioFileRenderWorker
             preparation.SampleRate,
             preparation.MaximumSampleVoicesPerUnitStream,
             preparation.MasterVolumeDecibels);
-        string ownedDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"midora-audio-file-probe-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(ownedDirectory);
-        try
-        {
-            string soundFontSetPath = Path.Combine(ownedDirectory, "soundfonts.masf");
-            SoundFontSetFile.Write(soundFontSetPath, preparation.SoundFonts);
-            using SharedAudioWorkerControl control = SharedAudioWorkerControl.Create(
-                $"Midora.Audio.FileProbe.{Guid.NewGuid():N}");
-            using Process process = Start(
-                CreateProbeStartInfo(preparation, control.Name, soundFontSetPath));
-            await ObserveProcessAsync(
-                process,
-                control,
-                totalFrameCount: 0,
-                temporaryOutputPath: null,
-                progress: null,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            CleanupOwnedDirectory(ownedDirectory, "midora-audio-file-probe-");
-        }
+        using MidoraOwnedTemporaryDirectoryLease ownedDirectoryLease =
+            MidoraOwnedTemporaryDirectoryLease.Create(
+                MidoraProgramData.Current.AudioWorkerExchangeDirectory,
+                "midora-audio-file-probe");
+        string soundFontSetPath = Path.Combine(
+            ownedDirectoryLease.DirectoryPath,
+            "soundfonts.masf");
+        SoundFontSetFile.Write(soundFontSetPath, preparation.SoundFonts);
+        using SharedAudioWorkerControl control = SharedAudioWorkerControl.Create(
+            $"Midora.Audio.FileProbe.{Guid.NewGuid():N}");
+        using Process process = Start(
+            CreateProbeStartInfo(preparation, control.Name, soundFontSetPath));
+        await ObserveProcessAsync(
+            process,
+            control,
+            totalFrameCount: 0,
+            temporaryOutputPath: null,
+            progress: null,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<AudioFileRenderWorkerResult> RenderAsync(
@@ -110,10 +106,11 @@ public sealed class BassMidiAudioFileRenderWorker : IAudioFileRenderWorker
             throw new IOException("The authorized audio worker temporary target already exists.");
         }
 
-        string ownedDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"midora-audio-file-worker-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(ownedDirectory);
+        using MidoraOwnedTemporaryDirectoryLease ownedDirectoryLease =
+            MidoraOwnedTemporaryDirectoryLease.Create(
+                MidoraProgramData.Current.AudioWorkerExchangeDirectory,
+                "midora-audio-file-worker");
+        string ownedDirectory = ownedDirectoryLease.DirectoryPath;
         string planPath = Path.Combine(ownedDirectory, "compiled-audio-plan.mdap");
         string soundFontSetPath = Path.Combine(ownedDirectory, "soundfonts.masf");
         AudioUnitCacheStaging? cacheStaging = null;
@@ -182,7 +179,6 @@ public sealed class BassMidiAudioFileRenderWorker : IAudioFileRenderWorker
         {
             eventStreamProducer?.Dispose();
             cacheStaging?.Dispose();
-            CleanupOwnedDirectory(ownedDirectory);
         }
     }
 
@@ -447,24 +443,4 @@ public sealed class BassMidiAudioFileRenderWorker : IAudioFileRenderWorker
         return residual;
     }
 
-    private static void CleanupOwnedDirectory(
-        string directory,
-        string expectedNamePrefix = "midora-audio-file-worker-")
-    {
-        try
-        {
-            string fullPath = Path.GetFullPath(directory);
-            string expectedPrefix = Path.TrimEndingDirectorySeparator(
-                Path.GetFullPath(Path.GetTempPath())) + Path.DirectorySeparatorChar;
-            if (fullPath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
-            {
-                Directory.Delete(fullPath, recursive: true);
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // The worker output result remains primary; stale owned plans can be removed on startup.
-        }
-    }
 }

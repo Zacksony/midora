@@ -77,6 +77,46 @@ public sealed class ProjectLogicalParameterPointEditCommandsTests
         Assert.Single(document.History);
     }
 
+    [Fact]
+    public void SparseUpsertAcrossDistantTicksPreservesOrderAndUndoRedoIdentity()
+    {
+        Fixture fixture = CreateFixture(LogicalParameterType.Double);
+        CurvePoint middle = new(
+            fixture.Project,
+            tick: 500_000_000,
+            value: 0.5,
+            interpolation: CurveInterpolation.Step);
+        fixture.Lane.Points.Add(middle);
+        using ProjectCompilationSession compilation = new(fixture.Project);
+        ProjectDocumentSession document = new(compilation, ProjectDocumentOrigin.Persisted);
+        long generationBeforeApply = fixture.Lane.Points.CreateQuerySnapshot().Generation;
+
+        document.Execute(ProjectDomainEditCommands.UpsertLogicalParameterPoints(
+            fixture.Segment.Id,
+            fixture.Lane.Id,
+            [
+                new LogicalParameterPointEdit(1_000_000_000, 0.75),
+                new LogicalParameterPointEdit(10, 0.25)
+            ]));
+
+        Assert.Equal(
+            [10L, 500_000_000L, 1_000_000_000L],
+            fixture.Lane.Points.Select(static value => value.Tick));
+        Assert.Equal(
+            generationBeforeApply + 1,
+            fixture.Lane.Points.CreateQuerySnapshot().Generation);
+        CurvePoint first = fixture.Lane.Points[0];
+        CurvePoint last = fixture.Lane.Points[2];
+
+        document.Undo();
+        Assert.Same(middle, Assert.Single(fixture.Lane.Points));
+
+        document.Redo();
+        Assert.Same(first, fixture.Lane.Points[0]);
+        Assert.Same(middle, fixture.Lane.Points[1]);
+        Assert.Same(last, fixture.Lane.Points[2]);
+    }
+
     private static Fixture CreateFixture(LogicalParameterType type)
     {
         MidoraProject project = new(480);

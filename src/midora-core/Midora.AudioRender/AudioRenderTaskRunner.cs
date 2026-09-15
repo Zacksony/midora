@@ -56,14 +56,14 @@ public sealed class AudioRenderOutputResult
         AudioRenderOutputStatus status,
         long frameCount,
         long? fileByteCount,
-        CompilerDiagnostic[] compilerDiagnostics,
+        IEnumerable<CompilerDiagnostic> compilerDiagnostics,
         AudioRenderDiagnostic[] diagnostics)
     {
         Target = target;
         Status = status;
         FrameCount = frameCount;
         FileByteCount = fileByteCount;
-        CompilerDiagnostics = Array.AsReadOnly(compilerDiagnostics);
+        CompilerDiagnostics = CompilerDiagnosticSequence.Wrap(compilerDiagnostics);
         Diagnostics = Array.AsReadOnly(diagnostics);
     }
 
@@ -71,7 +71,7 @@ public sealed class AudioRenderOutputResult
     public AudioRenderOutputStatus Status { get; }
     public long FrameCount { get; }
     public long? FileByteCount { get; }
-    public ReadOnlyCollection<CompilerDiagnostic> CompilerDiagnostics { get; }
+    public ICompilerDiagnosticSequence CompilerDiagnostics { get; }
     public ReadOnlyCollection<AudioRenderDiagnostic> Diagnostics { get; }
 }
 
@@ -152,7 +152,7 @@ public sealed class AudioRenderTaskRunner
         List<AudioRenderDiagnostic> taskDiagnostics = [];
         try
         {
-            PreparedTask prepared = Prepare(request, taskDiagnostics);
+            PreparedTask prepared = Prepare(request, taskDiagnostics, cancellationToken);
             if (taskDiagnostics.Any(value => value.Severity == AudioRenderDiagnosticSeverity.Error))
             {
                 return Result(
@@ -429,7 +429,8 @@ public sealed class AudioRenderTaskRunner
 
     private static PreparedTask Prepare(
         AudioRenderTaskRequest request,
-        List<AudioRenderDiagnostic> diagnostics)
+        List<AudioRenderDiagnostic> diagnostics,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Compilation);
@@ -486,6 +487,7 @@ public sealed class AudioRenderTaskRunner
         long? frameCount = null;
         foreach (AudioRenderPlannedTarget target in request.OutputPlan.Targets)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!compilationBySource.TryGetValue(target.SourceKey, out AudioRenderCompilationItem? compilation))
             {
                 diagnostics.Add(new(
@@ -502,7 +504,8 @@ public sealed class AudioRenderTaskRunner
             {
                 try
                 {
-                    plan = MidiRenderPlanAdapter.Create(compilation.CompiledResult, request.SampleRate);
+                    plan = MidiRenderPlanAdapter.Create(compilation.CompiledResult, request.SampleRate,
+                        cancellationToken: cancellationToken);
                     _ = WaveFileSize.Calculate(plan.TotalFrameCount);
                     if (frameCount.HasValue && frameCount.Value != plan.TotalFrameCount)
                     {
@@ -623,7 +626,7 @@ public sealed class AudioRenderTaskRunner
             status,
             output.Plan?.TotalFrameCount ?? 0,
             fileByteCount,
-            output.Compilation.Diagnostics.ToArray(),
+            output.Compilation.Diagnostics,
             StableDiagnostics(diagnostics));
 
     private static List<AudioRenderOutputResult> CreateUnstartedOutputs(
@@ -638,7 +641,7 @@ public sealed class AudioRenderTaskRunner
                 AudioRenderOutputStatus.NotStarted,
                 frameCount,
                 null,
-                compilation?.Diagnostics.ToArray() ?? [],
+                compilation?.Diagnostics ?? CompilerDiagnosticList.Empty,
                 []);
         }).ToList();
 

@@ -111,7 +111,7 @@ Event Instrument 3
 唯一性比较大小写不敏感，并去除首尾空白
 重命名不改变 Event Instrument 稳定 ID
 重命名不破坏 Logical Track 绑定
-重命名不改变编译语义，除非后续某些用户代码显式读取名称且被允许这样做
+重命名不改变编译语义；Mapping Function Expression ABI v3 不向表达式暴露名称
 重命名属于项目可撤销编辑行为
 重命名应使 Project 进入已修改状态
 ```
@@ -232,7 +232,7 @@ Event Instrument 可能因为以下原因处于无效状态：
 内部事件值非法
 SubVoice 结构非法
 Mapping Function 缺失或命名冲突
-C# 映射源码无法编译
+Mapping Function Expression 无法通过 ABI v3 验证或绑定
 生命周期策略不完整
 Reset 配置非法
 ```
@@ -285,8 +285,8 @@ Event Instrument Library 不管理 SF2。
 Event Instrument 不绑定独立 SF2。
 系统级规则：
 ```text
-一个 Project 最多选择一个 SF2
-所有 Event Instrument 使用同一个 Project 级 SF2 进行播放、预览和音频渲染
+SoundFont 仅由第 6 章规定的程序级有序 Enabled SF2/SFZ 列表及目标映射管理，Project 不保存 SoundFont
+所有 Event Instrument 使用任务冻结的同一程序级 SoundFont 配置进行播放、预览和音频渲染
 Event Instrument 内部 Program Change / Bank Select 是 MIDI 事件语义
 替换 SF2 不自动修改 Event Instrument 内容
 不根据当前 SF2 校验 Event Instrument 中的 Bank / Program 是否存在
@@ -294,13 +294,13 @@ Event Instrument 内部 Program Change / Bank Select 是 MIDI 事件语义
 无 SF2 不影响 MIDI 编译
 无 SF2 不影响 MIDI 导出
 ```
-Event Instrument Library 不显示 SF2 preset / instrument 名称。
+Event Instrument Library 不直接读取 SF2；统一音色选择器可使用程序级 Instrument Catalog 中已存在的名称，不隐式 Scan Presets。
 Program 显示编号规则由 第 6 章《SoundFont 与声音资源》 与后续事件编辑章节共同遵守：
 ```text
-UI 显示 Program 1–128
+UI 显示 Program 0–127
 MIDI 内部 Program Change value 使用 0–127
-初版不显示 GM 名称
-初版不显示 SF2 内部 preset / instrument 名称
+名称使用程序级 Catalog resolver；无名称时保留合法数值回退
+只有显式 Scan Presets 可以读取 SF2 preset 元数据；音色选择器本身不读取 sample 或扫描文件
 ```
 ---
 ## 7.15 Event Instrument Library 与 Port / Channel 资源系统的关系
@@ -349,7 +349,7 @@ Event Instrument 预览 / 试听能力属于播放系统和 UI 工作流的交�
 ```text
 Event Instrument Editor / Arrangement Header 应提供 Event Instrument 预览或导航入口
 具体预览行为由 第 13 章《播放与预览》 / 第 17～20 章的 UI 与交互规格 细化
-预览必须仍遵守 SoundFont 可用性、编译规则、资源分配规则和 C# 映射错误处理规则
+预览必须仍遵守 SoundFont 可用性、编译规则、资源分配规则和 Mapping Function Expression 错误处理规则
 ```
 具体预览触发方式、默认试听音高、试听长度、是否创建临时 Logical Track / Segment，由 第 13 章《播放与预览》 和 第 17～20 章的 UI 与交互规格 细化。
 ---
@@ -413,7 +413,7 @@ Event Instrument 名称为空
 Event Instrument 名称与当前 Project 内其他 Event Instrument 冲突
 Event Instrument 名称经过去除首尾空白后为空
 被实际编译使用的 Event Instrument 定义非法
-被实际编译使用的 Event Instrument 中 C# 映射无法编译
+被实际编译使用的 Event Instrument 中 Mapping Function Expression 无法通过 ABI v3 验证或绑定
 用户尝试跨项目导入 / 导出 Event Instrument，初版不支持
 用户尝试创建程序级全局 Event Instrument Library，初版不支持
 ```
@@ -485,7 +485,7 @@ Event Instrument 颜色只作为 UI 主色，不影响 MIDI 语义
 | 创建或重命名 Event Instrument 时名称为空 | 操作失败 |
 | 创建或重命名 Event Instrument 时名称与现有名称冲突 | 操作失败 |
 | 被实际编译使用的 Event Instrument 定义非法 | 编译失败 |
-| 被实际编译使用的 Event Instrument 中 C# 映射无法编译 | 编译失败 |
+| 被实际编译使用的 Event Instrument 中 Mapping Function Expression 无法通过 ABI v3 验证或绑定 | 编译失败 |
 | 用户尝试跨项目导入 / 导出 Event Instrument | 操作失败 |
 | 用户尝试创建程序级全局 Event Instrument Library | 操作失败 |
 | 删除仍被 Usage 引用的 Event Instrument | 操作失败，不修改 Project |
@@ -510,6 +510,7 @@ Event Instrument 定义应至少承担以下职责：
 描述模板内部 MIDI 事件和高级事件的组织入口
 提供 Root Note 和音高映射基础
 提供 Template Length
+提供 Pre-Roll Ticks
 提供实例隔离策略
 提供生命周期策略入口
 提供重叠策略入口
@@ -531,6 +532,7 @@ Event Instrument 定义应至少承担以下职责：
 | 备注 / 描述 | 是 | 初版支持纯文本备注 / 描述。 |
 | Root Note | 是 | 用于默认 Note → Event 音高映射。 |
 | Template Length | 是 | 事件乐器模板自身长度。 |
+| Pre-Roll Ticks | 是 | Logical Note 可听锚点相对模板 tick 0 的非负提前量；只作用于 Logical Segment 触发实例。 |
 | SubVoice 集合 | 是，限系统级入口 | 具体 SubVoice 结构由 第 8 章《SubVoice 与 MIDI 事件编辑》 细化。 |
 | MIDI / 高级事件集合 | 否，入口属于本章，细节属 第 9 章《曲线、Logical Parameter 与映射》 | 本章只确认 Event Instrument 可以包含这些事件。 |
 | Mapping Function 集合 | 是，限归属与名称规则承接 | 具体签名和编辑方式由第 9 章《曲线、Logical Parameter 与映射》规定。 |
@@ -558,6 +560,7 @@ Definition 显示顺序
 ```text
 Root Note
 Template Length
+Pre-Roll Ticks
 SubVoice 集合
 事件内容入口
 Mapping Function 集合
@@ -591,6 +594,7 @@ Reset 策略
 拥有当前 Project 内唯一名称
 拥有 Root Note
 拥有 Template Length
+拥有 Pre-Roll Ticks，默认 0
 至少包含一条 SubVoice
 拥有 Per-Note Instance Isolation 设置
 拥有生命周期策略设置
@@ -657,6 +661,46 @@ Template Length 必须大于等于最后一个事件所在 tick。
 因为 第 4 章《时间、Conductor Track 与全局音乐事件》 已确认 TPQ 可在创建 Project 时设置，创建后禁止修改。
 所以默认 1 个四分音符应按当前 Project 的 TPQ 换算。
 ```
+
+### 7.27.1 Pre-Roll Ticks
+
+`Pre-Roll Ticks` 是 Event Instrument Definition 的持久时间锚点属性，用于让 Logical Segment 中的 Logical Note 表示模板中已提前播放若干 tick 后的逻辑 Gate 起点。
+
+定义：
+
+```text
+O = Pre-Roll Ticks
+0 <= O <= Template Length
+默认 O = 0
+```
+
+它不是延迟、播放光标补偿或消费者专用设置。对于 Logical Note 的 Project absolute anchor tick `A`：
+
+```text
+Event Instrument Instance / template origin = A - O
+template tick t 的 Project tick = A - O + t
+Logical Gate Start = A
+Logical Gate End = A + Logical Gate Length，随后服从 Segment End 等现有硬边界裁剪
+```
+
+因此 `O` 只把模板起点和实例占用起点提前，不改变 Logical Note 保存的 start、length、pitch 或 velocity，不把 `MappingContext.gateLength` 改为 `O + gateLength`，也不改变短音/长音按 Logical Gate Length 与 Template Length 比较的规则。
+
+适用范围固定为：
+
+```text
+Logical Segment 中由 Logical Note 生成的正式 Event Instrument Instance
+```
+
+以下入口不应用该偏移，按等效 `O = 0` 处理：
+
+```text
+Event Instrument standalone Preview
+SubVoice standalone Preview
+Segment Editor Pitch Ruler / pitch audition held Preview
+不创建 Logical Segment Instance 的其他试听入口
+```
+
+单独编辑 Template Length 时，如果新值小于保持不变的 `Pre-Roll Ticks`，编辑命令必须拒绝该修改并恢复原值；不得静默 Clamp、缩短 Pre-Roll 或改写模板事件。在 Properties Dialog 中同时编辑 Template Length、Pre-Roll Ticks、Loop 边界和 Per-Note Instance Isolation 时，必须只验证并原子提交完整的最终值组合，不得因旧字段值或固定命令顺序拒绝一个最终合法的组合。修改 Pre-Roll Ticks 必须进入 Undo / Redo、标记 Project 已修改，并影响所有引用该 Definition 的 Usage。
 ---
 ## 7.28 SubVoice 集合入口
 Event Instrument 必须包含一个或多个 SubVoice。
@@ -876,6 +920,7 @@ Gate Length 小于 Template Length 时，默认使用 Cut At Note Off。
 ```text
 Gate Length 大于 Template Length 时，如果配置 Loop / Envelope，则使用循环 / 包络规则；否则 Hold Last State Until Note Off。
 ```
+Loop 并非长音专属开关：除短音 One-Shot 外，到 Loop End 且 Gate 尚未结束即可循环，包含短音和等长音；具体优先级及 Pre-Roll 模板时钟见 §10.9.5。
 说明：
 ```text
 Cut At Note Off 更接近普通键盘 / 旋律乐器直觉。
@@ -913,14 +958,13 @@ Event Instrument 定义应包含 Mapping Function 集合入口。
 ```text
 Mapping Function 名称必填。
 Mapping Function 名称在单个 Event Instrument 内不可重复。
-初版允许完整自由 C#。
-不做沙箱。
-不做安全确认。
-Context 默认只读。
-用户代码以源码文本形式保存在 .midora 项目文件中。
-编译时动态编译。
-编译错误导致 Midora 编译失败。
-运行时异常会中止当前播放 / 渲染 / 导出流程。
+初版新建项固定使用受限 Mapping Function Expression ABI v3。
+表达式只能使用第 9.6 节的单行数值/枚举白名单；不允许自由 C#、语句、循环、对象创建或任意 API。
+Context 为只读，且表达式只能访问 ABI v3 明确批准的数值/枚举字段。
+单行表达式文本、`abiVersion = 3` 和经复核的 Context 依赖保存在 `.midora` 项目文件中。
+正式路径只绑定 `System.Linq.Expressions` 委托，不 Emit 或加载 Project 源码程序集。
+被实际使用的表达式无法通过 ABI v3 验证/绑定，或求值产生 NaN / Infinity / 非法结果时，当前编译 / 播放 / 渲染 / 导出流程失败。
+自由 C# ABI v1/v2 只可识别并明确拒绝，绝不执行。
 ```
 本章只确认归属：
 ```text
@@ -977,7 +1021,7 @@ Logical Parameter Lane / Point / Curve
 Logical Parameter 稀疏状态继承
 Logical Parameter Mapping 执行语义
 Logical Parameter 与 SubVoice 原始事件值的合成方式
-C# 自定义 Logical Parameter Mapping Context
+Mapping Function Expression 的 Logical Parameter Context
 越界、除零、重绑定转换和诊断细则
 ```
 ## 7.38 Envelope Preset 集合入口
@@ -1115,7 +1159,7 @@ Template Length 小于等于 0
 Template Length 小于最后事件时间
 缺少必要 SubVoice
 Mapping Function 名称冲突
-Mapping Function 源码无法编译
+Mapping Function Expression 无法通过 ABI v3 验证或绑定
 Logical Parameter 名称冲突或缺失
 Logical Parameter 类型、defaultValue 或合法范围非法
 Logical Parameter Mapping 引用断裂、目标非法或顺序非法
@@ -1132,6 +1176,7 @@ Event Instrument 定义编辑属于项目可撤销编辑行为。
 ```text
 修改 Root Note
 修改 Template Length
+修改 Pre-Roll Ticks
 新增、删除、编辑 SubVoice
 新增、删除、编辑事件内容
 新增、删除、编辑 Mapping Function
@@ -1162,8 +1207,8 @@ Event Instrument 定义内容发生变化
 Event Instrument 不绑定独立 SF2。
 系统级规则：
 ```text
-一个 Project 最多选择一个 SF2。
-所有 Event Instrument 在播放、预览和音频渲染时使用同一个 Project 级 SF2。
+SoundFont 仅属于第 6 章规定的程序级有序 Enabled SF2/SFZ 列表及目标映射，Project 不保存 SoundFont。
+所有 Event Instrument 在播放、预览和音频渲染时使用任务冻结的同一程序级 SoundFont 配置。
 Event Instrument 内部 Program Change / Bank Select 是 MIDI 事件语义。
 替换 SF2 不自动修改 Event Instrument 定义。
 Event Instrument 定义不根据当前 SF2 校验 Program / Bank 是否存在。
@@ -1193,6 +1238,7 @@ Per-Note Instance Isolation 关闭时，共享范围限于同一 Event Instrumen
 ```text
 Root Note
 Template Length
+Pre-Roll Ticks
 SubVoice 集合
 事件内容
 Mapping Function
@@ -1238,6 +1284,7 @@ Root Note 缺失或非法
 Template Length 缺失或非法
 Template Length 小于等于 0
 Template Length 小于最后事件所在 tick
+Pre-Roll Ticks 缺失或不在 0..Template Length 范围内
 Event Instrument 缺少必要 SubVoice
 Mapping Function 名称为空
 Mapping Function 名称在单个 Event Instrument 内冲突
@@ -1266,6 +1313,7 @@ Event Instrument 使用了可能显著增加 Channel Unit 占用的设置
 Event Instrument 是 MIDI 事件模板，不是 SF2 preset
 Root Note 只作为默认映射基准，不自动改写已有事件
 Template Length 是模板长度，不等同于 Gate Length
+Pre-Roll Ticks 只提前 Logical Segment 实例的模板原点，不改变 Logical Note 的 Gate Length
 最小合法 Event Instrument 默认不自带 Note，因此可能无声
 修改 Event Instrument 会影响所有引用处
 如需变体，应复制后修改

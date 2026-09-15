@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using Midora.Common;
 
 namespace Midora.Desktop;
 
@@ -40,13 +41,9 @@ public sealed class BatchEditPresetStore
 
     public BatchEditPresetStore(string? localApplicationData = null)
     {
-        string basis = localApplicationData
-            ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(basis))
-        {
-            throw new InvalidOperationException("Local application data is unavailable.");
-        }
-        _root = Path.GetFullPath(Path.Combine(basis, "Midora", "Presets"));
+        _root = localApplicationData is null
+            ? MidoraProgramData.Current.PresetsDirectory
+            : Path.GetFullPath(Path.Combine(localApplicationData, "Midora", "Presets"));
     }
 
     public IReadOnlyList<BatchEditPresetInfo> Load(BatchEditPresetKind kind)

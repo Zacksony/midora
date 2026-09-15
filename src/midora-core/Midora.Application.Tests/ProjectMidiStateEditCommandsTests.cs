@@ -32,6 +32,35 @@ public sealed class ProjectMidiStateEditCommandsTests
         { new MidiValueTarget((MidiValueKind)999), 0 }
     };
 
+    [Theory]
+    [InlineData(MidiValueKind.ControlChange, 11, -20, 0)]
+    [InlineData(MidiValueKind.ControlChange, 11, 300, 127)]
+    [InlineData(MidiValueKind.PitchBend, 0, -9_000, -8_192)]
+    [InlineData(MidiValueKind.PitchBend, 0, 9_000, 8_191)]
+    [InlineData(MidiValueKind.PitchBendRangeCents, 0, 120, 99)]
+    public void InitialStateUiAndCommandsShareOneAuthoritativeClampRange(
+        MidiValueKind kind,
+        int number,
+        int entered,
+        int expected)
+    {
+        MidiValueTarget target = new(kind, number);
+
+        Assert.Equal(expected, MidiStateValueRules.Clamp(target, entered));
+        MidiStateValueRules.Validate(target, expected);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MidiStateValueRules.Validate(target, entered));
+    }
+
+    [Theory]
+    [InlineData(91)]
+    [InlineData(93)]
+    [InlineData(120)]
+    public void InitialStateClampDoesNotTurnUnsupportedControllersIntoEditableValues(
+        int controller) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MidiStateValueRules.Clamp(MidiValueTarget.ControlChange(controller), 64));
+
     [Fact]
     public void InitialStateScopesUseProjectInstrumentVoicePrecedenceAndUndoExactly()
     {

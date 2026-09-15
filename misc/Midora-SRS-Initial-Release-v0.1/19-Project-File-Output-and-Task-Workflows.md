@@ -28,6 +28,7 @@ Metadata
 Review
 ```
 ### 19.1.2 创建参数
+主操作文案为 `Create`。窗口与保存路径区的 Browse 按钮必须为正式字体保留完整文本和可达操作空间，不能靠裁字容纳；沿用共享红色 Primary、Cancel、Enter/Escape 与 Owner 契约，不全局改变其他按钮尺寸。
 创建时确定：
 ```text
 Optional Project Name
@@ -265,9 +266,9 @@ Save Copy    -> Disabled
 支持的旧版本在打开时进行内存迁移：
 - Project 标记 Modified；
 - Global Notice 持续显示；
-- 第一次 Save 明确提示将写当前格式；
+- 第一次普通 Save 进入 `Upgrade Project Format` 专用确认，显示来源绝对路径、来源 Format、目标 Format 3 与将创建/复用的永久原字节副本完整路径；
 - 不支持保存回旧格式。
-迁移后的 Save Copy 也使用当前格式，并在开始前确认；Save Copy 不清除当前迁移未保存状态。
+迁移后的 Save Copy 使用 Format 3，不改变 CurrentProjectPath、不清除当前迁移未保存状态，也不能以受保护旧来源路径作为目标。打开和用户取消升级时不得创建副本或改写来源。
 ---
 ## 19.4 Save 与 Save Copy Progress
 ### 19.4.1 布局
@@ -300,6 +301,8 @@ Publish or replace target
 Clean temporary files
 ```
 具体底层算法由 第 16 章《.midora 文件格式与持久化》 决定。
+
+旧格式原路径升级使用独立事务表面，必须在确认前显示冻结的 permanent original-byte backup path。确认后进入不可取消阶段；若该路径被不同内容抢占、来源 identity 改变或无法取得排他 lease，任务失败并要求用户重新确认，不得静默改名或覆盖未知文件。成功结果必须显示永久副本路径；发布失败但副本已完成时，失败详情必须同时说明旧来源仍未改变、永久副本仍有效且可在重试时复用。
 ### 19.4.4 Save 成功
 - 当前 Project Modified 清除；
 - 当前路径保持或首次建立；

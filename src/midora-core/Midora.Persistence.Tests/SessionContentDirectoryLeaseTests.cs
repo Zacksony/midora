@@ -7,7 +7,7 @@ namespace Midora.Persistence.Tests;
 public sealed class SessionContentDirectoryLeaseTests
 {
     [Fact]
-    public void CreatingLeaseRemovesRecognizedCurrentAndLegacyInactiveDirectories()
+    public void CreatingLeaseRemovesOnlyManifestedCurrentInactiveDirectories()
     {
         using TemporaryDirectory root = new();
         string staleName = "session-" + Guid.NewGuid().ToString("N");
@@ -29,7 +29,7 @@ public sealed class SessionContentDirectoryLeaseTests
             SessionContentDirectoryLease.CreateForTests(project, root.Path);
 
         Assert.False(Directory.Exists(stale));
-        Assert.False(Directory.Exists(legacy));
+        Assert.True(Directory.Exists(legacy));
         Assert.True(Directory.Exists(unknown));
         Assert.True(Directory.Exists(lease.DirectoryPath));
     }

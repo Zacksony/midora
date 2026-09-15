@@ -179,9 +179,8 @@ public sealed class EmbeddedFontResourceTests
                 if (root?.Name.LocalName != "Window") continue;
 
                 windowCount++;
-                Assert.Equal(
-                    "{StaticResource Font.UI}",
-                    (string?)root.Attribute("FontFamily"));
+                Assert.Contains((string?)root.Attribute("FontFamily"),
+                    new[] { "{StaticResource Font.UI}", "{DynamicResource Font.UI}" });
             }
         }
 

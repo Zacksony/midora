@@ -4,7 +4,7 @@
 > 日常简称：**《Midora SRS》**  
 > 规格版本：**v0.1**  
 > 生成日期：**2026-07-15**  
-> 最近修订日期：**2026-08-26**
+> 最近修订日期：**2026-09-15**
 > 文档形态：**按章节拆分的 Markdown 规格书**
 
 ## 文档定位
@@ -49,6 +49,95 @@
 - **Initial Release Scope** 表示产品范围，不表示文档草稿序号。
 - `v0.x` 表示整合和审查阶段；成为正式开发基线后可升级为 `v1.0`。
 - 后续修订必须说明受影响章节，避免在实现中静默改变需求。
+
+## 2026-09-15 修订摘要
+
+- A2b 验收返修按用户明确要求补充 §18.2.5/§18.4.3：所有 Lane 的 `+` 统一 Add Lane，整块 Tab 头参与本 owner 重排；Inst. 补齐固定 y 创建预览、共用蓝色框选和中键水平平移。仅涉及会话 UI，不改变包装 source、编译或格式。
+- A2b 按已确认 R27/R28、D-IN02、D-LANE01 同步 §8.55.4、§18.2.5/7/8、§18.4.2 和 INV-120：完整 Instrument Change 的水平批量编辑、List 合并与 raw 成员选择；三宿主 target Tabs、隐藏目录、精确摘要、独立纵轴和显式导航。Lane 状态只属于会话，不升级 Format 4 或 presentation schema，不改变编译/音频语义。实现及已跑/未跑验证见 [A2b 记录](../Midora-A2b-Instrument-Changes-and-Lane-Tabs-Implementation-2026-09-14.md)。
+
+## 2026-09-14 修订摘要
+
+- A2a 按已确认 R27 承接 §8.55/§13.31/§18.4：显式 Instrument Change 关联、Catalog 数值/名称选择器、Program 0～127、Initial State 独立继承和 owner 隔离试听。§16.35 采用 Format 4 保存关联 source，保持旧 1/2/3 读取及旧字节基线。完整包装批量 UI/List 仍为 A2b，不把本次切片当作 R27 完成。
+
+- A1 验收返修：明确 Scan Presets 的源 SF2 选择与 bank 结果均为单项滚动；Add Event 不得在旧绑定列表中查询新 Lane 而跳过导航，`A` 属于新活动事件视图。按本轮明确要求统一 Direct/SubVoice PB 标尺为 −8192～8191、中性刻度 0，仅改变显示，不改变正式 scalar。
+- 按已确认的下一批需求 A1 同步第 17～20、22 章：SubVoice 模板外创建点自动扩展同 Definition 模板并同事务撤销；现有 Add Event 成功后按稳定 target 导航并恢复 Surface 焦点。
+- 明确三类数值事件批移采用整组选区共同 scalar delta 饱和；Direct Pitch Bend 必须先在 14-bit 标量上变换再编码，预览/提示/提交一致。Enum 继续只支持精确设值、不支持相对值 Delta。
+- Catalog 的 Banks/Programs/Scan 列表每标准轮刻度一项、高精度余量按控件隔离；展开 ComboBox 禁止纯悬停引起的边缘自滚，保留显式导航和滚动。三类对象列表默认宽度 400 DIP，值列按事件类型格式化，不丢目标身份。
+- New Project 主操作统一为 `Create`，Browse/布局不得裁字；SoundFont 状态入口直达程序设置 SoundFonts 页并服从既有播放/任务锁。只同步本切片，不提前改变乐器变化点、Lane Tabs、后续手势、软件版本或 Project/presentation 格式。实施证据与待人工清单见 [A1 报告](../Midora-A1-Common-UI-and-Editing-Implementation-2026-09-14.md)。
+
+## 2026-09-10 修订摘要
+
+- 用户定案：超出 `0x0FFFFFFF` 的 delta-time 只在 SMF 导出时以零长度 Text Meta `FF 01 00` 分段；原事件位置/顺序/EOT 不变，编译与增量编译不新增间隔检查，Project/canonical/音频不包含这些占位。
+- 每个 MTrk 数据区最多 `0xFFFFFFFF = 4,294,967,295` 字节（4 GiB − 1 byte，不含 8 字节 chunk 头），明确不拆分；超限只使本次 MIDI 导出原子失败，编译不感知，也不把该限制误作整个 `.mid` 的大小上限。
+- 保持 TPQ、Tempo、事件值、已解释 Meta、单条 payload 长度和 ntrks 等硬限制；新增填充字节预检、安全算术、有界写入/取消和导出级汇总 Info/README 要求。同步第 4、12、14、22、23 章与 INV-118。
+- 本次为文档定案，代码尚未实施；取代 Q-NUI-021 / ADR-CORE-010 中“超长 delta 一律失败、不插占位”的旧决定。详细状态与后续验证见 [SMF 导出边界设计记录](../Midora-SMF-Export-Timing-Padding-and-Size-Limits-Architecture-Decisions.md)。不修改软件版本、Project Format 或 presentation schema。
+
+## 2026-09-09 修订摘要
+
+- 文档收尾：将 INV-091 中残留的 presentation schema v1 writer 描述同步为 2026-09-08 已批准的 schema v2、继续读取 v1 为 custom，与 INV-116 及 §16.7.5 / §16.33 一致；不是新增格式或改变语义。
+- 用户批准取消诊断总数的 Int32 边界：完整诊断逻辑序列、ordinal 和严重程度统计使用非负 Int64；超过计数上限时明确失败，不截断、不发布不完整新结果。WPF 仅在筛选后数量超过 Int32.MaxValue 时分页，每页 4096 行，筛选与计数仍作用于全源。
+- MIDI 导出 README 的 Warning / Info 文本最多写前 1000 条，并在超过时显示精确总数和省略数；此限制不适用于正式诊断或 Error / Warning-as-error 判定。同步 §12.19.10、§14.15.4、§17.5、INV-117；不改变 Project Format、presentation schema、音乐语义或软件版本。
+
+## 2026-09-08 修订摘要
+
+- 用户继续确认：洋葱皮 Settings 只保留透明度，手选来源单独弹窗；Previous/Next 为独占邻居显示命令，手选列表独立保留，快捷模式也随显式保存/重开恢复。独立 presentation schema 升为 2、继续读取 v1 为 custom，Project Format 仍为 3。All Tracks 标尺/内容单击复用既有播放 Seek。同步 §16.7.5、§16.33、§18.11、INV-116。
+- 根据用户验收更正，Onion / All Tracks 入口统一为缩放同组的 LayerDiagonalRegular 图标；Onion 原地菜单支持启用、相邻来源与设置。All Tracks 支持播放指针和统一跟随规则。Compiled 明确为“逻辑 canonical 展开 + 当前 Pure MIDI 源音符”的混合显示，不重建 Pure MIDI 整曲 FIFO 索引。SRS 18.11、INV-116 同步；音乐编译、播放/导出、Format 3 / presentation schema 1 不变。
+
+## 2026-09-07 修订摘要
+
+- 阶段 8 落地已定案的 Track/SubVoice 只读洋葱皮、All Tracks Raw/Compiled、来源色与 FIFO 配对、过期显示和有界后台缓存；沿用 Format 3 / presentation schema 1，不改变音乐编辑、编译及音频语义。明确 Duplicate remap、删除引用 dormant/Undo、显式保存及正式叠加顺序。受影响章节：3、16、18、22；INV-115～116。
+- 根据阻塞 BUG 复现澄清 Loop 进入条件：除短音 One-Shot 外，到 Loop End 且 Gate 尚未结束即循环，不再要求 Gate 超过 Template Length；统一原始事件、曲线与 Mapping 的模板时钟，保留既有硬结束并明确循环后 Tail 的时间映射。受影响章节：7、10、22，新增 INV-114；不改变 Project Format。
+- 阶段 7 同步已批准的三种钢琴卷帘虚拟对象列表、显式 Note/Event 类型子菜单和完整选择 Undo/Redo；列表只属于 Session，隐藏停止后台读取，不引入新 Project 格式或音频语义。
+- SubVoice 使用独立 Pre-Roll/Loop 覆盖层：半开前缀暗区、单端/双端黄线、顶部 Tick 标签；不使音符/事件缓存失效。受影响章节：18、20、22，新增 INV-112～113。
+- 阶段 7 验收后的明确调整：Pre-Roll 标签为紫色；Configuration 的 Pre-Roll 空白输入静默归零；SubVoice 禁用 Time Range 拖选及对应菜单，不影响对象选择。受影响章节：18、20。
+
+## 2026-09-06 修订摘要
+
+- Conductor 编辑器改为左侧虚拟事件列表、右侧 Tempo 阶梯图及其他正式元事件 lane。Tempo 沿用 Event Lane 绘线与修饰键，显示轴与合法 BPM 范围分离；密集显示只做设备列 LOD，不丢正式事件。编辑采用可取消、有界准备及原子发布，五种音乐事件和持久化 wire 契约不变。
+- 加入三类音符与三类数值事件的 Batch Create，冻结独立 generate-note/event profiles、递推变量、Initial 首对象开关、候选上限、相对 Tick、有限内存碰撞归并与程序级 Preset；旧 Batch Edit 和 Mapping ABI 不变。
+- Logical/MIDI Segment 的拖动、复制、粘贴统一支持显式双向转换和多项混合选择；保留 crop 外音符，所有非共同数据（含空参数 Lane）汇总确认，失败不改源，一次 Undo 与目标选择。
+
+## 2026-09-04 修订摘要
+
+- 初版正式加入三类 piano roll 的 Note Humanize、Note Split / Join 以及 Note/Event Quantize。Humanize 固定只作用于 Tick/Gate/Velocity，提供可复现 seed；Split 使用 owner-local 全局刀线，Join 按 owner+key 合并；Quantize 复用正式 Time Signature/Grid 服务并固定碰撞与中点规则。
+- 新增受限数值工具表达式 profile：`midora.tool.batch-note/v1`、`midora.tool.batch-event/v1`、`midora.tool.note-split/v1`。三者共用 8,192 scalar / 512 syntax node / 64 depth 的语法、API 和资源边界，但变量 schema 互相隔离；工具表达式与 Project 内 Mapping Function ABI v3 是两条独立的版本轴。
+- Split 的 Expression 模式默认最多 65,535 刀；Fixed Piece Length / Maximum Piece Count 不受该可配置安全停止值截断，三种模式共用 16,777,216 刀硬上限。大型工具仍服从 detached paged transaction，结果记录最多 100,000,000、working/resident 各 64 MiB、owned spill 16 GiB。任何取消、超限、算术错误或 revision race 都必须零发布。
+- Tool Preset 只保存于 `<ProgramRoot>\Data\Presets`，携带 schema/profile/tool/数值契约版本，每次加载必须按当前白名单与资源上限严格重验证。
+- 清理第 7、8、9、11、16、21 章中尚未被取代的自由 C# / ABI v2 措辞：当前只有受限 Mapping Function Expression ABI v3，不 Emit/加载 Project 源码程序集；旧 ABI v1/v2 只可识别并明确拒绝。
+
+## 2026-09-02 修订摘要
+
+- Instrument Catalog 固定为 `<ProgramRoot>\Data\Catalogs` 中的程序级辅助数据：多个有序/可启用 Profile、General MIDI 内置表、用户 override、Imported SF2 快照及带来源名称解析。每个 SoundFont Preference 项新增只用于 Profile 关联的稳定 GUID；ID、Catalog 与名称不进入 Project、音频身份或 canonical。
+- SF2 preset 读取只允许用户显式 `Scan Presets...`，流式读取 RIFF `sfbk/pdta/phdr` 并跳过 sample；raw bank >127 必须显式映射。Catalog store/import/export 使用严格版本化 JSON、资源上限、预览式 Replace/Merge与原子发布，损坏只回退名称。
+- Event Instrument 新增一次完成的 `Add Event Binding...`：冻结当前目标 SubVoice、创建一个 Integer Logical Parameter、每目标一个正式 Mapping及缺失空 owner，不创建 tick 0 event；All 不动态扩展。Override/Add/Multiply复用 accumulator，Multiply精确支持 source→factor range，冲突显式 Append/Replace/Cancel并保持一次Undo/Redo。
+- Pure MIDI Track 固定八色低饱和 palette，按最终 global Arrangement位置轮换；SMF导入和新建使用该规则，Duplicate/Copy/Paste继承，既有 Track 不因排序/删除重染。Logical Track保留现有 Definition继承和独立 ColorOverride。
+
+## 2026-09-01 修订摘要
+
+- Timeline 右键双击改用 Midora 自有固定判定：首个未拖动 `Right Up` 到第二个 `Right Down` 的时间差必须位于 `[0, 300 ms)`，两次位置的水平、垂直位移分别不得超过 `6 DIP`；不得依赖 WPF `ClickCount`、Windows 双击时间或系统双击空间范围。单击菜单使用同一 300 ms 窗口，冷页异步命中、冻结 target、右键 trace、取消与 revision gate 规则不变。
+- Select 模式浮动工具默认处于 Follow；Note 与 Arrangement Segment 均提供左边界、右边界两个可区分的 Resize，Move 在既有 Copy Drag 能力明确支持时允许 `Ctrl` 触发 Copy+Move，否则手势 Invalid。普通直接操作与浮动工具的 Move/Resize 在所有选择规模下都显示最终 Snap/Clamp 后的 delta，并共用小选择矢量、大选择瓦片预览管线；不得因选择超过阈值而只留 delta、隐藏对象预览或建立逐对象 WPF 控件。
+
+## 2026-08-31 修订摘要
+
+- 大规模 Timeline Selection 新增 revision-bound ordinal/page/range query 契约：stable ID 仍是唯一业务身份；百万对象范围可使用 page interval/bitmap 与 sparse exceptions 表达并流式解析，禁止把全量 boxed ID、HashSet、WPF item 或全 source `ToArray()` 作为正常入口。
+- 大型编辑新增 detached paged transaction 与 compact Undo 基线：默认 page 4,096 records、每 256 records 检查取消、单页 decoded/encoded working buffers 与 resident staging 各 64 MiB、owned spill 16 GiB、candidate/result 100,000,000 records；只有全部验证成功且 revision 未变化时一次 root swap，并向 UI、Compiler 与缓存发布同一个精确 source trace/change set。详见 `Midora-Paged-Selection-and-Edit-Transaction-Architecture-Decisions.md` 与 `Midora-Stage-2-Paged-Selection-and-Direct-Manipulation-Requirement-Trace.md`。
+- Note 创建 Snap 改为量化 Pointer Down 后的长度 delta，不重写初始长度；Arrangement 多 Segment Resize 预览与提交使用同一向量规则；低缩放 Velocity onset marker 保持固定设备尺寸；Preview Keyboard 黑/白键 velocity 各按自身可见长度归一化。
+- Timeline 发起的模态窗口关闭后恢复原 Surface 焦点；Event Instrument/SubVoice Initial State 的合法整数越界值按 target 值域 Clamp。每次 Playback Start 读取当前已提交 Project revision，新建 Instrument/Usage/Track/Segment/Note 不得依赖 Save/Reopen 才进入首次播放。
+- 当前 `.midora` writer 提升为 Project Format 3，新增且只新增严格索引的 `settings/project-presentation.json`。该文件承载显式允许跨会话恢复的 Project presentation 数据；首个 schema 仅冻结 Track/SubVoice Onion 配置与 All-Tracks 显示模式的容器，不提前引入 Onion UI。presentation 不属于 Project Source Data，不参与编译、canonical fingerprint、音频缓存或 Undo/Redo；损坏时隔离为默认 presentation 并报告 Warning，不得损坏音乐内容或标记音乐 Project Modified。
+- Format 1/2 打开继续 detached migration，打开阶段不写来源。迁移会话执行普通 Save 时，先显示并冻结原路径、来源/目标 Format 与永久旧版副本路径；确认后严格构建并重开 Format 3 临时包，创建或复用来源逐字节一致的可见副本，再原子替换原路径。取消、来源 identity 改变、备份或发布失败均不得改变来源；Save Copy 只写 Format 3 且不清除 migration-dirty。
+- Midora 自建数据改为 Program-root portable storage：正式配置/预设只进入 `<ProgramRoot>\Data\...`，可重建 session/cache/交换数据只进入 `<ProgramRoot>\.tmp\...`。启动前验证本机固定卷、普通目录、写入、flush、原子替换、独占锁和删除能力；失败时阻止启动且不 fallback。当前版本不探测、不读取、不迁移旧 `%LOCALAPPDATA%\Midora`。
+- `.tmp` 的 CompilerRuns 与 AudioWorkerExchange 同 AudioCache/SessionContent 一样使用有版本 owner manifest、直接子目录、独占活动锁与 reparse-point 防护；只 best-effort 回收可证明由 Midora 创建且已不活跃的残留。单实例身份由当前用户与规范化 ProgramRoot 共同决定，使不同 portable 副本互相隔离。
+
+## 2026-08-30 修订摘要
+
+- Event Instrument Definition 新增 `Pre-Roll Ticks`，默认 0、合法范围 `0..Template Length`。仅 Logical Segment 正式实例把 template/instance origin 从 Logical Note anchor `A` 提前到 `A-O`；Logical Gate Start/End、Mapping `gateLength` 和短/长音分类保持原语义。Initial State、模板事件实际 tick、Logical Parameter 状态、Overlap、Usage 生命周期与 Unit 占用使用提前后的 origin；origin 不得越过所属 Segment 有效起点，违反时编译 Error，禁止 Clamp、丢弃前缀、自动扩展或跨 Segment。
+- Event Instrument/SubVoice standalone Preview 与 Segment Pitch Ruler audition 不应用 Pre-Roll。中途播放、跳转、循环及局部 Preview 继续使用统一冷启动：不补发范围前 NoteOn，也不执行隐藏音频预滚；播放、MIDI 导出与音频渲染只消费已经统一应用 Pre-Roll 的 canonical 结果。
+- 由于 Format 1 已冻结且无法表示 Pre-Roll，当前 writer 提升为 Project Format 2；Event Instrument protobuf v2 wrapper 固定必填 `pre_roll_ticks` field 4。Format 1 reader/schema/descriptor/golden 保持不变；打开 V1 时 detached 迁移并为每个 Definition 显式设置 0，完整验证后一次提交，保存只写 Format 2。
+
+## 2026-08-29 修订摘要
+
+- Follow Playback 的程序级偏好默认值由 Enabled 改为 Disabled。缺失偏好或重置 UI 偏好时使用 Disabled；用户已显式保存的 Enabled/Disabled 选择继续原样读取。跟随播放的运行时交互、Project 数据、canonical 结果及消费者语义不变。
+- SMF 导入的已建模文本兼容顺序固定为严格 UTF-8 后严格 Windows-31J/CP932。Windows-31J Track Name 与 Marker 正常转为 Project Unicode 文本并报告 `Info`；两种编码均无法解码的 Track Name 或 Marker 只丢弃该文本事件并报告，不再拒绝其余结构合法的 MIDI。opaque 文本 Meta 继续按原始 payload 保存，SMF 导出仍统一使用严格 UTF-8。
 
 ## 2026-08-26 修订摘要
 

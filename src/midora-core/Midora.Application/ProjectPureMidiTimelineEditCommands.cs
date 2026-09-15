@@ -11,9 +11,16 @@ public static partial class ProjectDomainEditCommands
         long? projectStartTick = null,
         long? lengthTicks = null,
         long? contentOffsetTick = null) =>
+        PrepareArrangementDirectoryEdit("Update Segment properties", project =>
+            SetArrangementSegmentValuesCore(segmentIds, projectStartTick, lengthTicks, contentOffsetTick));
+
+    private static IProjectEditCommand SetArrangementSegmentValuesCore(
+        IReadOnlyCollection<MidoraId> segmentIds, long? projectStartTick,
+        long? lengthTicks, long? contentOffsetTick) =>
         Command("Update Segment properties", project =>
         {
             ArgumentNullException.ThrowIfNull(segmentIds);
+            using IDisposable metadata = ReserveArrangementEditDirectory(project, segmentIds.Count);
             HashSet<MidoraId> requested = segmentIds.ToHashSet();
             if (requested.Count == 0
                 || requested.Count != segmentIds.Count
@@ -32,7 +39,7 @@ public static partial class ProjectDomainEditCommands
                         segment.ProjectStartTick,
                         segment.LengthTicks,
                         segment.ContentOffsetTick))))
-                .Where(value => requested.Remove(value.Segment.Id))
+                .Where(value => IsRequestedArrangementSegment(requested, value.Segment.Id))
                 .Select(value => (
                     value.Track,
                     value.Segment,
@@ -50,7 +57,7 @@ public static partial class ProjectDomainEditCommands
                         segment.ProjectStartTick,
                         segment.LengthTicks,
                         segment.ContentOffsetTick))))
-                .Where(value => requested.Remove(value.Segment.Id))
+                .Where(value => IsRequestedArrangementSegment(requested, value.Segment.Id))
                 .Select(value => (
                     value.Track,
                     value.Segment,
@@ -67,6 +74,7 @@ public static partial class ProjectDomainEditCommands
 
             foreach (var value in logical)
             {
+                BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
                 ValidateSegmentRange(
                     value.Replacement.ProjectStartTick,
                     value.Replacement.LengthTicks,
@@ -74,6 +82,7 @@ public static partial class ProjectDomainEditCommands
             }
             foreach (var value in midi)
             {
+                BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
                 ValidateSegmentRange(
                     value.Replacement.ProjectStartTick,
                     value.Replacement.LengthTicks,
@@ -83,6 +92,7 @@ public static partial class ProjectDomainEditCommands
             HashSet<Segment> logicalSelection = logical.Select(value => value.Segment).ToHashSet();
             foreach (var group in logical.GroupBy(value => value.Track))
             {
+                BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
                 TickRange[] final = group
                     .Select(value => new TickRange(
                         value.Replacement.ProjectStartTick,
@@ -102,6 +112,7 @@ public static partial class ProjectDomainEditCommands
             HashSet<MidiSegment> midiSelection = midi.Select(value => value.Segment).ToHashSet();
             foreach (var group in midi.GroupBy(value => value.Track))
             {
+                BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
                 TickRange[] final = group
                     .Select(value => new TickRange(
                         value.Replacement.ProjectStartTick,
@@ -167,20 +178,25 @@ public static partial class ProjectDomainEditCommands
 
     public static IProjectEditCommand DeleteArrangementSegments(
         IReadOnlyCollection<MidoraId> segmentIds) =>
+        PrepareArrangementDirectoryEdit("Delete Arrangement Segments", _ => DeleteArrangementSegmentsCore(segmentIds));
+
+    private static IProjectEditCommand DeleteArrangementSegmentsCore(
+        IReadOnlyCollection<MidoraId> segmentIds) =>
         Command("Delete Arrangement Segments", project =>
         {
             ArgumentNullException.ThrowIfNull(segmentIds);
+            using IDisposable metadata = ReserveArrangementEditDirectory(project, segmentIds.Count);
             HashSet<MidoraId> requested = segmentIds.ToHashSet();
             if (requested.Count != segmentIds.Count || requested.Contains(default))
                 throw new ArgumentException("Arrangement Segment IDs must be distinct and valid.", nameof(segmentIds));
             (LogicalTrack Track, Segment Segment, int Index)[] logical = project.Tracks
                 .SelectMany(track => track.Segments.Select((segment, index) => (track, segment, index)))
-                .Where(value => requested.Remove(value.segment.Id))
+                .Where(value => IsRequestedArrangementSegment(requested, value.segment.Id))
                 .Select(value => (value.track, value.segment, value.index))
                 .ToArray();
             (PureMidiTrack Track, MidiSegment Segment, int Index)[] midi = project.PureMidiTracks
                 .SelectMany(track => track.Segments.Select((segment, index) => (track, segment, index)))
-                .Where(value => requested.Remove(value.segment.Id))
+                .Where(value => IsRequestedArrangementSegment(requested, value.segment.Id))
                 .Select(value => (value.track, value.segment, value.index))
                 .ToArray();
             if (requested.Count != 0 || logical.Length + midi.Length == 0)
@@ -188,13 +204,17 @@ public static partial class ProjectDomainEditCommands
             ProjectChangeSet changes = new();
             changes.TrackIds.UnionWith(logical.Select(value => value.Track.Id));
             changes.PureMidiTrackIds.UnionWith(midi.Select(value => value.Track.Id));
+            HashSet<MidoraId> deleted = logical.Select(value => value.Segment.Id)
+                .Concat(midi.Select(value => value.Segment.Id)).ToHashSet();
             return Prepared(
                 true,
                 changes,
                 _ =>
                 {
-                    foreach (var value in logical) RemoveRequired(value.Track.Segments, value.Segment, "Segment");
-                    foreach (var value in midi) RemoveRequired(value.Track.Segments, value.Segment, "MIDI Segment");
+                    foreach (LogicalTrack track in logical.Select(value => value.Track).Distinct())
+                        track.Segments.RemoveAll(segment => deleted.Contains(segment.Id));
+                    foreach (PureMidiTrack track in midi.Select(value => value.Track).Distinct())
+                        track.Segments.RemoveAll(segment => deleted.Contains(segment.Id));
                 },
                 _ =>
                 {
@@ -258,7 +278,8 @@ public static partial class ProjectDomainEditCommands
         MidoraId primarySegmentId,
         MidoraId targetTrackId,
         long newPrimaryStartTick,
-        bool duplicate) =>
+        bool duplicate,
+        bool detachedPreparation = false) =>
         Command(name, project =>
         {
             if (newPrimaryStartTick < 0) throw new ArgumentOutOfRangeException(nameof(newPrimaryStartTick));
@@ -303,6 +324,10 @@ public static partial class ProjectDomainEditCommands
                 ? []
                 : selected.Select(value => value.Segment).ToHashSet();
             ValidateMidiSegmentPlacements(placements, moving);
+            if (duplicate && !detachedPreparation && RequiresBoundedMidiContent(selected))
+                return new SequentialProjectEditCommand(name,
+                    [draft => TransformMidiSegments(name, segmentIds, primarySegmentId,
+                        targetTrackId, newPrimaryStartTick, duplicate: true, detachedPreparation: true)]).Prepare(project);
             MidiSegment[]? copies = null;
             return Prepared(
                 true,
@@ -314,8 +339,12 @@ public static partial class ProjectDomainEditCommands
                 {
                     if (duplicate)
                     {
-                        copies ??= placements.Select(value =>
-                            CloneMidiSegment(owner, value.Source.Segment, value.Start)).ToArray();
+                        if (copies is null)
+                        {
+                            var copyProgress = new DirectContentCopyProgress(placements.Sum(value => DirectContentRecordCount(value.Source.Segment)));
+                            copies = placements.Select(value =>
+                                CloneMidiSegment(owner, value.Source.Segment, value.Start, copyProgress)).ToArray();
+                        }
                         for (int index = 0; index < copies.Length; index++)
                             InsertMidiSegmentByTime(placements[index].TargetTrack.Segments, copies[index]);
                         return;
@@ -383,6 +412,8 @@ public static partial class ProjectDomainEditCommands
                 return new MidiSegmentEdgeEdit(value, old, adjustment.Window, adjustment.ContentShift);
             }).ToArray();
             ValidateMidiSegmentEdgeEdits(edits);
+            if (edits.Any(static edit => edit.ContentShift != 0) && RequiresBoundedMidiContent(selected))
+                return PrepareBoundedMidiSegmentEdgeShifts(project, edits);
             return Prepared(
                 edits.Any(value => value.Old != value.Replacement),
                 PureMidiTrackChange(edits.Select(value => value.Selection.Track.Id).Distinct().ToArray()),
@@ -443,24 +474,7 @@ public static partial class ProjectDomainEditCommands
     public static IProjectEditCommand DeleteDirectMidiNotes(
         MidoraId segmentId,
         IReadOnlyCollection<MidoraId> noteIds) =>
-        Command("Delete Direct MIDI Notes", project =>
-        {
-            MidiSegmentLocation location = FindMidiSegment(project, segmentId);
-            DirectNoteSelection[] selected = SelectDirectNotes(location.Segment, noteIds);
-            return Prepared(
-                true,
-                PureMidiTrackChange(location.Track.Id),
-                _ =>
-                {
-                    foreach (DirectNoteSelection value in selected)
-                        RemoveRequired(location.Segment.Notes, value.Note, "Direct MIDI Note");
-                },
-                _ =>
-                {
-                    foreach (DirectNoteSelection value in selected.OrderBy(value => value.Index))
-                        InsertAt(location.Segment.Notes, value.Index, value.Note, "Direct MIDI Note");
-                });
-        });
+        ChangeBoundedDirectMidiNotes("Delete Direct MIDI Notes", segmentId, noteIds, _ => _ => null);
 
     public static IProjectEditCommand MoveDirectMidiNotes(
         MidoraId segmentId,
@@ -533,6 +547,10 @@ public static partial class ProjectDomainEditCommands
         IReadOnlyDictionary<MidoraId, int> velocities) =>
         Command("Paint Direct MIDI Note velocities", project =>
         {
+            if (velocities.Count > 4096 || FindMidiSegment(project, segmentId).Segment.Notes.Count > 4096)
+                return ChangeBoundedDirectMidiNotes("Paint Direct MIDI Note velocities", segmentId,
+                    velocities.Keys as IReadOnlyCollection<MidoraId> ?? velocities.Keys.ToArray(),
+                    _ => value => value with { NoteOnVelocity = velocities[value.Id] }).Prepare(project);
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectNoteSelection[] selected = SelectDirectNotes(location.Segment, velocities.Keys.ToArray());
             int[] old = selected.Select(value => value.Note.NoteOnVelocity).ToArray();
@@ -544,11 +562,15 @@ public static partial class ProjectDomainEditCommands
                 PureMidiTrackChange(location.Track.Id),
                 _ =>
                 {
+                    using IDisposable batch = location.Segment.Notes.BeginBatchChange(
+                        selected.Select(static value => value.Note).ToArray());
                     for (int index = 0; index < selected.Length; index++)
                         selected[index].Note.NoteOnVelocity = replacement[index];
                 },
                 _ =>
                 {
+                    using IDisposable batch = location.Segment.Notes.BeginBatchChange(
+                        selected.Select(static value => value.Note).ToArray());
                     for (int index = 0; index < selected.Length; index++)
                         selected[index].Note.NoteOnVelocity = old[index];
                 });
@@ -561,6 +583,8 @@ public static partial class ProjectDomainEditCommands
         int keyDelta) =>
         Command("Duplicate Direct MIDI Notes", project =>
         {
+            if (noteIds.Count > 4096 || FindMidiSegment(project, segmentId).Segment.Notes.Count > 4096)
+                return PrepareBoundedDirectMidiNoteAppend(project, segmentId, firstId => ReadCopies(firstId), noteIds);
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectNoteSelection[] selected = SelectDirectNotes(location.Segment, noteIds);
             DirectNoteValue[] values = selected.Select(value => SnapshotDirectNote(value.Note) with
@@ -581,24 +605,84 @@ public static partial class ProjectDomainEditCommands
                 },
                 _ =>
                 {
-                    foreach (DirectMidiNote copy in copies ?? []) location.Segment.Notes.Remove(copy);
+                    location.Segment.Notes.RemoveRange(copies ?? []);
                 }),
                 noteTargets: values.Select(value => new DirectMidiNoteCollisionTarget(
                     location.Segment,
                     value.StartTick,
                     value.Key)));
+
+            IEnumerable<DirectMidiNoteValue> ReadCopies(long nextId)
+            {
+                var notes = BoundedDirectMidiNoteSource.Capture(FindMidiSegment(project, segmentId).Segment.Notes);
+                using var scope = BulkEditPreparationContext.Enter(BulkEditPreparationContext.Current?.Token ?? default);
+                using var ids = BoundedEditSort.Sort(notes.ResolveIds(noteIds, scope.Token),
+                    Comparer<BoundedDirectNoteDelta>.Create(static (a, b) => a.Value.Id.CompareTo(b.Value.Id)), scope.Resources, scope.Token);
+                MidoraId previous = default;
+                foreach (var item in ids)
+                {
+                    var value = item.Value;
+                    if (value.Id == previous)
+                        throw new ArgumentOutOfRangeException(nameof(noteIds));
+                    previous = value.Id;
+                    yield return value with { Id = new MidoraId(nextId++), StartTick = checked(value.StartTick + tickDelta),
+                        Key = checked(value.Key + keyDelta) };
+                }
+            }
         });
+
+    private static long ArrangementSegmentDirectoryCount(MidoraProject project)
+    {
+        long count = 0;
+        foreach (LogicalTrack track in project.Tracks)
+        {
+            BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
+            count = checked(count + track.Segments.Count);
+        }
+        foreach (PureMidiTrack track in project.PureMidiTracks)
+        {
+            BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
+            count = checked(count + track.Segments.Count);
+        }
+        return count;
+    }
+
+    private static IProjectEditCommand PrepareArrangementDirectoryEdit(string name,
+        Func<MidoraProject, IProjectEditCommand> factory) => Command(name, project =>
+        ArrangementSegmentDirectoryCount(project) > 4096
+            ? new SequentialProjectEditCommand(name, [factory]).Prepare(project)
+            : factory(project).Prepare(project));
+
+    private static IDisposable ReserveArrangementEditDirectory(MidoraProject project, int selectedCount)
+    {
+        BulkEditPreparationContext? scope = BulkEditPreparationContext.Current;
+        BoundedEditResources resources = scope?.Resources ?? new();
+        scope?.Token.ThrowIfCancellationRequested();
+        // Selection sets, old/new windows, grouping and the largest overlap-sort
+        // directory are admitted before materializing any per-Segment collection.
+        return resources.ReserveWorking(checked(4096L + selectedCount * 1024L
+            + ArrangementSegmentDirectoryCount(project) * 128L));
+    }
+
+    private static bool IsRequestedArrangementSegment(HashSet<MidoraId> requested, MidoraId id)
+    {
+        BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
+        return requested.Remove(id);
+    }
 
     private static IProjectEditCommand ChangeDirectMidiNotes(
         string name,
         MidoraId segmentId,
         IReadOnlyCollection<MidoraId> noteIds,
         Func<DirectNoteValue, DirectNoteValue> transform) =>
-        ChangeDirectMidiNotes(
-            name,
-            segmentId,
-            noteIds,
-            values => values.Select(transform).ToArray());
+        ChangeBoundedDirectMidiNotes(name, segmentId, noteIds, _ => value =>
+        {
+            DirectNoteValue result = transform(new(value.StartTick, value.LengthTicks, value.Key,
+                value.NoteOnVelocity, value.NoteOffVelocity, value.NoteOnOrder, value.NoteOffOrder));
+            if (result.Key is < 0 or > 127) return null;
+            return new(value.Id, result.StartTick, result.LengthTicks, result.Key,
+                result.NoteOnVelocity, result.NoteOffVelocity, result.NoteOnOrder, result.NoteOffOrder);
+        });
 
     private static IProjectEditCommand ChangeDirectMidiNotes(
         string name,
@@ -608,46 +692,55 @@ public static partial class ProjectDomainEditCommands
         Command(name, project =>
         {
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
-            DirectNoteSelection[] selected = SelectDirectNotes(location.Segment, noteIds);
-            DirectNoteValue[] old = selected.Select(value => SnapshotDirectNote(value.Note)).ToArray();
+            DirectMidiNote[] selectedNotes = SelectDirectNotes(location.Segment, noteIds)
+                .Select(static value => value.Note)
+                .ToArray();
+            DirectNoteValue[] old = selectedNotes.Select(SnapshotDirectNote).ToArray();
             DirectNoteValue[] replacement = transform(old);
             if (replacement.Length != old.Length)
                 throw new InvalidOperationException("A Direct MIDI Note transform returned the wrong result count.");
-            bool[] discarded = new bool[selected.Length];
             for (int index = 0; index < replacement.Length; index++)
             {
                 DirectNoteValue value = replacement[index];
                 if (value.Key is < 0 or > 127)
                 {
-                    discarded[index] = true;
                     continue;
                 }
                 ValidateDirectMidiNote(value.StartTick, value.LengthTicks, value.Key, value.NoteOnVelocity, value.NoteOffVelocity);
             }
+            DirectMidiNote[] discardedNotes = selectedNotes
+                .Where((_, index) => replacement[index].Key is < 0 or > 127)
+                .ToArray();
+            Action? restoreDiscarded = null;
             IPreparedProjectEdit prepared = Prepared(
-                old.Where((value, index) => value != replacement[index] || discarded[index]).Any(),
+                old.Where((value, index) => value != replacement[index]
+                    || replacement[index].Key is < 0 or > 127).Any(),
                 PureMidiTrackChange(location.Track.Id),
                 _ =>
                 {
-                    using IDisposable batch = location.Segment.Notes.BeginBatchChange(
-                        selected.Select(static value => value.Note).ToArray());
-                    for (int index = 0; index < selected.Length; index++)
+                    using IDisposable batch = location.Segment.Notes.BeginBatchChange(selectedNotes);
+                    for (int index = 0; index < selectedNotes.Length; index++)
                     {
-                        if (discarded[index]) location.Segment.Notes.Remove(selected[index].Note);
-                        else ApplyDirectNote(selected[index].Note, replacement[index]);
+                        if (replacement[index].Key is >= 0 and <= 127)
+                            ApplyDirectNote(selectedNotes[index], replacement[index]);
                     }
+                    if (discardedNotes.Length != 0)
+                        restoreDiscarded = location.Segment.Notes.RemoveRangeWithUndo(discardedNotes);
                 },
                 _ =>
                 {
-                    using IDisposable batch = location.Segment.Notes.BeginBatchChange(
-                        selected.Select(static value => value.Note).ToArray());
-                    for (int index = 0; index < selected.Length; index++)
-                        ApplyDirectNote(selected[index].Note, old[index]);
-                    foreach (DirectNoteSelection value in selected.Where((_, index) => discarded[index]).OrderBy(value => value.Index))
-                        InsertAt(location.Segment.Notes, value.Index, value.Note, "Direct MIDI Note");
+                    using IDisposable batch = location.Segment.Notes.BeginBatchChange(selectedNotes);
+                    for (int index = 0; index < selectedNotes.Length; index++)
+                        ApplyDirectNote(selectedNotes[index], old[index]);
+                    if (discardedNotes.Length != 0)
+                    {
+                        (restoreDiscarded ?? throw new InvalidOperationException(
+                            "Discarded Direct MIDI Notes do not have a pending removal to restore."))();
+                        restoreDiscarded = null;
+                    }
                 });
             DirectMidiNoteCollisionTarget[] collisionTargets = replacement
-                    .Where((value, index) => !discarded[index]
+                    .Where((value, index) => value.Key is >= 0 and <= 127
                         && (value.StartTick != old[index].StartTick
                             || value.Key != old[index].Key))
                     .Select(value => new DirectMidiNoteCollisionTarget(
@@ -669,14 +762,23 @@ public static partial class ProjectDomainEditCommands
         IReadOnlyCollection<DirectMidiEventPointEdit> points) =>
         Command("Draw Direct MIDI Event points", project =>
         {
+            if (points.Count > 4096 || FindMidiSegment(project, segmentId).Segment.ChannelEvents.Count > 4096)
+                return PrepareBoundedDirectMidiEventLine(project, segmentId, kind, laneData1, points);
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectMidiEventPointEdit[] edits = points.OrderBy(value => value.Tick).ToArray();
             if (edits.Length == 0 || edits.Select(value => value.Tick).Distinct().Count() != edits.Length)
                 throw new ArgumentException("Direct MIDI Event point ticks must be distinct.", nameof(points));
+            HashSet<DirectMidiEventStartKey> editedKeys = edits.Select(edit => new DirectMidiEventStartKey(
+                    edit.Tick,
+                    kind,
+                    DirectMidiEventUsesData1Selector(kind) ? laneData1 : 0))
+                .ToHashSet();
+            Dictionary<long, DirectMidiChannelEvent> existingByTick = [];
+            foreach (DirectMidiChannelEvent value in location.Segment.ChannelEvents.QueryStartKeys(editedKeys))
+                existingByTick.TryAdd(value.Tick, value);
             DirectMidiChannelEvent[] existing = edits
-                .Select(edit => FindDirectEventAtTick(location.Segment, kind, laneData1, edit.Tick))
-                .Where(static value => value is not null)
-                .Cast<DirectMidiChannelEvent>()
+                .Where(edit => existingByTick.ContainsKey(edit.Tick))
+                .Select(edit => existingByTick[edit.Tick])
                 .ToArray();
             DirectMidiEventValue[] old = existing.Select(SnapshotDirectEvent).ToArray();
             DirectMidiChannelEvent[]? created = null;
@@ -685,18 +787,18 @@ public static partial class ProjectDomainEditCommands
                 PureMidiTrackChange(location.Track.Id),
                 owner =>
                 {
+                    using IDisposable batch = location.Segment.ChannelEvents.BeginBatchChange(existing);
                     foreach (DirectMidiEventPointEdit edit in edits)
                     {
                         ValidateDirectMidiEvent(edit.Tick, kind, edit.Data1, edit.Data2);
-                        DirectMidiChannelEvent? target = FindDirectEventAtTick(location.Segment, kind, laneData1, edit.Tick);
-                        if (target is not null)
+                        if (existingByTick.TryGetValue(edit.Tick, out DirectMidiChannelEvent? target))
                         {
                             target.Data1 = edit.Data1;
                             target.Data2 = edit.Data2;
                         }
                     }
                     created ??= edits
-                        .Where(edit => old.All(value => value.Tick != edit.Tick))
+                        .Where(edit => !existingByTick.ContainsKey(edit.Tick))
                         .Select(edit => new DirectMidiChannelEvent(owner)
                         {
                             Tick = edit.Tick,
@@ -706,11 +808,17 @@ public static partial class ProjectDomainEditCommands
                             Order = owner.NextStableId
                         })
                         .ToArray();
-                    location.Segment.ChannelEvents.AddRange(created);
+                    // BeginBatchChange already owns publication for the complete
+                    // line gesture. AddRange opens its own collection batch, so
+                    // calling it here would incorrectly attempt to nest batches.
+                    // Add each prevalidated point to the active batch instead.
+                    foreach (DirectMidiChannelEvent value in created)
+                        location.Segment.ChannelEvents.Add(value);
                 },
                 _ =>
                 {
-                    foreach (DirectMidiChannelEvent value in created ?? []) location.Segment.ChannelEvents.Remove(value);
+                    using IDisposable batch = location.Segment.ChannelEvents.BeginBatchChange(existing);
+                    location.Segment.ChannelEvents.RemoveRange(created ?? []);
                     for (int index = 0; index < existing.Length; index++) ApplyDirectEvent(existing[index], old[index]);
                 }),
                 eventTargets: edits.Select(value => new DirectMidiEventCollisionTarget(
@@ -726,17 +834,28 @@ public static partial class ProjectDomainEditCommands
         long tickDelta,
         int data1Delta,
         int data2Delta,
-        bool duplicate) =>
+        bool duplicate) => AdjustDirectMidiEventPointsCore(segmentId, eventIds, tickDelta,
+            data1Delta, data2Delta, duplicate, scalarValueDelta: null);
+
+    public static IProjectEditCommand AdjustDirectMidiEventPointValues(
+        MidoraId segmentId, IReadOnlyCollection<MidoraId> eventIds, long tickDelta,
+        int valueDelta, bool duplicate) => AdjustDirectMidiEventPointsCore(segmentId, eventIds,
+            tickDelta, 0, 0, duplicate, valueDelta);
+
+    private static IProjectEditCommand AdjustDirectMidiEventPointsCore(
+        MidoraId segmentId, IReadOnlyCollection<MidoraId> eventIds, long tickDelta,
+        int data1Delta, int data2Delta, bool duplicate, int? scalarValueDelta) =>
         Command(duplicate ? "Duplicate Direct MIDI Event points" : "Move Direct MIDI Event points", project =>
         {
+            if (eventIds.Count > 4096 || FindMidiSegment(project, segmentId).Segment.ChannelEvents.Count > 4096)
+            {
+                if (!duplicate)
+                    return PrepareBoundedDirectMidiEventTransform(project, segmentId, eventIds, _ => value => ShiftRecord(value));
+                return PrepareBoundedDirectMidiEventAppend(project, segmentId, firstId => ReadCopies(firstId), eventIds);
+            }
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectEventSelection[] selected = SelectDirectEvents(location.Segment, eventIds);
-            DirectMidiEventValue[] values = selected.Select(value => SnapshotDirectEvent(value.Event) with
-            {
-                Tick = checked(value.Event.Tick + tickDelta),
-                Data1 = checked(value.Event.Data1 + data1Delta),
-                Data2 = checked(value.Event.Data2 + data2Delta)
-            }).ToArray();
+            DirectMidiEventValue[] values = selected.Select(value => Shift(SnapshotDirectEvent(value.Event))).ToArray();
             foreach (DirectMidiEventValue value in values)
                 ValidateDirectMidiEvent(value.Tick, value.Kind, value.Data1, value.Data2);
             DirectMidiChannelEvent[]? copies = null;
@@ -762,8 +881,7 @@ public static partial class ProjectDomainEditCommands
                 {
                     if (duplicate)
                     {
-                        foreach (DirectMidiChannelEvent copy in copies ?? [])
-                            location.Segment.ChannelEvents.Remove(copy);
+                        location.Segment.ChannelEvents.RemoveRange(copies ?? []);
                     }
                     else
                     {
@@ -777,6 +895,40 @@ public static partial class ProjectDomainEditCommands
                     value.Tick,
                     value.Kind,
                     value.Data1)));
+            IEnumerable<DirectMidiChannelEventValue> ReadCopies(long nextId)
+            {
+                var source = BoundedDirectMidiEventSource.Capture(FindMidiSegment(project, segmentId).Segment.ChannelEvents);
+                using var scope = BulkEditPreparationContext.Enter(BulkEditPreparationContext.Current?.Token ?? default, project: project);
+                using var ordered = BoundedEditSort.Sort(source.ResolveIds(eventIds, scope.Token),
+                    Comparer<BoundedDirectEventDelta>.Create(static (a, b) => a.Value.Id.CompareTo(b.Value.Id)), scope.Resources, scope.Token);
+                MidoraId previous = default;
+                foreach (var item in ordered)
+                {
+                    var value = item.Value;
+                    if (value.Id == previous)
+                        throw new ArgumentOutOfRangeException(nameof(eventIds));
+                    previous = value.Id;
+                    yield return ShiftRecord(value) with { Id = new(checked(nextId++)) };
+                }
+            }
+
+            DirectMidiEventValue Shift(DirectMidiEventValue value)
+            {
+                var moved = value with { Tick = checked(value.Tick + tickDelta) };
+                if (scalarValueDelta is not int delta)
+                    return moved with { Data1 = checked(value.Data1 + data1Delta), Data2 = checked(value.Data2 + data2Delta) };
+                int scalar = checked(DirectMidiEventPointValue(value) + delta);
+                int maximum = value.Kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127;
+                if (scalar < 0 || scalar > maximum)
+                    throw new ArgumentOutOfRangeException(nameof(scalarValueDelta));
+                return WithDirectMidiEventPointValue(moved, scalar);
+            }
+
+            DirectMidiChannelEventValue ShiftRecord(DirectMidiChannelEventValue value)
+            {
+                var moved = Shift(new(value.Tick, value.Kind, value.Data1, value.Data2, value.Order));
+                return value with { Tick = moved.Tick, Data1 = moved.Data1, Data2 = moved.Data2 };
+            }
         });
 
     public static IProjectEditCommand SetDirectMidiEventValues(
@@ -788,6 +940,9 @@ public static partial class ProjectDomainEditCommands
         int? data2 = null) =>
         Command("Update Direct MIDI Event properties", project =>
         {
+            if (eventIds.Count > 4096 || FindMidiSegment(project, segmentId).Segment.ChannelEvents.Count > 4096)
+                return PrepareBoundedDirectMidiEventTransform(project, segmentId, eventIds, _ => value => value with
+                { Tick = tick ?? value.Tick, Kind = kind ?? value.Kind, Data1 = data1 ?? value.Data1, Data2 = data2 ?? value.Data2 });
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectEventSelection[] selected = SelectDirectEvents(location.Segment, eventIds);
             DirectMidiEventValue[] replacement = selected.Select(value => value.Original with
@@ -838,20 +993,22 @@ public static partial class ProjectDomainEditCommands
         IReadOnlyCollection<MidoraId> eventIds) =>
         Command("Delete Direct MIDI Events", project =>
         {
+            if (eventIds.Count > 4096 || FindMidiSegment(project, segmentId).Segment.ChannelEvents.Count > 4096)
+                return PrepareBoundedDirectMidiEventTransform(project, segmentId, eventIds, _ => _ => null,
+                    BoundedEventCollisionMode.None);
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectEventSelection[] selected = SelectDirectEvents(location.Segment, eventIds);
+            DirectMidiChannelEvent[] values = selected.Select(static value => value.Event).ToArray();
+            Action? restore = null;
             return Prepared(
                 true,
                 PureMidiTrackChange(location.Track.Id),
+                _ => restore = location.Segment.ChannelEvents.RemoveRangeWithUndo(values),
                 _ =>
                 {
-                    foreach (DirectEventSelection value in selected)
-                        RemoveRequired(location.Segment.ChannelEvents, value.Event, "Direct MIDI Event");
-                },
-                _ =>
-                {
-                    foreach (DirectEventSelection value in selected.OrderBy(value => value.Index))
-                        InsertAt(location.Segment.ChannelEvents, value.Index, value.Event, "Direct MIDI Event");
+                    (restore ?? throw new InvalidOperationException(
+                        "Direct MIDI Events do not have a pending removal to restore."))();
+                    restore = null;
                 });
         });
 
@@ -861,68 +1018,13 @@ public static partial class ProjectDomainEditCommands
         long tickDelta,
         bool duplicate) =>
         Command(duplicate ? "Duplicate imported MIDI events" : "Move imported MIDI events", project =>
-        {
-            MidiSegmentLocation location = FindMidiSegment(project, segmentId);
-            OpaqueEventSelection[] selected = SelectOpaqueEvents(location.Segment, eventIds);
-            OpaqueMidiEventValue[] values = selected.Select(value => SnapshotOpaqueEvent(value.Event) with
-            {
-                Tick = checked(value.Event.Tick + tickDelta)
-            }).ToArray();
-            if (values.Any(value => value.Tick < 0))
-                throw new InvalidOperationException("Imported MIDI events cannot move before tick 0.");
-            OpaqueMidiEvent[]? copies = null;
-            return Prepared(
-                tickDelta != 0 || duplicate,
-                PureMidiTrackChange(location.Track.Id),
-                owner =>
-                {
-                    if (duplicate)
-                    {
-                        copies ??= values.Select(value => CreateOpaqueEvent(owner, value)).ToArray();
-                        location.Segment.OpaqueEvents.AddRange(copies);
-                    }
-                    else
-                    {
-                        for (int index = 0; index < selected.Length; index++)
-                            selected[index].Event.Tick = values[index].Tick;
-                    }
-                },
-                _ =>
-                {
-                    if (duplicate)
-                    {
-                        foreach (OpaqueMidiEvent copy in copies ?? [])
-                            location.Segment.OpaqueEvents.Remove(copy);
-                    }
-                    else
-                    {
-                        foreach (OpaqueEventSelection value in selected)
-                            value.Event.Tick = value.Original.Tick;
-                    }
-                });
-        });
+            PrepareBoundedOpaqueTransform(project, segmentId, eventIds, tick => checked(tick + tickDelta), duplicate));
 
     public static IProjectEditCommand DeleteOpaqueMidiEvents(
         MidoraId segmentId,
         IReadOnlyCollection<MidoraId> eventIds) =>
         Command("Delete imported MIDI events", project =>
-        {
-            MidiSegmentLocation location = FindMidiSegment(project, segmentId);
-            OpaqueEventSelection[] selected = SelectOpaqueEvents(location.Segment, eventIds);
-            return Prepared(
-                true,
-                PureMidiTrackChange(location.Track.Id),
-                _ =>
-                {
-                    foreach (OpaqueEventSelection value in selected)
-                        RemoveRequired(location.Segment.OpaqueEvents, value.Event, "imported MIDI event");
-                },
-                _ =>
-                {
-                    foreach (OpaqueEventSelection value in selected.OrderBy(value => value.Index))
-                        InsertAt(location.Segment.OpaqueEvents, value.Index, value.Event, "imported MIDI event");
-                });
-        });
+            PrepareBoundedOpaqueTransform(project, segmentId, eventIds, _ => null));
 
     private static MidiSegmentSelection[] SelectMidiSegments(
         MidoraProject project,
@@ -948,9 +1050,9 @@ public static partial class ProjectDomainEditCommands
         {
             if (id == default || !distinct.Add(id)) throw new ArgumentException("Direct MIDI Note IDs must be distinct.", nameof(ids));
         }
-        IReadOnlyList<DirectMidiNoteMatch> matches = segment.Notes.ResolveByIds(ids);
-        if (matches.Count != ids.Count) throw new ArgumentOutOfRangeException(nameof(ids));
-        return matches.Select(value => new DirectNoteSelection(value.Value, value.Index)).ToArray();
+        DirectMidiNote[] values = segment.Notes.ResolveValuesByIds(distinct).ToArray();
+        if (values.Length != ids.Count) throw new ArgumentOutOfRangeException(nameof(ids));
+        return values.Select(static value => new DirectNoteSelection(value)).ToArray();
     }
 
     private static DirectEventSelection[] SelectDirectEvents(MidiSegment segment, IReadOnlyCollection<MidoraId> ids)
@@ -962,12 +1064,11 @@ public static partial class ProjectDomainEditCommands
         {
             if (id == default || !distinct.Add(id)) throw new ArgumentException("Direct MIDI Event IDs must be distinct.", nameof(ids));
         }
-        IReadOnlyList<DirectMidiChannelEventMatch> matches = segment.ChannelEvents.ResolveByIds(ids);
-        if (matches.Count != ids.Count) throw new ArgumentOutOfRangeException(nameof(ids));
-        return matches.Select(value => new DirectEventSelection(
-            value.Value,
-            value.Index,
-            SnapshotDirectEvent(value.Value))).ToArray();
+        DirectMidiChannelEvent[] values = segment.ChannelEvents.ResolveValuesByIds(distinct).ToArray();
+        if (values.Length != ids.Count) throw new ArgumentOutOfRangeException(nameof(ids));
+        return values.Select(value => new DirectEventSelection(
+            value,
+            SnapshotDirectEvent(value))).ToArray();
     }
 
     private static OpaqueEventSelection[] SelectOpaqueEvents(
@@ -982,12 +1083,11 @@ public static partial class ProjectDomainEditCommands
             if (id == default || !distinct.Add(id))
                 throw new ArgumentException("Imported MIDI event IDs must be distinct.", nameof(ids));
         }
-        IReadOnlyList<OpaqueMidiEventMatch> matches = segment.OpaqueEvents.ResolveByIds(ids);
-        if (matches.Count != ids.Count) throw new ArgumentOutOfRangeException(nameof(ids));
-        return matches.Select(value => new OpaqueEventSelection(
-            value.Value,
-            value.Index,
-            SnapshotOpaqueEvent(value.Value))).ToArray();
+        OpaqueMidiEvent[] values = segment.OpaqueEvents.ResolveValuesByIds(distinct).ToArray();
+        if (values.Length != ids.Count) throw new ArgumentOutOfRangeException(nameof(ids));
+        return values.Select(value => new OpaqueEventSelection(
+            value,
+            SnapshotOpaqueEvent(value))).ToArray();
     }
 
     private static void ValidateMidiSegmentPlacements(
@@ -1026,7 +1126,8 @@ public static partial class ProjectDomainEditCommands
         }
     }
 
-    private static MidiSegment CloneMidiSegment(MidoraProject project, MidiSegment source, long start)
+    private static MidiSegment CloneMidiSegment(MidoraProject project, MidiSegment source, long start,
+        DirectContentCopyProgress? progress = null)
     {
         MidiSegment result = new(project)
         {
@@ -1034,50 +1135,41 @@ public static partial class ProjectDomainEditCommands
             LengthTicks = source.LengthTicks,
             ContentOffsetTick = source.ContentOffsetTick
         };
-        foreach (DirectMidiNote note in source.Notes)
-        {
-            result.Notes.Add(new DirectMidiNote(project)
-            {
-                StartTick = note.StartTick,
-                LengthTicks = note.LengthTicks,
-                Key = note.Key,
-                NoteOnVelocity = note.NoteOnVelocity,
-                NoteOffVelocity = note.NoteOffVelocity,
-                NoteOnOrder = note.NoteOnOrder,
-                NoteOffOrder = note.NoteOffOrder
-            });
-        }
-        foreach (DirectMidiChannelEvent value in source.ChannelEvents)
-        {
-            result.ChannelEvents.Add(new DirectMidiChannelEvent(project)
-            {
-                Tick = value.Tick,
-                Kind = value.Kind,
-                Data1 = value.Data1,
-                Data2 = value.Data2,
-                Order = value.Order
-            });
-        }
-        foreach (OpaqueMidiEvent value in source.OpaqueEvents)
-        {
-            result.OpaqueEvents.Add(new OpaqueMidiEvent(project)
-            {
-                Tick = value.Tick,
-                Kind = value.Kind,
-                MetaType = value.MetaType,
-                Payload = value.Payload.ToArray(),
-                Order = value.Order
-            });
-        }
+        var notes = source.Notes.CreateObjectSource();
+        var events = source.ChannelEvents.CreateObjectSource();
+        var opaque = source.OpaqueEvents.CreateObjectSource();
+        progress ??= new(DirectContentRecordCount(source));
+        AdoptBoundedDirectMidiNotes(project, result, progress.Read(notes)
+            .Select(value => value with { Id = project.AllocateStableId() }));
+        long firstEventId = project.NextStableId;
+        AdoptBoundedDirectMidiEvents(project, result, progress.Read(events)
+            .Select(value => value with { Id = project.AllocateStableId() }));
+        result.InstrumentChanges = InstrumentChangeCopies.Restore(project,
+            InstrumentChangeCopies.Capture(source.InstrumentChanges, events), firstEventId, true,
+            group => InstrumentChangeResolver.TryRead(result, group, out _));
+        AdoptBoundedOpaqueMidiEvents(project, result, progress.Read(opaque)
+            .Select(value => value with { Id = project.AllocateStableId() }));
         return result;
     }
 
     private static void ShiftMidiSegmentContent(MidiSegment segment, long delta)
     {
         if (delta == 0) return;
-        foreach (DirectMidiNote note in segment.Notes) note.StartTick = checked(note.StartTick + delta);
-        foreach (DirectMidiChannelEvent value in segment.ChannelEvents) value.Tick = checked(value.Tick + delta);
-        foreach (OpaqueMidiEvent value in segment.OpaqueEvents) value.Tick = checked(value.Tick + delta);
+        using (segment.Notes.BeginBatchChangeAll())
+        {
+            foreach (DirectMidiNote note in segment.Notes)
+                note.StartTick = checked(note.StartTick + delta);
+        }
+        using (segment.ChannelEvents.BeginBatchChangeAll())
+        {
+            foreach (DirectMidiChannelEvent value in segment.ChannelEvents)
+                value.Tick = checked(value.Tick + delta);
+        }
+        using (segment.OpaqueEvents.BeginBatchChangeAll())
+        {
+            foreach (OpaqueMidiEvent value in segment.OpaqueEvents)
+                value.Tick = checked(value.Tick + delta);
+        }
     }
 
     private static void SetMidiSegmentWindow(MidiSegment segment, SegmentWindow value)
@@ -1100,13 +1192,14 @@ public static partial class ProjectDomainEditCommands
 
     private static void ApplyDirectNote(DirectMidiNote target, DirectNoteValue value)
     {
-        target.StartTick = value.StartTick;
-        target.LengthTicks = value.LengthTicks;
-        target.Key = value.Key;
-        target.NoteOnVelocity = value.NoteOnVelocity;
-        target.NoteOffVelocity = value.NoteOffVelocity;
-        target.NoteOnOrder = value.NoteOnOrder;
-        target.NoteOffOrder = value.NoteOffOrder;
+        target.SetValues(
+            value.StartTick,
+            value.LengthTicks,
+            value.Key,
+            value.NoteOnVelocity,
+            value.NoteOffVelocity,
+            value.NoteOnOrder,
+            value.NoteOffOrder);
     }
 
     private static DirectMidiEventValue SnapshotDirectEvent(DirectMidiChannelEvent value) => new(
@@ -1118,13 +1211,12 @@ public static partial class ProjectDomainEditCommands
         return result;
     }
     private static void ApplyDirectEvent(DirectMidiChannelEvent target, DirectMidiEventValue value)
-    {
-        target.Tick = value.Tick;
-        target.Kind = value.Kind;
-        target.Data1 = value.Data1;
-        target.Data2 = value.Data2;
-        target.Order = value.Order;
-    }
+        => target.SetValues(
+            value.Tick,
+            value.Kind,
+            value.Data1,
+            value.Data2,
+            value.Order);
     private static OpaqueMidiEventValue SnapshotOpaqueEvent(OpaqueMidiEvent value) => new(
         value.Tick,
         value.Kind,
@@ -1167,14 +1259,12 @@ public static partial class ProjectDomainEditCommands
         SegmentWindow Old,
         SegmentWindow Replacement,
         long ContentShift);
-    private readonly record struct DirectNoteSelection(DirectMidiNote Note, int Index);
+    private readonly record struct DirectNoteSelection(DirectMidiNote Note);
     private readonly record struct DirectEventSelection(
         DirectMidiChannelEvent Event,
-        int Index,
         DirectMidiEventValue Original);
     private readonly record struct OpaqueEventSelection(
         OpaqueMidiEvent Event,
-        int Index,
         OpaqueMidiEventValue Original);
     private readonly record struct DirectNoteValue(
         long StartTick,

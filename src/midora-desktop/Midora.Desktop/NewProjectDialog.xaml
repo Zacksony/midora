@@ -3,7 +3,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
-        Title="New Project" Width="620" Height="520" MinWidth="560" MinHeight="460"
+        Title="New Project" Width="720" Height="520" MinWidth="680" MinHeight="460"
         WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterOwner"
         Background="{StaticResource Brush.Surface.0}" SnapsToDevicePixels="True" UseLayoutRounding="True">
   <WindowChrome.WindowChrome>
@@ -35,13 +35,13 @@
             <TextBlock Style="{StaticResource Text.Overline}" Text="CREATION"/>
             <CheckBox x:Name="SaveNowCheck" Margin="0,12,0,0" Content="Save Project immediately" Checked="OnSaveNowChanged" Unchecked="OnSaveNowChanged"/>
             <TextBlock Margin="0,12,0,4" Style="{StaticResource Text.Caption}" Text="TARGET FILE"/>
-            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="PathBox" IsReadOnly="True"/><Button x:Name="BrowseButton" Grid.Column="1" Width="76" Margin="6,0,0,0" Content="Browse…" Click="OnBrowseClick"/></Grid>
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="PathBox" IsReadOnly="True"/><Button x:Name="BrowseButton" Grid.Column="1" MinWidth="104" Margin="6,0,0,0" Content="Browse…" Click="OnBrowseClick"/></Grid>
             <TextBlock x:Name="ValidationText" Margin="0,12,0,0" Foreground="{StaticResource Brush.Red.Hover}" TextWrapping="Wrap"/>
           </StackPanel>
         </Grid>
       </ScrollViewer>
       <Border Grid.Row="2" Padding="10" Background="{StaticResource Brush.Surface.1}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0">
-        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Margin="0,0,7,0" Style="{StaticResource Button.Dialog.Cancel}" Content="Cancel" Click="OnCancelClick"/><Button Style="{StaticResource Button.Dialog.Confirm}" Content="Create Project" Click="OnCreateClick"/></StackPanel>
+        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Margin="0,0,7,0" Style="{StaticResource Button.Dialog.Cancel}" Content="Cancel" Click="OnCancelClick"/><Button Style="{StaticResource Button.Dialog.Confirm}" Content="Create" Click="OnCreateClick"/></StackPanel>
       </Border>
     </Grid>
   </Border>

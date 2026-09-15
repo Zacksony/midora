@@ -11,6 +11,38 @@
         <ResourceDictionary Source="/Midora.Desktop.Presentation;component/Themes/Controls.xaml" />
       </ResourceDictionary.MergedDictionaries>
       <BooleanToVisibilityConverter x:Key="BooleanToVisibility" />
+      <Style x:Key="TaskProgressBar" TargetType="ProgressBar" BasedOn="{StaticResource {x:Type ProgressBar}}">
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ProgressBar">
+              <Grid ClipToBounds="True">
+                <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="3"/>
+                <Border x:Name="PART_Indicator" HorizontalAlignment="Left"
+                        Background="{TemplateBinding Foreground}" CornerRadius="3"/>
+                <Border x:Name="IndeterminateIndicator" Width="88" HorizontalAlignment="Left"
+                        Background="{TemplateBinding Foreground}" CornerRadius="3" Visibility="Collapsed">
+                  <Border.RenderTransform><TranslateTransform X="-88"/></Border.RenderTransform>
+                </Border>
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsIndeterminate" Value="True">
+                  <Setter TargetName="PART_Indicator" Property="Visibility" Value="Collapsed"/>
+                  <Setter TargetName="IndeterminateIndicator" Property="Visibility" Value="Visible"/>
+                  <Trigger.EnterActions>
+                    <BeginStoryboard>
+                      <Storyboard>
+                        <DoubleAnimation Storyboard.TargetName="IndeterminateIndicator"
+                                         Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
+                                         From="-88" To="460" Duration="0:0:1.15" RepeatBehavior="Forever"/>
+                      </Storyboard>
+                    </BeginStoryboard>
+                  </Trigger.EnterActions>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
     </ResourceDictionary>
   </Application.Resources>
 </Application>

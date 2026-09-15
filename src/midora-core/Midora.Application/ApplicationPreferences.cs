@@ -1,4 +1,5 @@
 using Midora.Audio;
+using Midora.Common;
 using Midora.Domain;
 using Midora.Playback;
 
@@ -71,17 +72,8 @@ public sealed record AudioCachePreferences(
         GetDefaultRootPath(),
         DefaultMaximumReusableBytes);
 
-    public static string GetDefaultRootPath()
-    {
-        string localApplicationData = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localApplicationData))
-        {
-            throw new InvalidOperationException(
-                "The current Windows user's Local Application Data directory is unavailable.");
-        }
-        return Path.Combine(localApplicationData, "Midora", "AudioCache");
-    }
+    public static string GetDefaultRootPath() =>
+        MidoraProgramData.Current.AudioCacheDirectory;
 
     public void Validate()
     {
@@ -194,11 +186,36 @@ public sealed record AppearancePreferences(string Language)
     }
 }
 
-public sealed record ApplicationSoundFontPreference(
-    string Path,
-    bool Enabled,
-    SoundFontTarget? Target = null)
+public sealed record ApplicationSoundFontPreference
 {
+    public ApplicationSoundFontPreference(
+        string path,
+        bool enabled,
+        SoundFontTarget? target = null)
+        : this(SoundFontEntryId.Create(), path, enabled, target)
+    {
+    }
+
+    public ApplicationSoundFontPreference(
+        SoundFontEntryId entryId,
+        string path,
+        bool enabled,
+        SoundFontTarget? target = null)
+    {
+        EntryId = entryId;
+        Path = path;
+        Enabled = enabled;
+        Target = target;
+    }
+
+    public SoundFontEntryId EntryId { get; init; }
+
+    public string Path { get; init; }
+
+    public bool Enabled { get; init; }
+
+    public SoundFontTarget? Target { get; init; }
+
     public ApplicationSoundFontPreference Normalize()
     {
         Validate();
@@ -207,6 +224,7 @@ public sealed record ApplicationSoundFontPreference(
 
     public void Validate()
     {
+        EntryId.Validate();
         new SoundFontConfiguration(Path, Target).Validate();
     }
 
@@ -227,7 +245,7 @@ public sealed record DesktopUiPreferences(
 {
     public bool ProjectPanelVisible { get; init; } = true;
     public bool BottomPanelVisible { get; init; } = true;
-    public bool FollowPlayback { get; init; } = true;
+    public bool FollowPlayback { get; init; } = false;
 
     public static DesktopUiPreferences Default { get; } = new(
         1440,
@@ -258,6 +276,16 @@ public sealed record DesktopUiPreferences(
     }
 }
 
+public sealed record InstrumentAuditionPreferences(bool Automatic, int Key, int Velocity, int DurationMilliseconds)
+{
+    public static InstrumentAuditionPreferences Default { get; } = new(true, 60, 100, 500);
+    public void Validate()
+    {
+        if (Key is < 0 or > 127 || Velocity is < 1 or > 127 || DurationMilliseconds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(InstrumentAuditionPreferences));
+    }
+}
+
 public sealed record ApplicationPreferences(
     RealtimeAudioPreferences RealtimeAudio,
     AudioCachePreferences AudioCache,
@@ -268,6 +296,7 @@ public sealed record ApplicationPreferences(
         Array.Empty<ApplicationSoundFontPreference>();
     public PlaybackPreferences Playback { get; init; } = PlaybackPreferences.Default;
     public AppearancePreferences Appearance { get; init; } = AppearancePreferences.Default;
+    public InstrumentAuditionPreferences InstrumentAudition { get; init; } = InstrumentAuditionPreferences.Default;
 
     public static ApplicationPreferences Default { get; } =
         new(
@@ -288,6 +317,8 @@ public sealed record ApplicationPreferences(
         DesktopUi.Validate();
         Playback.Validate();
         Appearance.Validate();
+        ArgumentNullException.ThrowIfNull(InstrumentAudition);
+        InstrumentAudition.Validate();
         ValidateDirectory(RecentDirectories.OpenProject);
         ValidateDirectory(RecentDirectories.SaveAndSaveCopy);
         ValidateDirectory(RecentDirectories.SoundFont);
@@ -301,10 +332,17 @@ public sealed record ApplicationPreferences(
                 "At most 256 SoundFonts can be configured.");
         }
         HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<SoundFontEntryId> entryIds = [];
         foreach (ApplicationSoundFontPreference soundFont in SoundFonts)
         {
             ArgumentNullException.ThrowIfNull(soundFont);
             soundFont.Validate();
+            if (!entryIds.Add(soundFont.EntryId))
+            {
+                throw new ArgumentException(
+                    "The Application SoundFont list contains a duplicate entry ID.",
+                    nameof(SoundFonts));
+            }
             if (!paths.Add(Path.GetFullPath(soundFont.Path)))
             {
                 throw new ArgumentException(

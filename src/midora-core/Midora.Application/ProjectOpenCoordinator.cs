@@ -18,6 +18,7 @@ public sealed record ProjectOpenCandidateProgress(
 public sealed class ProjectOpenCandidate : IDisposable, IAsyncDisposable
 {
     public const string RecoveredSourceDirtyReason = "RecoveredProjectSourceData";
+    public const string FormatUpgradeDirtyReason = "ProjectFormatUpgradeRequired";
 
     private readonly MidoraProjectPackageV1 _packages;
     private readonly MidoraProjectOpenResultV1 _openResult;
@@ -30,13 +31,19 @@ public sealed class ProjectOpenCandidate : IDisposable, IAsyncDisposable
     {
         _packages = packages;
         _openResult = openResult;
-        CurrentProjectPath = currentProjectPath;
+        SourceProjectPath = currentProjectPath;
+        CurrentProjectPath = openResult.RequiresFormatUpgrade
+            ? null
+            : currentProjectPath;
         Diagnostics = Array.AsReadOnly(openResult.Diagnostics.ToArray());
     }
 
     public MidoraProject Project => _openResult.Project;
-    public ProjectDocumentOrigin Origin => ProjectDocumentOrigin.Persisted;
-    public string CurrentProjectPath { get; }
+    public ProjectDocumentOrigin Origin => _openResult.RequiresFormatUpgrade
+        ? ProjectDocumentOrigin.Unsaved
+        : ProjectDocumentOrigin.Persisted;
+    public string SourceProjectPath { get; }
+    public string? CurrentProjectPath { get; }
     public MidoraProjectFileInformationV1 FileInformation => _openResult.FileInformation;
     public bool RequiresSave => _openResult.IsModified;
     public IReadOnlyList<MidoraPackageDiagnosticV1> Diagnostics { get; }
@@ -54,10 +61,12 @@ public sealed class ProjectOpenCandidate : IDisposable, IAsyncDisposable
         RequireCandidateProject(compilation.Project);
         ProjectDocumentSession document = new(
             compilation,
-            ProjectDocumentOrigin.Persisted);
+            Origin);
         if (RequiresSave)
         {
-            document.MarkExternallyModified(RecoveredSourceDirtyReason);
+            document.MarkExternallyModified(_openResult.RequiresFormatUpgrade
+                ? FormatUpgradeDirtyReason
+                : RecoveredSourceDirtyReason);
         }
         return document;
     }
@@ -71,7 +80,11 @@ public sealed class ProjectOpenCandidate : IDisposable, IAsyncDisposable
             document,
             _packages,
             CurrentProjectPath,
-            FileInformation);
+            FileInformation,
+            _openResult.RequiresFormatUpgrade ? SourceProjectPath : null,
+            _openResult.Presentation,
+            _openResult.IsPresentationModified,
+            _openResult.LegacySourceIdentity);
     }
 
     public void Dispose()

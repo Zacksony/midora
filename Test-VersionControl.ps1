@@ -52,13 +52,23 @@ foreach ($relativePath in $productionVersionSources) {
     }
 }
 
-$persistenceContract = Get-Content -LiteralPath (
+$persistenceContractV1 = Get-Content -LiteralPath (
     Join-Path $repositoryRoot "src\midora-core\Midora.Persistence\PersistenceContractV1.cs") `
     -Raw -Encoding utf8
-if ($persistenceContract -notmatch 'public const int FileFormatVersion = 1;' -or
-    $persistenceContract -notmatch 'public const int SchemaVersion = 1;') {
+if ($persistenceContractV1 -notmatch 'public const int FileFormatVersion = 1;' -or
+    $persistenceContractV1 -notmatch 'public const int SchemaVersion = 1;') {
     throw "The frozen Project Format 1 contract changed without introducing a new versioned contract."
 }
+
+$persistenceContractV2 = Get-Content -LiteralPath (
+    Join-Path $repositoryRoot "src\midora-core\Midora.Persistence\PersistenceContractV2.cs") `
+    -Raw -Encoding utf8
+if ($persistenceContractV2 -notmatch 'public const int FileFormatVersion = 2;' -or
+    $persistenceContractV2 -notmatch 'public const int ManifestSchemaVersion = 2;' -or
+    $persistenceContractV2 -notmatch 'public const int EventInstrumentSchemaVersion = 2;') {
+    throw "The current Project Format 2 contract is not the expected versioned contract."
+}
+$currentProjectFormatVersion = 2
 
 if ($RequireClean -or $RequireTagAtHead) {
     $status = & git -C $repositoryRoot status --porcelain
@@ -85,4 +95,4 @@ if ($RequireTagAtHead) {
     }
 }
 
-Write-Host "Midora version contract passed: product=$productVersion, assembly=$assemblyVersion, file=$fileVersion, project-format=1."
+Write-Host "Midora version contract passed: product=$productVersion, assembly=$assemblyVersion, file=$fileVersion, project-format=$currentProjectFormatVersion."

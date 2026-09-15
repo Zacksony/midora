@@ -1,0 +1,99 @@
+<Window x:Class="Midora.Desktop.SplitNotesDialog"
+        FontFamily="{StaticResource Font.UI}"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+        xmlns:local="clr-namespace:Midora.Desktop"
+        Title="Split Notes"
+        Width="690" Height="500" MinWidth="610" MinHeight="450" MaxHeight="760"
+        Background="{StaticResource Brush.Surface.0}" WindowStyle="None"
+        ResizeMode="CanResizeWithGrip" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        PreviewKeyDown="OnDialogPreviewKeyDown">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="36" CornerRadius="0" GlassFrameThickness="0"
+                        ResizeBorderThickness="6" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+  <Border BorderBrush="{StaticResource Brush.Border.Strong}" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/><RowDefinition Height="64"/></Grid.RowDefinitions>
+      <Grid Background="{StaticResource Brush.Black}" MouseLeftButtonDown="OnTitleMouseLeftButtonDown">
+        <TextBlock Margin="11,0,44,0" VerticalAlignment="Center" FontWeight="SemiBold" Text="Split Notes"/>
+        <Button Width="46" Height="36" HorizontalAlignment="Right" Style="{StaticResource Button.Caption.Close}"
+                Click="OnCancelClick"><ui:FluentIcon Style="{StaticResource Icon.WindowControl}" Data="{StaticResource WindowControl.Close}"/></Button>
+      </Grid>
+
+      <ScrollViewer Grid.Row="1" Padding="16,14" HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <TextBlock Margin="0,0,0,14" Style="{StaticResource Text.Muted}" TextWrapping="Wrap"
+                     Text="Knives are generated across the full selected time span and then applied to every selected note they cross."/>
+          <Grid Margin="0,0,0,13">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Text="Split Mode"/>
+            <ComboBox x:Name="ModeBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="OnModeChanged">
+              <ComboBoxItem Content="Fixed Piece Length"/>
+              <ComboBoxItem Content="Maximum Piece Count"/>
+              <ComboBoxItem Content="Expression"/>
+            </ComboBox>
+          </Grid>
+
+          <Grid x:Name="FixedLengthRow" Margin="0,0,0,13">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Text="Piece Length"/>
+            <TextBox x:Name="FixedLengthBox" Grid.Column="1" Text="192"
+                     TextChanged="OnInputChanged"/>
+            <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center" Text="Ticks"/>
+          </Grid>
+
+          <Grid x:Name="PieceCountRow" Margin="0,0,0,13" Visibility="Collapsed">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Text="Maximum Piece Count"/>
+            <TextBox x:Name="PieceCountBox" Grid.Column="1" Text="2"
+                     TextChanged="OnInputChanged"/>
+          </Grid>
+
+          <Grid x:Name="ExpressionRow" Margin="0,0,0,13" Visibility="Collapsed">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Top" Margin="0,7,10,0" Text="Piece Length Expression"/>
+            <local:BatchExpressionEditor x:Name="ExpressionBox" Grid.Column="1" Text="=192"
+                                         TextChanged="OnInputChanged"
+                                         CommitRequested="OnExpressionCommitRequested"/>
+          </Grid>
+
+          <Grid x:Name="MaximumCutsRow" Margin="0,0,0,13" Visibility="Collapsed">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Text="Maximum Cuts"/>
+            <TextBox x:Name="MaximumCutsBox" Grid.Column="1" Text="65535"
+                     TextChanged="OnInputChanged"/>
+          </Grid>
+
+          <WrapPanel Margin="170,0,0,10">
+            <Button Width="86" Margin="0,0,6,6" Content="Help" Click="OnHelpClick"/>
+            <Button Width="96" Margin="0,0,6,6" Content="Presets…" Click="OnPresetsClick"/>
+            <Button Width="112" Margin="0,0,6,6" Content="Save Preset…" Click="OnSavePresetClick"/>
+          </WrapPanel>
+          <Border Padding="9,7" Background="{StaticResource Brush.Surface.1}"
+                  BorderBrush="{StaticResource Brush.Border}" BorderThickness="1" CornerRadius="3">
+            <TextBlock x:Name="ValidationText" Style="{StaticResource Text.Caption}"
+                       Text="Not validated." TextWrapping="Wrap"/>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <Border Grid.Row="2" Padding="12,11" Background="{StaticResource Brush.Surface.1}"
+              BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0">
+        <Grid>
+          <Button Width="90" HorizontalAlignment="Left" Content="Validate" Click="OnValidateClick"/>
+          <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+            <Button Margin="0,0,6,0" IsCancel="True" Style="{StaticResource Button.Dialog.Cancel}"
+                    Content="Cancel" Click="OnCancelClick"/>
+            <Button IsDefault="True" Style="{StaticResource Button.Dialog.Confirm}"
+                    Content="Apply" Click="OnApplyClick"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

@@ -9,6 +9,7 @@ public static partial class ProjectObjectClipboard
         MidoraId eventInstrumentId,
         MidoraId parameterId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         EventInstrument instrument = FindClipboardInstrument(document, eventInstrumentId);
         LogicalParameterDefinition parameter = instrument.LogicalParameters
             .SingleOrDefault(value => value.Id == parameterId)
@@ -28,6 +29,7 @@ public static partial class ProjectObjectClipboard
         MidoraId eventInstrumentId,
         MidoraId mappingId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         EventInstrument instrument = FindClipboardInstrument(document, eventInstrumentId);
         LogicalParameterMapping mapping = instrument.ParameterMappings
             .SingleOrDefault(value => value.Id == mappingId)
@@ -49,6 +51,7 @@ public static partial class ProjectObjectClipboard
         MidoraId mappingChainId,
         MidoraId mappingStepId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         EventInstrument instrument = FindClipboardInstrument(document, eventInstrumentId);
         MappingChain chain = ProjectDomainEditCommands.FindMappingChainForClipboard(
             instrument,
@@ -68,6 +71,7 @@ public static partial class ProjectObjectClipboard
         MidoraId eventInstrumentId,
         MidoraId envelopeId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         EventInstrument instrument = FindClipboardInstrument(document, eventInstrumentId);
         InstrumentEnvelope envelope = instrument.Envelopes
             .SingleOrDefault(value => value.Id == envelopeId)
@@ -86,6 +90,7 @@ public static partial class ProjectObjectClipboard
         MidoraId eventInstrumentId,
         MidoraId mappingFunctionId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         EventInstrument instrument = FindClipboardInstrument(document, eventInstrumentId);
         CSharpMappingFunction function = instrument.MappingFunctions
             .SingleOrDefault(value => value.Id == mappingFunctionId)
@@ -105,13 +110,13 @@ public static partial class ProjectObjectClipboard
         ProjectObjectClipboardPayload payload,
         MidoraId targetEventInstrumentId,
         int? insertionIndex = null) =>
-        ProjectDomainEditCommands.PasteLogicalParameterDefinitionClipboard(
+        KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteLogicalParameterDefinitionClipboard(
             RequirePayload<LogicalParameterDefinitionClipboardData>(
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.LogicalParameterDefinition),
             targetEventInstrumentId,
-            insertionIndex);
+            insertionIndex));
 
     public static IProjectEditCommand CreatePasteLogicalParameterMappingCommand(
         ProjectDocumentSession targetDocument,
@@ -119,14 +124,14 @@ public static partial class ProjectObjectClipboard
         MidoraId targetEventInstrumentId,
         MidoraId targetMappingId,
         bool nonEmptyReplacementConfirmed) =>
-        ProjectDomainEditCommands.PasteLogicalParameterMappingClipboard(
+        KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteLogicalParameterMappingClipboard(
             RequirePayload<LogicalParameterMappingClipboardData>(
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.LogicalParameterMapping),
             targetEventInstrumentId,
             targetMappingId,
-            nonEmptyReplacementConfirmed);
+            nonEmptyReplacementConfirmed));
 
     public static IProjectEditCommand CreatePasteMappingStepCommand(
         ProjectDocumentSession targetDocument,
@@ -134,40 +139,40 @@ public static partial class ProjectObjectClipboard
         MidoraId targetEventInstrumentId,
         MidoraId targetMappingChainId,
         int? insertionIndex = null) =>
-        ProjectDomainEditCommands.PasteMappingStepClipboard(
+        KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteMappingStepClipboard(
             RequirePayload<MappingStepClipboardData>(
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.MappingStep),
             targetEventInstrumentId,
             targetMappingChainId,
-            insertionIndex);
+            insertionIndex));
 
     public static IProjectEditCommand CreatePasteEnvelopePresetCommand(
         ProjectDocumentSession targetDocument,
         ProjectObjectClipboardPayload payload,
         MidoraId targetEventInstrumentId,
         int? insertionIndex = null) =>
-        ProjectDomainEditCommands.PasteEnvelopePresetClipboard(
+        KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteEnvelopePresetClipboard(
             RequirePayload<EnvelopePresetClipboardData>(
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.EnvelopePreset),
             targetEventInstrumentId,
-            insertionIndex);
+            insertionIndex));
 
     public static IProjectEditCommand CreatePasteMappingFunctionCommand(
         ProjectDocumentSession targetDocument,
         ProjectObjectClipboardPayload payload,
         MidoraId targetEventInstrumentId,
         int? insertionIndex = null) =>
-        ProjectDomainEditCommands.PasteMappingFunctionClipboard(
+        KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteMappingFunctionClipboard(
             RequirePayload<MappingFunctionDefinitionClipboardData>(
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.MappingFunction),
             targetEventInstrumentId,
-            insertionIndex);
+            insertionIndex));
 
     public static ProjectObjectClipboardCutPreparation PrepareCutLogicalParameterDefinition(
         ProjectDocumentSession document,

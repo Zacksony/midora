@@ -4,6 +4,7 @@ using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Midora.Domain;
 using Midora.Persistence.Wire.Proto.V1;
+using Midora.Persistence.Wire.Proto.V2;
 
 namespace Midora.Persistence.Tests;
 
@@ -207,6 +208,8 @@ public sealed class ProjectObjectProtobufV1Tests
                 "settings/project-settings.json",
                 "settings/global-reset-defaults.json",
                 "settings/global-event-scope-defaults.json",
+                "settings/project-presentation.json",
+                "settings/instrument-changes.pb",
                 $"event-instrument-usages/eiu_{usage.Id}.pb",
                 $"event-instruments/ei_{instrument.Id}.pb",
                 $"logical-tracks/lt_{track.Id}.pb"
@@ -260,8 +263,8 @@ public sealed class ProjectObjectProtobufV1Tests
         await packages.SaveCopyAsync(source, tagPath);
 
         byte[] original = ReadEntry(idPath, objectPath);
-        EventInstrumentV1 wrongId = EventInstrumentV1.Parser.ParseFrom(original);
-        wrongId.Id = 999;
+        EventInstrumentV2 wrongId = EventInstrumentV2.Parser.ParseFrom(original);
+        wrongId.Definition.Id = 999;
         ReplaceEntryAndUpdateManifest(
             idPath,
             objectPath,
@@ -287,7 +290,7 @@ public sealed class ProjectObjectProtobufV1Tests
         string objectPath = $"event-instruments/ei_{source.EventInstruments[0].Id}.pb";
         MidoraProjectPackageV1 packages = CreateService();
         await packages.SaveCopyAsync(source, packagePath);
-        EventInstrumentV1 wrongType = EventInstrumentV1.Parser.ParseFrom(ReadEntry(packagePath, objectPath));
+        EventInstrumentV2 wrongType = EventInstrumentV2.Parser.ParseFrom(ReadEntry(packagePath, objectPath));
         wrongType.ObjectType = LogicalTrackProtobufCodecV1.ObjectType;
         ReplaceEntryAndUpdateManifest(
             packagePath,
@@ -797,12 +800,12 @@ public sealed class ProjectObjectProtobufV1Tests
         byte[] replacementBytes)
     {
         using ZipArchive archive = ZipFile.Open(packagePath, ZipArchiveMode.Update);
-        ManifestJsonV1 manifest;
+        ManifestJsonV4 manifest;
         using (Stream manifestInput = archive.GetEntry("manifest.json")!.Open())
         using (MemoryStream buffer = new())
         {
             manifestInput.CopyTo(buffer);
-            manifest = ManifestCodecV1.Parse(buffer.ToArray());
+            manifest = ManifestCodecV4.Parse(buffer.ToArray());
         }
         ManifestFileEntryJsonV1[] files = manifest.Files.Select(item => new ManifestFileEntryJsonV1
         {
@@ -813,7 +816,7 @@ public sealed class ProjectObjectProtobufV1Tests
                 ? Convert.ToHexStringLower(SHA256.HashData(replacementBytes))
                 : item.Sha256
         }).ToArray();
-        ManifestJsonV1 updated = new()
+        ManifestJsonV4 updated = new()
         {
             Magic = manifest.Magic,
             FileFormatVersion = manifest.FileFormatVersion,
@@ -828,7 +831,7 @@ public sealed class ProjectObjectProtobufV1Tests
         archive.GetEntry("manifest.json")!.Delete();
         using (Stream output = archive.CreateEntry("manifest.json").Open())
         {
-            output.Write(ManifestCodecV1.Serialize(updated));
+            output.Write(ManifestCodecV4.Serialize(updated));
         }
     }
 
@@ -839,14 +842,14 @@ public sealed class ProjectObjectProtobufV1Tests
         byte[] bytes)
     {
         using ZipArchive archive = ZipFile.Open(packagePath, ZipArchiveMode.Update);
-        ManifestJsonV1 manifest;
+        ManifestJsonV4 manifest;
         using (Stream manifestInput = archive.GetEntry("manifest.json")!.Open())
         using (MemoryStream buffer = new())
         {
             manifestInput.CopyTo(buffer);
-            manifest = ManifestCodecV1.Parse(buffer.ToArray());
+            manifest = ManifestCodecV4.Parse(buffer.ToArray());
         }
-        ManifestJsonV1 updated = new()
+        ManifestJsonV4 updated = new()
         {
             Magic = manifest.Magic,
             FileFormatVersion = manifest.FileFormatVersion,
@@ -861,7 +864,9 @@ public sealed class ProjectObjectProtobufV1Tests
                 {
                     Path = entryName,
                     Kind = kind,
-                    SchemaVersion = PersistenceContractV1.SchemaVersion,
+                    SchemaVersion = kind == "event-instrument-pb"
+                        ? PersistenceContractV3.EventInstrumentSchemaVersion
+                        : PersistenceContractV3.ReusedComponentSchemaVersion,
                     Sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes))
                 }
             ]
@@ -870,7 +875,7 @@ public sealed class ProjectObjectProtobufV1Tests
         archive.GetEntry("manifest.json")!.Delete();
         using (Stream output = archive.CreateEntry("manifest.json").Open())
         {
-            output.Write(ManifestCodecV1.Serialize(updated));
+            output.Write(ManifestCodecV4.Serialize(updated));
         }
     }
 

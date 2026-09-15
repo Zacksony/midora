@@ -33,7 +33,7 @@
 - canonical 事件的 Port / Channel / status channel 不一致。
 - Unit Track 布局缺失、重复冲突，或一个输出事件 Track 被构造为包含多个原始 Unit。
 - Per Port 请求的 Port 没有 canonical Channel Event。
-- 既有 MIDI 编码、TPQ、Tempo、VLQ、文本、Channel Event、自校验或文件事务失败条件保持不变。
+- TPQ、Tempo、文本、Channel Event、自校验或文件事务的既有失败条件保持不变。2026-09-10 对 VLQ delta 的严格拒绝已由 [SMF 导出边界决定](Midora-SMF-Export-Timing-Padding-and-Size-Limits-Architecture-Decisions.md) 取代：仅导出插入空 Text Meta；payload VLQ 仍严格拒绝。MTrk 不按大小拆分，数据区超 `0xFFFFFFFF` 字节仅导出失败。此新规则的产品代码/测试待实施，下文历史结果不证明其已通过。
 
 任何失败均不得发布 partial `.mid` 或成功 Readme。
 

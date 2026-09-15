@@ -23,6 +23,9 @@ public static partial class ProjectDomainEditCommands
                 nameof(trackName));
             int trackIndex = insertionIndex ?? project.ArrangementTracks.Count;
             ValidateInsertionIndex(trackIndex, project.ArrangementTracks.Count, nameof(insertionIndex));
+            MidoraColor trackColor = ProjectTrackColorPolicy.ColorForPureMidiTrackInsertion(
+                project,
+                trackIndex);
             MidiChannelRoot? existingFixed = routingMode == MidiChannelRootRoutingMode.Fixed
                 ? project.MidiChannelRoots.SingleOrDefault(value =>
                     value.RoutingMode == MidiChannelRootRoutingMode.Fixed
@@ -65,7 +68,8 @@ public static partial class ProjectDomainEditCommands
                         createdTrack = new(value)
                         {
                             Name = normalizedTrackName,
-                            MidiChannelRootId = root.Id
+                            MidiChannelRootId = root.Id,
+                            Color = trackColor
                         };
                     }
                     else
@@ -443,6 +447,9 @@ public static partial class ProjectDomainEditCommands
                     trackIndex = last + 1;
                 }
             }
+            MidoraColor trackColor = ProjectTrackColorPolicy.ColorForPureMidiTrackInsertion(
+                project,
+                trackIndex);
             return DeferredCreate(
                 RootChange(root.Id),
                 value =>
@@ -450,7 +457,8 @@ public static partial class ProjectDomainEditCommands
                     PureMidiTrack track = new(value)
                     {
                         Name = normalized,
-                        MidiChannelRootId = root.Id
+                        MidiChannelRootId = root.Id,
+                        Color = trackColor
                     };
                     value.PureMidiTracks.Add(track);
                     value.ArrangementTracks.Insert(
@@ -582,9 +590,16 @@ public static partial class ProjectDomainEditCommands
         });
 
     public static IProjectEditCommand DuplicatePureMidiTrack(MidoraId trackId, string? name = null) =>
+        new ProjectPresentationCloneCommand(DuplicatePureMidiTrackCore(trackId, name, detachedPreparation: false), PresentationCloneKind.MidiTrack, trackId);
+
+    private static IProjectEditCommand DuplicatePureMidiTrackCore(MidoraId trackId, string? name, bool detachedPreparation) =>
         Command("Duplicate Pure MIDI Track", project =>
         {
             PureMidiTrack source = FindPureMidiTrack(project, trackId);
+            if (!detachedPreparation && (source.Segments.Count > 4096 || RequiresBoundedMidiContent(source.Segments
+                .Select((segment, index) => new MidiSegmentSelection(source, segment, index, segment.ProjectStartTick)))))
+                return new SequentialProjectEditCommand("Duplicate Pure MIDI Track",
+                    [draft => DuplicatePureMidiTrackCore(trackId, name, detachedPreparation: true)]).Prepare(project);
             MidiChannelRoot root = FindMidiChannelRoot(project, source.MidiChannelRootId);
             int trackIndex = project.ArrangementTracks.IndexOf(
                 new(ArrangementTrackKind.PureMidiTrack, source.Id)) + 1;
@@ -731,7 +746,9 @@ public static partial class ProjectDomainEditCommands
 
     public static IProjectEditCommand SplitMidiSegment(
         MidoraId segmentId,
-        long projectSplitTick) =>
+        long projectSplitTick) => SplitMidiSegmentCore(segmentId, projectSplitTick, detachedPreparation: false);
+
+    private static IProjectEditCommand SplitMidiSegmentCore(MidoraId segmentId, long projectSplitTick, bool detachedPreparation) =>
         Command("Split MIDI Segment", project =>
         {
             MidiSegmentLocation source = FindMidiSegment(project, segmentId);
@@ -740,6 +757,11 @@ public static partial class ProjectDomainEditCommands
             {
                 throw new ArgumentOutOfRangeException(nameof(projectSplitTick));
             }
+
+            if (!detachedPreparation && RequiresBoundedMidiContent(
+                [new MidiSegmentSelection(source.Track, source.Segment, source.Index, source.Segment.ProjectStartTick)]))
+                return new SequentialProjectEditCommand("Split MIDI Segment",
+                    [draft => SplitMidiSegmentCore(segmentId, projectSplitTick, detachedPreparation: true)]).Prepare(project);
 
             MidiSegmentSplitResult? result = null;
             return Prepared(
@@ -778,6 +800,10 @@ public static partial class ProjectDomainEditCommands
         {
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             ValidateDirectMidiNote(startTick, lengthTicks, key, noteOnVelocity, noteOffVelocity);
+            if (location.Segment.Notes.Count > 4096)
+                return PrepareBoundedDirectMidiNoteAppend(project, segmentId, firstId =>
+                    [new DirectMidiNoteValue(new(firstId), startTick, lengthTicks, key, noteOnVelocity,
+                        noteOffVelocity, checked(firstId * 2), checked(firstId * 2 + 1))]);
             return ResolveTargetedExactDirectMidiCollisions(DeferredCreate(
                 PureMidiTrackChange(location.Track.Id),
                 value =>
@@ -811,6 +837,9 @@ public static partial class ProjectDomainEditCommands
         {
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             ValidateDirectMidiEvent(tick, kind, data1, data2);
+            if (location.Segment.ChannelEvents.Count > 4096)
+                return PrepareBoundedDirectMidiEventAppend(project, segmentId, firstId =>
+                    [new DirectMidiChannelEventValue(new(firstId), tick, kind, data1, data2, order ?? checked(firstId + 1))]);
             return ResolveTargetedExactDirectMidiCollisions(DeferredCreate(
                 PureMidiTrackChange(location.Track.Id),
                 value =>
@@ -844,21 +873,9 @@ public static partial class ProjectDomainEditCommands
 
     private static MidiSegmentLocation FindMidiSegment(MidoraProject project, MidoraId segmentId)
     {
-        MidiSegmentLocation? result = null;
-        foreach (PureMidiTrack track in project.PureMidiTracks)
-        {
-            for (int index = 0; index < track.Segments.Count; index++)
-            {
-                MidiSegment segment = track.Segments[index];
-                if (segment.Id != segmentId) continue;
-                if (result.HasValue)
-                {
-                    throw new InvalidOperationException("The MIDI Segment stable ID is duplicated.");
-                }
-                result = new(track, segment, index);
-            }
-        }
-        return result ?? throw new ArgumentOutOfRangeException(nameof(segmentId));
+        MidiSegmentIndexEntry result = ProjectSegmentIndex.FindMidi(project, segmentId)
+            ?? throw new ArgumentOutOfRangeException(nameof(segmentId));
+        return new(result.Track, result.Segment, result.Index);
     }
 
     private static MidiSegmentSplitResult SplitMidiSegmentContent(
@@ -881,48 +898,29 @@ public static partial class ProjectDomainEditCommands
             ContentOffsetTick = splitContentTick
         };
 
-        foreach (DirectMidiNote note in source.Notes)
-        {
-            MidiSegment target = note.StartTick < splitContentTick ? left : right;
-            long length = note.StartTick < splitContentTick
-                ? Math.Min(note.LengthTicks, checked(splitContentTick - note.StartTick))
-                : note.LengthTicks;
-            target.Notes.Add(new DirectMidiNote(project, note.Id)
-            {
-                StartTick = note.StartTick,
-                LengthTicks = length,
-                Key = note.Key,
-                NoteOnVelocity = note.NoteOnVelocity,
-                NoteOffVelocity = note.NoteOffVelocity,
-                NoteOnOrder = note.NoteOnOrder,
-                NoteOffOrder = note.NoteOffOrder
-            });
-        }
+        var notes = source.Notes.CreateObjectSource();
+        var events = source.ChannelEvents.CreateObjectSource();
+        var opaque = source.OpaqueEvents.CreateObjectSource();
+        var progress = new DirectContentCopyProgress(checked(DirectContentRecordCount(source) * 2));
+        AdoptBoundedDirectMidiNotes(project, left, progress.Read(notes)
+            .Where(value => value.StartTick < splitContentTick).Select(value => value with
+            { LengthTicks = Math.Min(value.LengthTicks, checked(splitContentTick - value.StartTick)) }));
+        AdoptBoundedDirectMidiNotes(project, right, progress.Read(notes)
+            .Where(value => value.StartTick >= splitContentTick));
+        AdoptBoundedDirectMidiEvents(project, left, progress.Read(events)
+            .Where(value => value.Tick < splitContentTick));
+        AdoptBoundedDirectMidiEvents(project, right, progress.Read(events)
+            .Where(value => value.Tick >= splitContentTick));
+        AdoptBoundedOpaqueMidiEvents(project, left, progress.Read(opaque)
+            .Where(value => value.Tick < splitContentTick));
+        AdoptBoundedOpaqueMidiEvents(project, right, progress.Read(opaque)
+            .Where(value => value.Tick >= splitContentTick));
 
-        foreach (DirectMidiChannelEvent value in source.ChannelEvents)
+        foreach (var group in source.InstrumentChanges.Values)
         {
-            MidiSegment target = value.Tick < splitContentTick ? left : right;
-            target.ChannelEvents.Add(new DirectMidiChannelEvent(project, value.Id)
-            {
-                Tick = value.Tick,
-                Kind = value.Kind,
-                Data1 = value.Data1,
-                Data2 = value.Data2,
-                Order = value.Order
-            });
-        }
-
-        foreach (OpaqueMidiEvent value in source.OpaqueEvents)
-        {
-            MidiSegment target = value.Tick < splitContentTick ? left : right;
-            target.OpaqueEvents.Add(new OpaqueMidiEvent(project, value.Id)
-            {
-                Tick = value.Tick,
-                Kind = value.Kind,
-                MetaType = value.MetaType,
-                Payload = value.Payload.ToArray(),
-                Order = value.Order
-            });
+            BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
+            if (InstrumentChangeResolver.TryRead(left, group, out _)) left.InstrumentChanges = left.InstrumentChanges.Add(group, true);
+            else if (InstrumentChangeResolver.TryRead(right, group, out _)) right.InstrumentChanges = right.InstrumentChanges.Add(group, true);
         }
 
         return new(left, right);
@@ -986,50 +984,11 @@ public static partial class ProjectDomainEditCommands
             MidiChannelRootId = targetRootId,
             Color = source.Color
         };
+        var progress = new DirectContentCopyProgress(source.Segments.Sum(DirectContentRecordCount));
         foreach (MidiSegment segment in source.Segments)
         {
-            MidiSegment segmentCopy = new(project)
-            {
-                ProjectStartTick = segment.ProjectStartTick,
-                LengthTicks = segment.LengthTicks,
-                ContentOffsetTick = segment.ContentOffsetTick
-            };
-            foreach (DirectMidiNote note in segment.Notes)
-            {
-                segmentCopy.Notes.Add(new DirectMidiNote(project)
-                {
-                    StartTick = note.StartTick,
-                    LengthTicks = note.LengthTicks,
-                    Key = note.Key,
-                    NoteOnVelocity = note.NoteOnVelocity,
-                    NoteOffVelocity = note.NoteOffVelocity,
-                    NoteOnOrder = note.NoteOnOrder,
-                    NoteOffOrder = note.NoteOffOrder
-                });
-            }
-            foreach (DirectMidiChannelEvent directEvent in segment.ChannelEvents)
-            {
-                segmentCopy.ChannelEvents.Add(new DirectMidiChannelEvent(project)
-                {
-                    Tick = directEvent.Tick,
-                    Kind = directEvent.Kind,
-                    Data1 = directEvent.Data1,
-                    Data2 = directEvent.Data2,
-                    Order = directEvent.Order
-                });
-            }
-            foreach (OpaqueMidiEvent opaque in segment.OpaqueEvents)
-            {
-                segmentCopy.OpaqueEvents.Add(new OpaqueMidiEvent(project)
-                {
-                    Tick = opaque.Tick,
-                    Kind = opaque.Kind,
-                    MetaType = opaque.MetaType,
-                    Payload = opaque.Payload.ToArray(),
-                    Order = opaque.Order
-                });
-            }
-            result.Segments.Add(segmentCopy);
+            BulkEditPreparationContext.Current?.Token.ThrowIfCancellationRequested();
+            result.Segments.Add(CloneMidiSegment(project, segment, segment.ProjectStartTick, progress));
         }
         return result;
     }

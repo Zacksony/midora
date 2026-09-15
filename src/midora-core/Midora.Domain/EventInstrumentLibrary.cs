@@ -33,7 +33,11 @@ public static class EventInstrumentLibrary
     public static EventInstrument CopyInto(
         MidoraProject project,
         EventInstrument source,
-        string? requestedName = null)
+        string? requestedName = null) => CopyInto(project, source, requestedName, null, default);
+
+    internal static EventInstrument CopyInto(MidoraProject project, EventInstrument source,
+        string? requestedName, Action<MidoraProject, SubVoice, SubVoice>? copyTimeline,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(source);
@@ -51,6 +55,7 @@ public static class EventInstrumentLibrary
             Color = source.Color,
             RootNote = source.RootNote,
             TemplateLengthTicks = source.TemplateLengthTicks,
+            PreRollTicks = source.PreRollTicks,
             RequiresChannelIsolation = source.RequiresChannelIsolation,
             OverlapPolicy = source.OverlapPolicy,
             OverlapScope = source.OverlapScope,
@@ -63,6 +68,7 @@ public static class EventInstrumentLibrary
 
         foreach (LogicalParameterDefinition definition in source.LogicalParameters)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             LogicalParameterDefinition copy = new(project)
             {
                 Name = definition.Name,
@@ -83,6 +89,7 @@ public static class EventInstrumentLibrary
         }
         foreach (CSharpMappingFunction function in source.MappingFunctions)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             CSharpMappingFunction copy = new(project)
             {
                 Name = function.Name,
@@ -95,6 +102,7 @@ public static class EventInstrumentLibrary
         }
         foreach (InstrumentEnvelope envelope in source.Envelopes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             InstrumentEnvelope copy = new(project)
             {
                 Name = envelope.Name,
@@ -113,6 +121,7 @@ public static class EventInstrumentLibrary
         }
         foreach (SubVoice voice in source.SubVoices)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             SubVoice copy = new(project) { Name = voice.Name, RootNoteOverride = voice.RootNoteOverride };
             CopyState(voice.InitialState, copy.InitialState);
             voices.Add(voice.Id, copy.Id);
@@ -129,36 +138,47 @@ public static class EventInstrumentLibrary
                     envelopes);
                 copy.EventMappings.Add(mappingCopy);
             }
-            foreach (TemplateEvent value in voice.Events)
+            if (copyTimeline is not null) copyTimeline(project, voice, copy);
+            else
             {
-                TemplateEvent eventCopy = new(project)
+                Dictionary<MidoraId, MidoraId> instrumentMembers = [];
+                foreach (TemplateEvent value in voice.Events)
                 {
-                    Kind = value.Kind,
-                    Tick = value.Tick,
-                    LengthTicks = value.LengthTicks,
-                    Number = value.Number,
-                    Value = value.Value,
-                    SecondaryValue = value.SecondaryValue,
-                    HasBankMsb = value.HasBankMsb,
-                    HasBankLsb = value.HasBankLsb,
-                    FollowPitchDelta = value.FollowPitchDelta
-                };
-                copy.Events.Add(eventCopy);
-            }
-            foreach (ValueCurve curve in voice.Curves)
-            {
-                ValueCurve curveCopy = new(project) { Target = curve.Target };
-                CopyTargetSettings(curve.TargetSettings, curveCopy.TargetSettings);
-                foreach (CurvePoint point in curve.Points)
-                {
-                    curveCopy.Points.Add(new(project, point.Tick, point.Value, point.Interpolation));
+                    TemplateEvent eventCopy = new(project)
+                    {
+                        Kind = value.Kind,
+                        Tick = value.Tick,
+                        LengthTicks = value.LengthTicks,
+                        Number = value.Number,
+                        Value = value.Value,
+                        SecondaryValue = value.SecondaryValue,
+                        HasBankMsb = value.HasBankMsb,
+                        HasBankLsb = value.HasBankLsb,
+                        FollowPitchDelta = value.FollowPitchDelta
+                    };
+                    copy.Events.Add(eventCopy);
+                    if (voice.InstrumentChanges.TryGetByMember(value.Id, out _))
+                        instrumentMembers.Add(value.Id, eventCopy.Id);
                 }
-                copy.Curves.Add(curveCopy);
+                foreach (var group in voice.InstrumentChanges.Values)
+                    copy.InstrumentChanges = copy.InstrumentChanges.Add(new(project.AllocateStableId(),
+                        instrumentMembers[group.BankEventId], null, instrumentMembers[group.ProgramEventId]), false);
+                foreach (ValueCurve curve in voice.Curves)
+                {
+                    ValueCurve curveCopy = new(project) { Target = curve.Target };
+                    CopyTargetSettings(curve.TargetSettings, curveCopy.TargetSettings);
+                    foreach (CurvePoint point in curve.Points)
+                    {
+                        curveCopy.Points.Add(new(project, point.Tick, point.Value, point.Interpolation));
+                    }
+                    copy.Curves.Add(curveCopy);
+                }
             }
             result.SubVoices.Add(copy);
         }
         foreach (LogicalParameterMapping mapping in source.ParameterMappings)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             LogicalParameterMapping copy = new(project)
             {
                 ParameterId = Remap(parameters, mapping.ParameterId),

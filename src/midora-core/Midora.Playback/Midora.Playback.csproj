@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Midora.Playback.Tests" />
     <ProjectReference Include="..\Midora.Domain\Midora.Domain.csproj" />
     <ProjectReference Include="..\Midora.Compiler\Midora.Compiler.csproj" />
     <ProjectReference Include="..\..\midora-audio\Midora.Audio\Midora.Audio.csproj" />

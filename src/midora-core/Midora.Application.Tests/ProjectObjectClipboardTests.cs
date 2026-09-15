@@ -7,6 +7,36 @@ namespace Midora.Application.Tests;
 public sealed class ProjectObjectClipboardTests
 {
     [Fact]
+    public void SegmentPasteStableMergeKeepsExistingFormalOrderAndUndoRestoresOriginalRoot()
+    {
+        using MidoraProject project = new(192);
+        LogicalTrack source = new(project) { Name = "Source" };
+        LogicalTrack target = new(project) { Name = "Target" };
+        AddIndependentLogicalTracks(project, source, target);
+        Segment first = new(project) { ProjectStartTick = 0, LengthTicks = 4 };
+        Segment second = new(project) { ProjectStartTick = 100, LengthTicks = 4 };
+        source.Segments.AddRange([second, first]);
+        Segment existingLate = new(project) { ProjectStartTick = 200, LengthTicks = 4 };
+        Segment existingEarly = new(project) { ProjectStartTick = 10, LengthTicks = 4 };
+        target.Segments.AddRange([existingLate, existingEarly]);
+        using ProjectCompilationSession compilation = new(project);
+        using ProjectDocumentSession document = PersistedDocument(compilation);
+        using ProjectObjectClipboardPayload payload = ProjectObjectClipboard.CopySegments(
+            document, [second.Id, first.Id], first.Id);
+        IProjectEditCommand command = ProjectObjectClipboard.CreatePasteSegmentsCommand(document,
+            payload, target.Id, 20);
+        using (command as IDisposable) document.Execute(command);
+        LogicalTrack published = Active(project, target);
+        Assert.Equal(new long[] { 20, 120, 200, 10 }, published.Segments.Select(value => value.ProjectStartTick));
+        Assert.Equal(new[] { existingLate.Id, existingEarly.Id }, published.Segments.Skip(2).Select(value => value.Id));
+        Assert.Equal(new long[] { 200, 10 }, target.Segments.Select(value => value.ProjectStartTick));
+        document.Undo();
+        Assert.Same(target, Active(project, target));
+        document.Redo();
+        Assert.Same(published, Active(project, target));
+    }
+
+    [Fact]
     public void LogicalTrackClipboardDeepCopiesContentAndPreservesValidBinding()
     {
         MidoraProject project = new(480);
@@ -31,8 +61,8 @@ public sealed class ProjectObjectClipboardTests
             Note = 65,
             Velocity = 95
         };
-        segment.Notes.Add(note);
-        source.Segments.Add(segment);
+        Active(project, segment).Notes.Add(note);
+        Active(project, source).Segments.Add(segment);
         LogicalTrack peer = new(project) {
             Name = "Peer",
             LastBoundEventInstrumentName = instrument.Name
@@ -58,8 +88,8 @@ public sealed class ProjectObjectClipboardTests
         Assert.Equal(instrument.Id, project.ResolveEventInstrumentDefinitionId(copy));
         Assert.Equal(source.ColorOverride, copy.ColorOverride);
         Assert.NotEqual(source.Id, copy.Id);
-        Segment segmentCopy = Assert.Single(copy.Segments);
-        LogicalNote noteCopy = Assert.Single(segmentCopy.Notes);
+        Segment segmentCopy = Assert.Single(Active(project, copy).Segments);
+        LogicalNote noteCopy = Assert.Single(Active(project, segmentCopy).Notes);
         Assert.NotEqual(segment.Id, segmentCopy.Id);
         Assert.NotEqual(note.Id, noteCopy.Id);
         Assert.Equal((120L, 240L, 20L), (
@@ -90,7 +120,7 @@ public sealed class ProjectObjectClipboardTests
         source.Description = "Snapshot description";
         source.Color = new MidoraColor(21, 91, 173);
         source.RequiresChannelIsolation = true;
-        SubVoice voice = Assert.Single(source.SubVoices);
+        SubVoice voice = Assert.Single(Active(project, source).SubVoices);
         voice.Name = "Main";
         voice.Events.Add(TemplateEvent.Note(project, 0, 240, 60, 100));
         LogicalParameterDefinition parameter = new(project)
@@ -109,9 +139,9 @@ public sealed class ProjectObjectClipboardTests
             Name = "Identity",
             Body = "value"
         };
-        source.LogicalParameters.Add(parameter);
-        source.Envelopes.Add(envelope);
-        source.MappingFunctions.Add(function);
+        Active(project, source).LogicalParameters.Add(parameter);
+        Active(project, source).Envelopes.Add(envelope);
+        Active(project, source).MappingFunctions.Add(function);
         LogicalParameterMapping mapping = new(project)
         {
             ParameterId = parameter.Id,
@@ -136,7 +166,7 @@ public sealed class ProjectObjectClipboardTests
             Operation = MappingOperation.CustomCSharp,
             MappingFunctionId = function.Id
         });
-        source.ParameterMappings.Add(mapping);
+        Active(project, source).ParameterMappings.Add(mapping);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
 
@@ -156,11 +186,11 @@ public sealed class ProjectObjectClipboardTests
         Assert.Equal("Lead Copy 1", copy.Name);
         Assert.Equal("Snapshot description", copy.Description);
         Assert.Equal(source.Color, copy.Color);
-        LogicalParameterDefinition parameterCopy = Assert.Single(copy.LogicalParameters);
-        InstrumentEnvelope envelopeCopy = Assert.Single(copy.Envelopes);
-        CSharpMappingFunction functionCopy = Assert.Single(copy.MappingFunctions);
-        SubVoice voiceCopy = Assert.Single(copy.SubVoices);
-        LogicalParameterMapping mappingCopy = Assert.Single(copy.ParameterMappings);
+        LogicalParameterDefinition parameterCopy = Assert.Single(Active(project, copy).LogicalParameters);
+        InstrumentEnvelope envelopeCopy = Assert.Single(Active(project, copy).Envelopes);
+        CSharpMappingFunction functionCopy = Assert.Single(Active(project, copy).MappingFunctions);
+        SubVoice voiceCopy = Assert.Single(Active(project, copy).SubVoices);
+        LogicalParameterMapping mappingCopy = Assert.Single(Active(project, copy).ParameterMappings);
         Assert.Equal("Amount", parameterCopy.Name);
         Assert.Equal("value", functionCopy.Body);
         Assert.NotEqual(parameter.Id, parameterCopy.Id);
@@ -204,10 +234,10 @@ public sealed class ProjectObjectClipboardTests
         };
         LogicalParameterLane lane = new(project) { ParameterId = externalParameterId };
         CurvePoint point = new(project, 7, 0.25, CurveInterpolation.Step);
-        lane.Points.Add(point);
-        source.Notes.Add(note);
+        Active(project, lane).Points.Add(point);
+        Active(project, source).Notes.Add(note);
         source.ParameterLanes.Add(lane);
-        sourceTrack.Segments.Add(source);
+        Active(project, sourceTrack).Segments.Add(source);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
 
@@ -224,10 +254,10 @@ public sealed class ProjectObjectClipboardTests
             targetTrack.Id,
             editCursorTick: 500));
 
-        Segment copy = Assert.Single(targetTrack.Segments);
-        LogicalNote noteCopy = Assert.Single(copy.Notes);
+        Segment copy = Assert.Single(Active(project, targetTrack).Segments);
+        LogicalNote noteCopy = Assert.Single(Active(project, copy).Notes);
         LogicalParameterLane laneCopy = Assert.Single(copy.ParameterLanes);
-        CurvePoint pointCopy = Assert.Single(laneCopy.Points);
+        CurvePoint pointCopy = Assert.Single(Active(project, laneCopy).Points);
         Assert.Equal((500L, 100L, 25L),
             (copy.ProjectStartTick, copy.LengthTicks, copy.ContentOffsetTick));
         Assert.Equal((4L, 20L, 61, 99),
@@ -242,9 +272,9 @@ public sealed class ProjectObjectClipboardTests
         AssertMatchesFull(compilation);
 
         document.Undo();
-        Assert.Empty(targetTrack.Segments);
+        Assert.Empty(Active(project, targetTrack).Segments);
         document.Redo();
-        Assert.Same(copy, Assert.Single(targetTrack.Segments));
+        Assert.Same(copy, Assert.Single(Active(project, targetTrack).Segments));
         AssertMatchesFull(compilation);
     }
 
@@ -264,8 +294,8 @@ public sealed class ProjectObjectClipboardTests
             sourceSecondary);
         Segment first = new(project) { ProjectStartTick = 100, LengthTicks = 60 };
         Segment second = new(project) { ProjectStartTick = 220, LengthTicks = 60 };
-        sourcePrimary.Segments.Add(first);
-        sourceSecondary.Segments.Add(second);
+        Active(project, sourcePrimary).Segments.Add(first);
+        Active(project, sourceSecondary).Segments.Add(second);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
         ProjectObjectClipboardPayload payload = ProjectObjectClipboard.CopySegments(
@@ -279,8 +309,8 @@ public sealed class ProjectObjectClipboardTests
             targetPrimary.Id,
             editCursorTick: 500));
 
-        Assert.Equal(500, Assert.Single(targetPrimary.Segments).ProjectStartTick);
-        Assert.Equal(620, Assert.Single(targetSecondary.Segments).ProjectStartTick);
+        Assert.Equal(500, Assert.Single(Active(project, targetPrimary).Segments).ProjectStartTick);
+        Assert.Equal(620, Assert.Single(Active(project, targetSecondary).Segments).ProjectStartTick);
         Assert.Single(document.History);
         AssertMatchesFull(compilation);
     }
@@ -295,8 +325,8 @@ public sealed class ProjectObjectClipboardTests
         AddIndependentLogicalTracks(project, sourcePrimary, sourceSecondary, target);
         Segment first = new(project) { ProjectStartTick = 100, LengthTicks = 60 };
         Segment second = new(project) { ProjectStartTick = 220, LengthTicks = 60 };
-        sourcePrimary.Segments.Add(first);
-        sourceSecondary.Segments.Add(second);
+        Active(project, sourcePrimary).Segments.Add(first);
+        Active(project, sourceSecondary).Segments.Add(second);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
         ProjectObjectClipboardPayload payload = ProjectObjectClipboard.CopySegments(
@@ -312,7 +342,7 @@ public sealed class ProjectObjectClipboardTests
                 target.Id,
                 editCursorTick: 500)));
 
-        Assert.Empty(target.Segments);
+        Assert.Empty(Active(project, target).Segments);
         Assert.Equal(nextStableId, project.NextStableId);
         Assert.Empty(document.History);
         AssertMatchesFull(compilation);
@@ -341,8 +371,8 @@ public sealed class ProjectObjectClipboardTests
             Note = 64,
             Velocity = 100
         };
-        source.Notes.AddRange([first, second]);
-        track.Segments.AddRange([source, target]);
+        Active(project, source).Notes.AddRange([first, second]);
+        Active(project, track).Segments.AddRange([source, target]);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
         ProjectObjectClipboardPayload payload = ProjectObjectClipboard.CopyLogicalNotes(
@@ -358,13 +388,13 @@ public sealed class ProjectObjectClipboardTests
             payload,
             target.Id,
             editCursorTick: 30));
-        LogicalNote[] firstPaste = target.Notes.ToArray();
+        LogicalNote[] firstPaste = Active(project, target).Notes.ToArray();
         document.Execute(ProjectObjectClipboard.CreatePasteLogicalNotesCommand(
             document,
             payload,
             target.Id,
             editCursorTick: 300));
-        LogicalNote[] secondPaste = target.Notes.Skip(2).ToArray();
+        LogicalNote[] secondPaste = Active(project, target).Notes.Skip(2).ToArray();
 
         Assert.Equal([30L, 150L], firstPaste.Select(value => value.StartTick));
         Assert.Equal([300L, 420L], secondPaste.Select(value => value.StartTick));
@@ -422,7 +452,7 @@ public sealed class ProjectObjectClipboardTests
             Minimum = 0,
             Maximum = 1
         };
-        instrument.LogicalParameters.Add(parameter);
+        Active(project, instrument).LogicalParameters.Add(parameter);
         project.EventInstruments.Add(instrument);
         LogicalTrack track = new(project) {
             Name = "Track",
@@ -433,9 +463,9 @@ public sealed class ProjectObjectClipboardTests
         LogicalParameterLane sourceLane = new(project) { ParameterId = parameter.Id };
         CurvePoint first = new(project, 10, 0.25, CurveInterpolation.Step);
         CurvePoint second = new(project, 30, 0.75);
-        sourceLane.Points.AddRange([first, second]);
+        Active(project, sourceLane).Points.AddRange([first, second]);
         source.ParameterLanes.Add(sourceLane);
-        track.Segments.AddRange([source, target]);
+        Active(project, track).Segments.AddRange([source, target]);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
 
@@ -456,11 +486,11 @@ public sealed class ProjectObjectClipboardTests
             target.Id,
             editCursorTick: 100));
 
-        LogicalParameterLane targetLane = Assert.Single(target.ParameterLanes);
+        LogicalParameterLane targetLane = Assert.Single(Active(project, target).ParameterLanes);
         Assert.NotEqual(sourceLane.Id, targetLane.Id);
         Assert.Equal(parameter.Id, targetLane.ParameterId);
-        Assert.Equal([100L, 120L], targetLane.Points.Select(value => value.Tick));
-        Assert.Equal([0.25, 0.75], targetLane.Points.Select(value => value.Value));
+        Assert.Equal([100L, 120L], Active(project, targetLane).Points.Select(value => value.Tick));
+        Assert.Equal([0.25, 0.75], Active(project, targetLane).Points.Select(value => value.Value));
 
         document.Execute(
             ProjectObjectClipboard.CreatePasteLogicalParameterLaneContentCommand(
@@ -471,7 +501,7 @@ public sealed class ProjectObjectClipboardTests
                 editCursorTick: 200));
 
         Assert.Equal([100L, 120L, 200L, 220L],
-            targetLane.Points.Select(value => value.Tick));
+            Active(project, targetLane).Points.Select(value => value.Tick));
         Assert.Equal(2, document.History.Count);
         AssertMatchesFull(compilation);
 
@@ -525,13 +555,17 @@ public sealed class ProjectObjectClipboardTests
         AssertMatchesFull(compilation);
 
         long nextStableId = project.NextStableId;
-        Assert.Throws<InvalidOperationException>(() => document.Execute(
+        document.Execute(
             ProjectObjectClipboard.CreatePasteConductorEventsCommand(
                 document,
                 payload,
-                editCursorTick: 500)));
-        Assert.Equal(nextStableId, project.NextStableId);
-        Assert.Single(document.History);
+                editCursorTick: 500));
+        Assert.True(project.NextStableId > nextStableId);
+        Assert.Equal(2, document.History.Count);
+        Assert.Single(project.Conductor.Tempos, value => value.Tick == 500);
+        Assert.Equal(4, project.Conductor.Markers.Count(value => value.Tick == 650));
+        document.Undo();
+        Assert.Equal(2, project.Conductor.Markers.Count(value => value.Tick == 650));
 
         Assert.Throws<ArgumentException>(() => ProjectObjectClipboard.CopyConductorEvents(
             document,
@@ -583,10 +617,10 @@ public sealed class ProjectObjectClipboardTests
         templateEvent.ValueTargetSettings.Rounding = MappingRounding.Floor;
         templateEvent.ValueTargetSettings.Overflow = MappingOverflow.Clamp;
         source.Events.Add(templateEvent);
-        instrument.LogicalParameters.Add(parameter);
-        instrument.Envelopes.Add(envelope);
-        instrument.MappingFunctions.Add(function);
-        instrument.SubVoices.AddRange([source, target]);
+        Active(project, instrument).LogicalParameters.Add(parameter);
+        Active(project, instrument).Envelopes.Add(envelope);
+        Active(project, instrument).MappingFunctions.Add(function);
+        Active(project, instrument).SubVoices.AddRange([source, target]);
         project.EventInstruments.Add(instrument);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
@@ -604,7 +638,7 @@ public sealed class ProjectObjectClipboardTests
             target.Id,
             editCursorTick: 200));
 
-        TemplateEvent copy = Assert.Single(target.Events);
+        TemplateEvent copy = Assert.Single(Active(project, target).Events);
         Assert.Equal(200, copy.Tick);
         Assert.NotEqual(templateEvent.Id, copy.Id);
         Assert.NotEqual(templateEvent.ValueMappings.Id, copy.ValueMappings.Id);
@@ -613,15 +647,15 @@ public sealed class ProjectObjectClipboardTests
         Assert.True(copy.ValueMappings.IsEnabled);
         Assert.Equal((MappingRounding.Round, MappingOverflow.Fail),
             (copy.ValueTargetSettings.Rounding, copy.ValueTargetSettings.Overflow));
-        Assert.Equal(201, instrument.TemplateLengthTicks);
+        Assert.Equal(201, Active(project, instrument).TemplateLengthTicks);
         Assert.Single(document.History);
         AssertMatchesFull(compilation);
 
         document.Undo();
-        Assert.Empty(target.Events);
-        Assert.Equal(100, instrument.TemplateLengthTicks);
+        Assert.Empty(Active(project, target).Events);
+        Assert.Equal(100, Active(project, instrument).TemplateLengthTicks);
         document.Redo();
-        Assert.Same(copy, Assert.Single(target.Events));
+        Assert.Same(copy, Assert.Single(Active(project, target).Events));
         AssertMatchesFull(compilation);
     }
 
@@ -656,11 +690,11 @@ public sealed class ProjectObjectClipboardTests
         };
         controller.ValueMappings.Add(step);
         source.Events.Add(controller);
-        sourceInstrument.LogicalParameters.Add(parameter);
-        sourceInstrument.Envelopes.Add(envelope);
-        sourceInstrument.MappingFunctions.Add(function);
-        sourceInstrument.SubVoices.Add(source);
-        targetInstrument.SubVoices.Add(new(project) { Name = "Existing" });
+        Active(project, sourceInstrument).LogicalParameters.Add(parameter);
+        Active(project, sourceInstrument).Envelopes.Add(envelope);
+        Active(project, sourceInstrument).MappingFunctions.Add(function);
+        Active(project, sourceInstrument).SubVoices.Add(source);
+        Active(project, targetInstrument).SubVoices.Add(new(project) { Name = "Existing" });
         project.EventInstruments.AddRange([sourceInstrument, targetInstrument]);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
@@ -676,12 +710,12 @@ public sealed class ProjectObjectClipboardTests
             targetInstrument.Id,
             insertionIndex: 1));
 
-        SubVoice copy = targetInstrument.SubVoices[1];
+        SubVoice copy = Active(project, targetInstrument).SubVoices[1];
         TemplateEvent eventCopy = Assert.Single(copy.Events);
         ValueMappingStep stepCopy = Assert.Single(eventCopy.ValueMappings);
-        LogicalParameterDefinition parameterCopy = Assert.Single(targetInstrument.LogicalParameters);
-        InstrumentEnvelope envelopeCopy = Assert.Single(targetInstrument.Envelopes);
-        CSharpMappingFunction functionCopy = Assert.Single(targetInstrument.MappingFunctions);
+        LogicalParameterDefinition parameterCopy = Assert.Single(Active(project, targetInstrument).LogicalParameters);
+        InstrumentEnvelope envelopeCopy = Assert.Single(Active(project, targetInstrument).Envelopes);
+        CSharpMappingFunction functionCopy = Assert.Single(Active(project, targetInstrument).MappingFunctions);
         Assert.Equal(("Layer", 72), (copy.Name, copy.RootNoteOverride));
         Assert.Equal(90, copy.InitialState.Controllers[11]);
         Assert.All(
@@ -695,15 +729,15 @@ public sealed class ProjectObjectClipboardTests
         AssertMatchesFull(compilation);
 
         document.Undo();
-        Assert.Single(targetInstrument.SubVoices);
-        Assert.Empty(targetInstrument.LogicalParameters);
-        Assert.Empty(targetInstrument.Envelopes);
-        Assert.Empty(targetInstrument.MappingFunctions);
+        Assert.Single(Active(project, targetInstrument).SubVoices);
+        Assert.Empty(Active(project, targetInstrument).LogicalParameters);
+        Assert.Empty(Active(project, targetInstrument).Envelopes);
+        Assert.Empty(Active(project, targetInstrument).MappingFunctions);
         AssertMatchesFull(compilation);
 
         document.Redo();
-        Assert.Same(copy, targetInstrument.SubVoices[1]);
-        Assert.Same(parameterCopy, Assert.Single(targetInstrument.LogicalParameters));
+        Assert.Same(copy, Active(project, targetInstrument).SubVoices[1]);
+        Assert.Same(parameterCopy, Assert.Single(Active(project, targetInstrument).LogicalParameters));
         AssertMatchesFull(compilation);
     }
 
@@ -720,13 +754,13 @@ public sealed class ProjectObjectClipboardTests
         sourceVoice.Events.Add(templateEvent);
         ValueCurve sourceCurve = new(project) { Target = MidiValueTarget.ControlChange(1) };
         CurvePoint sourcePoint = new(project, 20, 32);
-        sourceCurve.Points.Add(sourcePoint);
-        sourceVoice.Curves.Add(sourceCurve);
+        Active(project, sourceCurve).Points.Add(sourcePoint);
+        Active(project, sourceVoice).Curves.Add(sourceCurve);
         ValueCurve targetCurve = new(project) { Target = MidiValueTarget.ControlChange(1) };
         ValueCurve incompatibleCurve = new(project) { Target = MidiValueTarget.ControlChange(2) };
-        targetVoice.Curves.AddRange([targetCurve, incompatibleCurve]);
-        sourceInstrument.SubVoices.AddRange([sourceVoice, targetVoice]);
-        otherInstrument.SubVoices.Add(otherVoice);
+        Active(project, targetVoice).Curves.AddRange([targetCurve, incompatibleCurve]);
+        Active(project, sourceInstrument).SubVoices.AddRange([sourceVoice, targetVoice]);
+        Active(project, otherInstrument).SubVoices.Add(otherVoice);
         project.EventInstruments.AddRange([sourceInstrument, otherInstrument]);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
@@ -770,7 +804,7 @@ public sealed class ProjectObjectClipboardTests
             targetVoice.Id,
             targetCurve.Id,
             editCursorTick: 100));
-        CurvePoint pasted = Assert.Single(targetCurve.Points);
+        CurvePoint pasted = Assert.Single(Active(project, targetCurve).Points);
         Assert.Equal((100L, 32d), (pasted.Tick, pasted.Value));
         Assert.NotEqual(sourcePoint.Id, pasted.Id);
         AssertMatchesFull(compilation);
@@ -792,8 +826,8 @@ public sealed class ProjectObjectClipboardTests
             Note = 60,
             Velocity = 100
         };
-        source.Notes.Add(note);
-        track.Segments.AddRange([source, target]);
+        Active(project, source).Notes.Add(note);
+        Active(project, track).Segments.AddRange([source, target]);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
 
@@ -803,11 +837,11 @@ public sealed class ProjectObjectClipboardTests
                 source.Id,
                 [note.Id]);
 
-        Assert.Same(note, Assert.Single(source.Notes));
+        Assert.Same(note, Assert.Single(Active(project, source).Notes));
         Assert.Empty(document.History);
 
         document.Execute(cut.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(source.Notes);
+        Assert.Empty(Active(project, source).Notes);
         Assert.Single(document.History);
 
         document.Execute(ProjectObjectClipboard.CreatePasteLogicalNotesCommand(
@@ -815,7 +849,7 @@ public sealed class ProjectObjectClipboardTests
             cut.Payload,
             target.Id,
             editCursorTick: 100));
-        LogicalNote pasted = Assert.Single(target.Notes);
+        LogicalNote pasted = Assert.Single(Active(project, target).Notes);
         Assert.NotEqual(note.Id, pasted.Id);
         Assert.Equal(2, document.History.Count);
         AssertMatchesFull(compilation);
@@ -848,8 +882,8 @@ public sealed class ProjectObjectClipboardTests
         };
         source.ValueMappings.Add(step);
         voice.Events.AddRange([source, target]);
-        instrument.LogicalParameters.Add(parameter);
-        instrument.SubVoices.Add(voice);
+        Active(project, instrument).LogicalParameters.Add(parameter);
+        Active(project, instrument).SubVoices.Add(voice);
         project.EventInstruments.Add(instrument);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
@@ -871,7 +905,7 @@ public sealed class ProjectObjectClipboardTests
             originalTarget.Id,
             nonEmptyReplacementConfirmed: false));
 
-        MappingChain copy = target.ValueMappings;
+        MappingChain copy = Active(project, target).ValueMappings;
         ValueMappingStep stepCopy = Assert.Single(copy);
         Assert.NotSame(originalTarget, copy);
         Assert.NotEqual(originalTarget.Id, copy.Id);
@@ -882,9 +916,9 @@ public sealed class ProjectObjectClipboardTests
         AssertMatchesFull(compilation);
 
         document.Undo();
-        Assert.Same(originalTarget, target.ValueMappings);
+        Assert.Same(originalTarget, Active(project, target).ValueMappings);
         document.Redo();
-        Assert.Same(copy, target.ValueMappings);
+        Assert.Same(copy, Active(project, target).ValueMappings);
         AssertMatchesFull(compilation);
     }
 
@@ -908,11 +942,11 @@ public sealed class ProjectObjectClipboardTests
             Target = MidiValueTarget.ControlChange(2)
         };
         CurvePoint curvePoint = new(project, 20, 32);
-        curve.Points.Add(curvePoint);
+        Active(project, curve).Points.Add(curvePoint);
         voice.Events.Add(templateEvent);
-        voice.Curves.Add(curve);
-        instrument.LogicalParameters.Add(parameter);
-        instrument.SubVoices.Add(voice);
+        Active(project, voice).Curves.Add(curve);
+        Active(project, instrument).LogicalParameters.Add(parameter);
+        Active(project, instrument).SubVoices.Add(voice);
         project.EventInstruments.Add(instrument);
 
         LogicalTrack track = new(project) {
@@ -923,9 +957,9 @@ public sealed class ProjectObjectClipboardTests
         Segment segment = new(project) { LengthTicks = 480 };
         LogicalParameterLane lane = new(project) { ParameterId = parameter.Id };
         CurvePoint lanePoint = new(project, 30, 0.75);
-        lane.Points.Add(lanePoint);
+        Active(project, lane).Points.Add(lanePoint);
         segment.ParameterLanes.Add(lane);
-        track.Segments.Add(segment);
+        Active(project, track).Segments.Add(segment);
 
         ProjectMarker marker = new(project, 120, "Marker");
         project.Conductor.Markers.Add(marker);
@@ -940,11 +974,11 @@ public sealed class ProjectObjectClipboardTests
                 lane.Id,
                 [lanePoint.Id]);
         Assert.Equal(ProjectObjectClipboardKind.LogicalParameterLaneContent, laneContent.Payload.Kind);
-        Assert.Same(lanePoint, Assert.Single(lane.Points));
+        Assert.Same(lanePoint, Assert.Single(Active(project, lane).Points));
         document.Execute(laneContent.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(lane.Points);
+        Assert.Empty(Active(project, lane).Points);
         document.Undo();
-        Assert.Same(lanePoint, Assert.Single(lane.Points));
+        Assert.Same(lanePoint, Assert.Single(Active(project, lane).Points));
 
         ProjectObjectClipboardCutPreparation wholeLane =
             ProjectObjectClipboard.PrepareCutLogicalParameterLane(
@@ -979,11 +1013,11 @@ public sealed class ProjectObjectClipboardTests
                 curve.Id,
                 [curvePoint.Id]);
         Assert.Equal(ProjectObjectClipboardKind.ValueCurveContent, curveContent.Payload.Kind);
-        Assert.Same(curvePoint, Assert.Single(curve.Points));
+        Assert.Same(curvePoint, Assert.Single(Active(project, curve).Points));
         document.Execute(curveContent.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(curve.Points);
+        Assert.Empty(Active(project, curve).Points);
         document.Undo();
-        Assert.Same(curvePoint, Assert.Single(curve.Points));
+        Assert.Same(curvePoint, Assert.Single(Active(project, curve).Points));
 
         ProjectObjectClipboardCutPreparation conductor =
             ProjectObjectClipboard.PrepareCutConductorEvents(document, [marker.Id]);
@@ -997,11 +1031,11 @@ public sealed class ProjectObjectClipboardTests
         ProjectObjectClipboardCutPreparation segments =
             ProjectObjectClipboard.PrepareCutSegments(document, [segment.Id], segment.Id);
         Assert.Equal(ProjectObjectClipboardKind.Segments, segments.Payload.Kind);
-        Assert.Same(segment, Assert.Single(track.Segments));
+        Assert.Same(segment, Assert.Single(Active(project, track).Segments));
         document.Execute(segments.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(track.Segments);
+        Assert.Empty(Active(project, track).Segments);
         document.Undo();
-        Assert.Same(segment, Assert.Single(track.Segments));
+        Assert.Same(segment, Assert.Single(Active(project, track).Segments));
 
         Assert.False(document.IsModified);
         AssertMatchesFull(compilation);
@@ -1045,9 +1079,9 @@ public sealed class ProjectObjectClipboardTests
             Body = "return value * 2;"
         };
         function.DeclaredContextFields.Add("GateLength");
-        instrument.LogicalParameters.Add(parameter);
-        instrument.Envelopes.Add(envelope);
-        instrument.MappingFunctions.Add(function);
+        Active(project, instrument).LogicalParameters.Add(parameter);
+        Active(project, instrument).Envelopes.Add(envelope);
+        Active(project, instrument).MappingFunctions.Add(function);
         project.EventInstruments.Add(instrument);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
@@ -1079,9 +1113,9 @@ public sealed class ProjectObjectClipboardTests
             functionPayload,
             instrument.Id));
 
-        LogicalParameterDefinition parameterCopy = instrument.LogicalParameters[1];
-        InstrumentEnvelope envelopeCopy = instrument.Envelopes[1];
-        CSharpMappingFunction functionCopy = instrument.MappingFunctions[1];
+        LogicalParameterDefinition parameterCopy = Active(project, instrument).LogicalParameters[1];
+        InstrumentEnvelope envelopeCopy = Active(project, instrument).Envelopes[1];
+        CSharpMappingFunction functionCopy = Active(project, instrument).MappingFunctions[1];
         Assert.Equal("Mode Copy 2", parameterCopy.Name);
         Assert.Equal(["Off", "On"], parameterCopy.EnumItems.Select(value => value.Name));
         Assert.NotEqual(parameter.Id, parameterCopy.Id);
@@ -1098,9 +1132,9 @@ public sealed class ProjectObjectClipboardTests
         Assert.Equal(3, document.History.Count);
 
         document.Undo();
-        Assert.Single(instrument.MappingFunctions);
+        Assert.Single(Active(project, instrument).MappingFunctions);
         document.Redo();
-        Assert.Same(functionCopy, instrument.MappingFunctions[1]);
+        Assert.Same(functionCopy, Active(project, instrument).MappingFunctions[1]);
         AssertMatchesFull(compilation);
     }
 
@@ -1137,7 +1171,7 @@ public sealed class ProjectObjectClipboardTests
             TargetMinimum = 0,
             TargetMaximum = 127
         };
-        source.Steps.Add(sourceStep);
+        Active(project, source).Steps.Add(sourceStep);
         LogicalParameterMapping target = new(project)
         {
             ParameterId = parameter.Id,
@@ -1145,14 +1179,14 @@ public sealed class ProjectObjectClipboardTests
             Target = MidiValueTarget.ControlChange(7)
         };
         ValueMappingStep oldTargetStep = new(project);
-        target.Steps.Add(oldTargetStep);
-        instrument.LogicalParameters.Add(parameter);
-        instrument.SubVoices.Add(voice);
-        instrument.ParameterMappings.AddRange([source, target]);
+        Active(project, target).Steps.Add(oldTargetStep);
+        Active(project, instrument).LogicalParameters.Add(parameter);
+        Active(project, instrument).SubVoices.Add(voice);
+        Active(project, instrument).ParameterMappings.AddRange([source, target]);
         project.EventInstruments.Add(instrument);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
-        MappingChain oldTargetChain = target.Steps;
+        MappingChain oldTargetChain = Active(project, target).Steps;
 
         ProjectObjectClipboardPayload mappingPayload =
             ProjectObjectClipboard.CopyLogicalParameterMapping(
@@ -1166,47 +1200,48 @@ public sealed class ProjectObjectClipboardTests
             target.Id,
             nonEmptyReplacementConfirmed: true));
 
-        Assert.Equal(MidiValueTarget.ControlChange(7), target.Target);
-        Assert.Equal(MappingRounding.Floor, target.TargetSettings.Rounding);
-        Assert.Equal(MappingOverflow.Clamp, target.TargetSettings.Overflow);
-        ValueMappingStep replacedStep = Assert.Single(target.Steps);
+        Assert.Equal(MidiValueTarget.ControlChange(7), Active(project, target).Target);
+        Assert.Equal(MappingRounding.Floor, Active(project, target).TargetSettings.Rounding);
+        Assert.Equal(MappingOverflow.Clamp, Active(project, target).TargetSettings.Overflow);
+        ValueMappingStep replacedStep = Assert.Single(Active(project, target).Steps);
         Assert.NotSame(sourceStep, replacedStep);
         Assert.Equal(parameter.Id, replacedStep.LogicalParameterId);
-        Assert.NotSame(oldTargetChain, target.Steps);
+        Assert.NotSame(oldTargetChain, Active(project, target).Steps);
 
         ProjectObjectClipboardPayload stepPayload = ProjectObjectClipboard.CopyMappingStep(
             document,
             instrument.Id,
-            source.Steps.Id,
+            Active(project, source).Steps.Id,
             sourceStep.Id);
         document.Execute(ProjectObjectClipboard.CreatePasteMappingStepCommand(
             document,
             stepPayload,
             instrument.Id,
-            target.Steps.Id,
+            Active(project, target).Steps.Id,
             insertionIndex: 1));
 
-        ValueMappingStep inserted = target.Steps[1];
+        ValueMappingStep inserted = Active(project, target).Steps[1];
         Assert.NotEqual(sourceStep.Id, inserted.Id);
         Assert.Equal(sourceStep.Operation, inserted.Operation);
-        Assert.Equal(2, target.Steps.Count);
+        Assert.Equal(2, Active(project, target).Steps.Count);
 
         ProjectObjectClipboardCutPreparation stepCut = ProjectObjectClipboard.PrepareCutMappingStep(
             document,
             instrument.Id,
-            target.Steps.Id,
+            Active(project, target).Steps.Id,
             inserted.Id);
-        Assert.Same(inserted, target.Steps[1]);
+        Assert.Same(inserted, Active(project, target).Steps[1]);
         document.Execute(stepCut.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Single(target.Steps);
+        Assert.Single(Active(project, target).Steps);
         document.Undo();
-        Assert.Same(inserted, target.Steps[1]);
+        Assert.Same(inserted, Active(project, target).Steps[1]);
         document.Undo();
-        Assert.Single(target.Steps);
+        Assert.Single(Active(project, target).Steps);
         document.Undo();
-        Assert.Same(oldTargetChain, target.Steps);
+        Assert.Same(oldTargetChain, Active(project, target).Steps);
+        Assert.Same(instrument, Active(project, instrument));
         document.Redo();
-        Assert.NotSame(oldTargetChain, target.Steps);
+        Assert.NotSame(oldTargetChain, Active(project, target).Steps);
         AssertMatchesFull(compilation);
     }
 
@@ -1234,9 +1269,9 @@ public sealed class ProjectObjectClipboardTests
             Name = "Identity",
             Body = "value"
         };
-        instrument.LogicalParameters.Add(parameter);
-        instrument.Envelopes.Add(envelope);
-        instrument.MappingFunctions.Add(function);
+        Active(project, instrument).LogicalParameters.Add(parameter);
+        Active(project, instrument).Envelopes.Add(envelope);
+        Active(project, instrument).MappingFunctions.Add(function);
         project.EventInstruments.Add(instrument);
         using ProjectCompilationSession compilation = new(project);
         ProjectDocumentSession document = PersistedDocument(compilation);
@@ -1246,33 +1281,33 @@ public sealed class ProjectObjectClipboardTests
                 document,
                 instrument.Id,
                 parameter.Id);
-        Assert.Same(parameter, Assert.Single(instrument.LogicalParameters));
+        Assert.Same(parameter, Assert.Single(Active(project, instrument).LogicalParameters));
         document.Execute(parameterCut.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(instrument.LogicalParameters);
+        Assert.Empty(Active(project, instrument).LogicalParameters);
         document.Undo();
-        Assert.Same(parameter, Assert.Single(instrument.LogicalParameters));
+        Assert.Same(parameter, Assert.Single(Active(project, instrument).LogicalParameters));
 
         ProjectObjectClipboardCutPreparation envelopeCut =
             ProjectObjectClipboard.PrepareCutEnvelopePreset(
                 document,
                 instrument.Id,
                 envelope.Id);
-        Assert.Same(envelope, Assert.Single(instrument.Envelopes));
+        Assert.Same(envelope, Assert.Single(Active(project, instrument).Envelopes));
         document.Execute(envelopeCut.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(instrument.Envelopes);
+        Assert.Empty(Active(project, instrument).Envelopes);
         document.Undo();
-        Assert.Same(envelope, Assert.Single(instrument.Envelopes));
+        Assert.Same(envelope, Assert.Single(Active(project, instrument).Envelopes));
 
         ProjectObjectClipboardCutPreparation functionCut =
             ProjectObjectClipboard.PrepareCutMappingFunction(
                 document,
                 instrument.Id,
                 function.Id);
-        Assert.Same(function, Assert.Single(instrument.MappingFunctions));
+        Assert.Same(function, Assert.Single(Active(project, instrument).MappingFunctions));
         document.Execute(functionCut.DeleteAfterSuccessfulClipboardWrite);
-        Assert.Empty(instrument.MappingFunctions);
+        Assert.Empty(Active(project, instrument).MappingFunctions);
         document.Undo();
-        Assert.Same(function, Assert.Single(instrument.MappingFunctions));
+        Assert.Same(function, Assert.Single(Active(project, instrument).MappingFunctions));
         Assert.False(document.IsModified);
         AssertMatchesFull(compilation);
     }
@@ -1302,4 +1337,25 @@ public sealed class ProjectObjectClipboardTests
         Assert.Equal(expected.Fingerprint, compilation.LastAttempt.Fingerprint);
         Assert.Equal(expected.IsConsumable, compilation.LastAttempt.IsConsumable);
     }
+    // Commands publish immutable owner roots. Identity remains the stable ID,
+    // so every post-edit observation resolves the current formal owner.
+    private static T Active<T>(MidoraProject project, T value) where T : class => (value switch
+    {
+        EventInstrument owner => (object?)project.EventInstruments.FirstOrDefault(item => item.Id == owner.Id),
+        LogicalTrack owner => project.Tracks.FirstOrDefault(item => item.Id == owner.Id),
+        PureMidiTrack owner => project.PureMidiTracks.FirstOrDefault(item => item.Id == owner.Id),
+        Segment owner => project.Tracks.SelectMany(item => item.Segments).FirstOrDefault(item => item.Id == owner.Id),
+        MidiSegment owner => project.PureMidiTracks.SelectMany(item => item.Segments).FirstOrDefault(item => item.Id == owner.Id),
+        SubVoice owner => project.EventInstruments.SelectMany(item => item.SubVoices).FirstOrDefault(item => item.Id == owner.Id),
+        LogicalParameterMapping owner => project.EventInstruments.SelectMany(item => item.ParameterMappings)
+            .FirstOrDefault(item => item.Id == owner.Id),
+        TemplateEvent owner => project.EventInstruments.SelectMany(item => item.SubVoices)
+            .SelectMany(item => item.Events).FirstOrDefault(item => item.Id == owner.Id),
+        LogicalParameterLane owner => project.Tracks.SelectMany(item => item.Segments).SelectMany(item => item.ParameterLanes)
+            .FirstOrDefault(item => item.Id == owner.Id),
+        ValueCurve owner => project.EventInstruments.SelectMany(item => item.SubVoices).SelectMany(item => item.Curves)
+            .FirstOrDefault(item => item.Id == owner.Id),
+        _ => null
+    }) as T ?? value;
+
 }

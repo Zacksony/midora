@@ -1,0 +1,16 @@
+edition = "2024";
+
+package midora.persistence.v2;
+
+import "Schemas/Proto/midora-event-instrument-v1.proto";
+
+option csharp_namespace = "Midora.Persistence.Wire.Proto.V2";
+option features.field_presence = EXPLICIT;
+
+message EventInstrumentV2 {
+  uint32 schema_version = 1;
+  string object_type = 2;
+  midora.persistence.v1.EventInstrumentV1 definition = 3;
+  int64 pre_roll_ticks = 4;
+  reserved 5 to max;
+}

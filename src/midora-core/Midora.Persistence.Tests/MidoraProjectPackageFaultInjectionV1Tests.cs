@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using Midora.Domain;
 
 namespace Midora.Persistence.Tests;
@@ -77,6 +78,44 @@ public sealed class MidoraProjectPackageFaultInjectionV1Tests
         Assert.Empty(Directory.GetFileSystemEntries(temporary.Path, ".midora-save-*"));
     }
 
+    [Fact]
+    public async Task LegacyUpgradePublishFailurePreservesSourceAndExactPermanentBackupForRetry()
+    {
+        using TemporaryDirectory temporary = new();
+        string sourcePath = temporary.PathFor("legacy.midora");
+        using MidoraProject source = CreateProject();
+        await CreateService().SaveProjectAsync(source, sourcePath);
+        DowngradeToFormatTwo(sourcePath);
+        byte[] original = await File.ReadAllBytesAsync(sourcePath);
+        await using MidoraProjectOpenResultV1 opened = await CreateService().OpenAsync(sourcePath);
+        MidoraProjectPackageV1 packages = CreateService(MidoraPackageFaultPointV1.BeforePublish);
+
+        MidoraPackageExceptionV1 failure = await Assert.ThrowsAsync<MidoraPackageExceptionV1>(() =>
+            packages.UpgradeLegacyProjectInPlaceAsync(
+                opened.Project,
+                opened.Presentation,
+                opened.LegacySourceIdentity!,
+                opened.FileInformation));
+
+        Assert.Equal(MidoraPackageStageV1.Publish, failure.Stage);
+        Assert.Equal(original, await File.ReadAllBytesAsync(sourcePath));
+        Assert.NotNull(failure.BackupPath);
+        Assert.Equal(original, await File.ReadAllBytesAsync(failure.BackupPath!));
+        Assert.NotNull(failure.TemporaryPath);
+        Assert.True(File.Exists(failure.TemporaryPath));
+
+        MidoraProjectSaveResultV1 retried = await packages.UpgradeLegacyProjectInPlaceAsync(
+            opened.Project,
+            opened.Presentation,
+            opened.LegacySourceIdentity!,
+            opened.FileInformation);
+
+        Assert.Equal(failure.BackupPath, retried.PermanentLegacyBackupPath);
+        await using MidoraProjectOpenResultV1 reopened = await CreateService().OpenAsync(sourcePath);
+        Assert.Equal(4, reopened.SourceFileFormatVersion);
+        Assert.False(reopened.RequiresFormatUpgrade);
+    }
+
     [Theory]
     [InlineData((int)MidoraPackageFaultPointV1.BeforeBackupCleanup, ".*.midora-backup-*")]
     [InlineData((int)MidoraPackageFaultPointV1.BeforeStagingDirectoryCleanup, ".midora-save-*")]
@@ -120,6 +159,37 @@ public sealed class MidoraProjectPackageFaultInjectionV1Tests
         project.Metadata.ProjectName = "Fault Injection";
         project.Conductor.Markers.Add(new ProjectMarker(project, 240, "Marker"));
         return project;
+    }
+
+    private static void DowngradeToFormatTwo(string path)
+    {
+        using ZipArchive archive = ZipFile.Open(path, ZipArchiveMode.Update);
+        ManifestJsonV4 current = ManifestCodecV4.Parse(ReadEntry(archive, "manifest.json"));
+        ManifestJsonV2 legacy = new()
+        {
+            Magic = current.Magic,
+            FileFormatVersion = PersistenceContractV2.FileFormatVersion,
+            MinimumReadableVersion = PersistenceContractV2.FileFormatVersion,
+            ManifestSchemaVersion = PersistenceContractV2.ManifestSchemaVersion,
+            CreatedWithSoftwareVersion = current.CreatedWithSoftwareVersion,
+            LastSavedWithSoftwareVersion = current.LastSavedWithSoftwareVersion,
+            Files = current.Files
+                .Where(value => value.Path != MidoraPackagePathsV1.ProjectPresentation && value.Path != PersistenceContractV4.InstrumentChangesPath)
+                .ToArray()
+        };
+        archive.GetEntry(MidoraPackagePathsV1.ProjectPresentation)!.Delete();
+        archive.GetEntry(PersistenceContractV4.InstrumentChangesPath)!.Delete();
+        archive.GetEntry(MidoraPackagePathsV1.Manifest)!.Delete();
+        using Stream output = archive.CreateEntry(MidoraPackagePathsV1.Manifest).Open();
+        output.Write(ManifestCodecV2.Serialize(legacy));
+    }
+
+    private static byte[] ReadEntry(ZipArchive archive, string path)
+    {
+        using Stream input = archive.GetEntry(path)!.Open();
+        using MemoryStream output = new();
+        input.CopyTo(output);
+        return output.ToArray();
     }
 
     private static void AssertNoTransactionArtifacts(string directory)

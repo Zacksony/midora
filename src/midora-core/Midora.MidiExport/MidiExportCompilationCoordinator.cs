@@ -52,7 +52,7 @@ public sealed class MidiExportCompilationResult
     public ReadOnlyCollection<MidiExportLogicalTrackLayout> Layouts { get; }
     public ReadOnlyCollection<MidiExportTrackSnapshot> Tracks { get; }
     public ReadOnlyCollection<byte> UsedZeroBasedPorts { get; }
-    public IReadOnlyList<CompilerDiagnostic> Diagnostics => CompiledResult.Diagnostics;
+    public ICompilerDiagnosticSequence Diagnostics => CompiledResult.Diagnostics;
 }
 
 public sealed class MidiExportCompilationCoordinator
@@ -102,6 +102,21 @@ public sealed class MidiExportCompilationCoordinator
             .ToHashSet();
         List<MidiExportTrackSnapshot> trackSnapshots = [];
         List<MidiExportLogicalTrackLayout> layouts = [];
+        Dictionary<MidoraId, HashSet<MidiExportChannelUnit>> unitsByTrack = [];
+        HashSet<byte> portSet = [];
+        foreach (ChannelUnitAllocation allocation in compiled.Allocations)
+        {
+            if (!unitsByTrack.TryGetValue(allocation.TrackId, out var units))
+                unitsByTrack[allocation.TrackId] = units = [];
+            units.Add(new(allocation.ZeroBasedPort, allocation.ZeroBasedChannel));
+        }
+        foreach (CanonicalMidiEvent value in compiled.EnumerateResidentAndLogicalEvents())
+        {
+            if (!unitsByTrack.TryGetValue(value.Source.TrackId, out var units))
+                unitsByTrack[value.Source.TrackId] = units = [];
+            units.Add(new(value.ZeroBasedPort, value.ZeroBasedChannel));
+            portSet.Add(value.ZeroBasedPort);
+        }
         for (int index = 0; index < logicalTracks.Length; index++)
         {
             LogicalTrack track = logicalTracks[index];
@@ -130,17 +145,8 @@ public sealed class MidiExportCompilationCoordinator
                 continue;
             }
 
-            MidiExportChannelUnit[] units = compiled.Allocations.ToArray()
-                .Where(allocation => allocation.TrackId == track.Id)
-                .Select(allocation => new MidiExportChannelUnit(
-                    allocation.ZeroBasedPort,
-                    allocation.ZeroBasedChannel))
-                .Concat(compiled.Events.ToArray()
-                    .Where(value => value.Source.TrackId == track.Id)
-                    .Select(value => new MidiExportChannelUnit(
-                        value.ZeroBasedPort,
-                        value.ZeroBasedChannel)))
-                .Distinct()
+            HashSet<MidiExportChannelUnit> unitSet = unitsByTrack.GetValueOrDefault(track.Id) ?? [];
+            MidiExportChannelUnit[] units = unitSet
                 .OrderBy(unit => unit.ZeroBasedPort)
                 .ThenBy(unit => unit.ZeroBasedChannel)
                 .ToArray();
@@ -169,14 +175,9 @@ public sealed class MidiExportCompilationCoordinator
             }
         }
 
-        byte[] usedPorts = compiled.Events.ToArray()
-            .Select(value => value.ZeroBasedPort)
-            .Concat(compiled.SmfTracks.ToArray()
-                .Where(value => value.Kind == CanonicalSmfTrackKind.PureMidiTrack)
-                .Select(value => value.ZeroBasedPort))
-            .Distinct()
-            .Order()
-            .ToArray();
+        foreach (CanonicalSmfTrackDescriptor value in compiled.SmfTracks)
+            if (value.Kind == CanonicalSmfTrackKind.PureMidiTrack) portSet.Add(value.ZeroBasedPort);
+        byte[] usedPorts = portSet.Order().ToArray();
         return new(
             request.Mode,
             request.Routing,

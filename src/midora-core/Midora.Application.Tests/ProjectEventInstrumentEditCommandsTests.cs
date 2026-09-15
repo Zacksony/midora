@@ -83,6 +83,114 @@ public sealed class ProjectEventInstrumentEditCommandsTests
     }
 
     [Fact]
+    public void PreRollIsAnAtomicDefinitionEditWithExactUndoAndCompilationInvalidation()
+    {
+        MidoraProject project = CreateProject();
+        EventInstrument instrument = project.EventInstruments[0];
+        LogicalNote note = project.Tracks[0].Segments[0].Notes[0];
+        note.StartTick = 120;
+        long nextStableId = project.NextStableId;
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = PersistedDocument(compilation);
+        long beforeFingerprint = compilation.LastAttempt.Fingerprint;
+        ProjectContentChangedEventArgs? contentChange = null;
+        document.ContentChanged += (_, args) => contentChange = args;
+
+        document.Execute(ProjectDomainEditCommands.UpdateEventInstrumentPreRoll(
+            instrument.Id,
+            120));
+
+        Assert.Equal(120, instrument.PreRollTicks);
+        Assert.Equal(nextStableId, project.NextStableId);
+        Assert.NotEqual(beforeFingerprint, compilation.LastAttempt.Fingerprint);
+        Assert.Contains(
+            instrument.Id,
+            Assert.IsType<ProjectContentChangedEventArgs>(contentChange).EventInstrumentIds);
+        AssertCurrentCompilationMatchesFull(compilation);
+
+        document.Undo();
+
+        Assert.Equal(0, instrument.PreRollTicks);
+        Assert.Equal(beforeFingerprint, compilation.LastAttempt.Fingerprint);
+        Assert.False(document.IsModified);
+        AssertCurrentCompilationMatchesFull(compilation);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => document.Execute(
+            ProjectDomainEditCommands.UpdateEventInstrumentPreRoll(instrument.Id, -1)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => document.Execute(
+            ProjectDomainEditCommands.UpdateEventInstrumentPreRoll(instrument.Id, 481)));
+    }
+
+    [Fact]
+    public void TimingEditCanAtomicallyShrinkTemplateAndPreRoll()
+    {
+        MidoraProject project = CreateProject();
+        EventInstrument instrument = project.EventInstruments[0];
+        instrument.SubVoices[0].Events[0].LengthTicks = 120;
+        instrument.PreRollTicks = 360;
+        project.Tracks[0].Segments[0].Notes[0].StartTick = 360;
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = PersistedDocument(compilation);
+
+        document.Execute(ProjectDomainEditCommands.UpdateEventInstrumentTiming(
+            instrument.Id,
+            templateLengthTicks: 240,
+            preRollTicks: 120));
+
+        Assert.Equal(240, instrument.TemplateLengthTicks);
+        Assert.Equal(120, instrument.PreRollTicks);
+        AssertCurrentCompilationMatchesFull(compilation);
+
+        document.Undo();
+
+        Assert.Equal(480, instrument.TemplateLengthTicks);
+        Assert.Equal(360, instrument.PreRollTicks);
+        Assert.False(document.IsModified);
+        AssertCurrentCompilationMatchesFull(compilation);
+    }
+
+    [Fact]
+    public void TimingLoopAndIsolationEditValidatesAndCommitsTheFinalTupleAtomically()
+    {
+        MidoraProject project = CreateProject();
+        EventInstrument instrument = project.EventInstruments[0];
+        instrument.SubVoices[0].Events[0].LengthTicks = 120;
+        instrument.RequiresChannelIsolation = true;
+        instrument.PreRollTicks = 360;
+        instrument.LoopStartTick = 0;
+        instrument.LoopEndTick = 480;
+        instrument.RequiresChannelIsolation = false;
+        project.Tracks[0].Segments[0].Notes[0].StartTick = 360;
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = PersistedDocument(compilation);
+
+        document.Execute(ProjectDomainEditCommands.UpdateEventInstrumentTimingLoopAndIsolation(
+            instrument.Id,
+            templateLengthTicks: 240,
+            preRollTicks: 120,
+            loopStartTick: 0,
+            loopEndTick: 240,
+            requiresChannelIsolation: true));
+
+        Assert.Equal(240, instrument.TemplateLengthTicks);
+        Assert.Equal(120, instrument.PreRollTicks);
+        Assert.Equal(0, instrument.LoopStartTick);
+        Assert.Equal(240, instrument.LoopEndTick);
+        Assert.True(instrument.RequiresChannelIsolation);
+        AssertCurrentCompilationMatchesFull(compilation);
+
+        document.Undo();
+
+        Assert.Equal(480, instrument.TemplateLengthTicks);
+        Assert.Equal(360, instrument.PreRollTicks);
+        Assert.Equal(0, instrument.LoopStartTick);
+        Assert.Equal(480, instrument.LoopEndTick);
+        Assert.False(instrument.RequiresChannelIsolation);
+        Assert.False(document.IsModified);
+        AssertCurrentCompilationMatchesFull(compilation);
+    }
+
+    [Fact]
     public void IncompleteLoopEndpointsAreEditableButCompilationRejectsThemUntilCompleted()
     {
         MidoraProject project = CreateProject();

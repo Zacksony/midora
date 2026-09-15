@@ -43,6 +43,32 @@ public sealed class TimelineIntervalIndex
         }
     }
 
+    internal void VisitInto(
+        long startTick,
+        long endTick,
+        int firstLane,
+        int lastLaneExclusive,
+        Action<TimelineRenderItem> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        if (startTick < 0 || endTick <= startTick)
+        {
+            throw new ArgumentOutOfRangeException(nameof(endTick));
+        }
+        if (firstLane < 0 || lastLaneExclusive <= firstLane)
+        {
+            throw new ArgumentOutOfRangeException(nameof(lastLaneExclusive));
+        }
+
+        for (int lane = firstLane; lane < lastLaneExclusive; lane++)
+        {
+            if (_lanes.TryGetValue(lane, out LaneBucket? bucket))
+            {
+                bucket.VisitInto(startTick, endTick, visitor);
+            }
+        }
+    }
+
     public void HitTestInto(
         long tick,
         long toleranceTicks,
@@ -111,6 +137,21 @@ public sealed class TimelineIntervalIndex
                 destination);
         }
 
+        public void VisitInto(
+            long startTick,
+            long endTick,
+            Action<TimelineRenderItem> visitor)
+        {
+            int candidateEnd = FirstStartAtOrAfter(endTick);
+            VisitNode(
+                node: 1,
+                nodeStart: 0,
+                nodeEnd: _leafBase,
+                candidateEnd,
+                startTick,
+                visitor);
+        }
+
         private void QueryNode(
             int node,
             int nodeStart,
@@ -131,6 +172,28 @@ public sealed class TimelineIntervalIndex
             int middle = nodeStart + ((nodeEnd - nodeStart) >> 1);
             QueryNode(node << 1, nodeStart, middle, candidateEnd, startTick, destination);
             QueryNode((node << 1) | 1, middle, nodeEnd, candidateEnd, startTick, destination);
+        }
+
+        private void VisitNode(
+            int node,
+            int nodeStart,
+            int nodeEnd,
+            int candidateEnd,
+            long startTick,
+            Action<TimelineRenderItem> visitor)
+        {
+            if (nodeStart >= candidateEnd || _maximumEndTree[node] <= startTick)
+            {
+                return;
+            }
+            if (nodeEnd - nodeStart == 1)
+            {
+                if (nodeStart < _items.Length) visitor(_items[nodeStart]);
+                return;
+            }
+            int middle = nodeStart + ((nodeEnd - nodeStart) >> 1);
+            VisitNode(node << 1, nodeStart, middle, candidateEnd, startTick, visitor);
+            VisitNode((node << 1) | 1, middle, nodeEnd, candidateEnd, startTick, visitor);
         }
 
         private int FirstStartAtOrAfter(long tick)

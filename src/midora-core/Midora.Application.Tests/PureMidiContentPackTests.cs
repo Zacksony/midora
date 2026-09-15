@@ -1,10 +1,325 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using Midora.Domain;
 
 namespace Midora.Application.Tests;
 
 public sealed class PureMidiContentPackTests
 {
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    public void EncoderSchedulerRemainsOpenUntilAllPendingResultsAreObserved(
+        bool disposeWithoutComplete, bool faultEncoder, bool cancel)
+    {
+        string directory = System.IO.Path.Combine(
+            AppContext.BaseDirectory, ".tmp", "encoder-lifecycle-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = System.IO.Path.Combine(directory, "lifecycle.mpk");
+        using CancellationTokenSource cancellation = new();
+        using ManualResetEventSlim releaseEncoder = new(false);
+        using MidoraProject project = new(192);
+        MidiSegment segment = new(project);
+        int waitCount = 0;
+        bool completedBeforeWait = false;
+        PureMidiContentPackWriter writer = new(
+            path, cancellation.Token, encoderConcurrency: 1,
+            encodeBufferBudget: 64L * 1024 * 1024,
+            encodePageTestHook: () =>
+            {
+                if (!releaseEncoder.Wait(TimeSpan.FromSeconds(20)))
+                    throw new TimeoutException("The test did not enter the pending-page drain.");
+                if (faultEncoder) throw new IOException("Injected encoder fault.");
+            },
+            beforePageWaitTestHook: schedulingCompleted =>
+            {
+                waitCount++;
+                completedBeforeWait |= schedulingCompleted;
+                // Force task completion to race with the ensuing synchronous
+                // wait, without depending on machine timing to check ordering.
+                releaseEncoder.Set();
+            });
+        try
+        {
+            int notes = disposeWithoutComplete
+                ? PureMidiContentPackWriter.MaximumEndpointPageRecordCount + 1
+                : 1;
+            for (int index = 0; index < notes; index++)
+            {
+                writer.AddNote(segment.Id, new(
+                    project.AllocateStableId(), index, 12, index % 128,
+                    100, 0, index * 2L, index * 2L + 1));
+            }
+            if (cancel) cancellation.Cancel();
+            if (disposeWithoutComplete)
+            {
+                if (faultEncoder)
+                {
+                    InvalidDataException failure = Assert.Throws<InvalidDataException>(writer.Dispose);
+                    Assert.IsType<IOException>(failure.InnerException);
+                }
+                else writer.Dispose();
+                Assert.False(File.Exists(path));
+            }
+            else
+            {
+                using PureMidiContentPack pack = writer.Complete();
+                Assert.Equal(1, pack.GetSegmentSource(segment.Id).NoteCount);
+                writer.Dispose();
+                Assert.True(File.Exists(path));
+            }
+            Assert.True(waitCount > 0);
+            Assert.False(completedBeforeWait);
+        }
+        finally
+        {
+            releaseEncoder.Set();
+            writer.Dispose();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void NoteOrdinalExclusionsRemainExactAcrossEndpointPageRuns()
+    {
+        string directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "midora-paged-content-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = System.IO.Path.Combine(directory, "ordinal-exclusions.mpk");
+        try
+        {
+            using MidoraProject project = new(192);
+            MidiSegment segment = new(project);
+            const int sourcePageSize = PureMidiContentPackWriter.MaximumPageRecordCount;
+            const int endpointPageSize = PureMidiContentPackWriter.MaximumEndpointPageRecordCount;
+            DirectMidiNoteValue[] notes = new DirectMidiNoteValue[sourcePageSize + 1];
+            using (PureMidiContentPackWriter writer = new(path))
+            {
+                for (int ordinal = 0; ordinal < notes.Length; ordinal++)
+                {
+                    // Keep the excluded source page and the remaining Note in
+                    // disjoint overview columns, while reversing tick order inside
+                    // each endpoint page. Endpoint serialization sorts each page,
+                    // so local endpoint indices no longer equal source ordinals even
+                    // though each page still owns one contiguous ordinal run.
+                    int withinEndpointPage = ordinal % endpointPageSize;
+                    long startTick = ordinal < sourcePageSize
+                        ? 150_000L + endpointPageSize - withinEndpointPage
+                        : 10_000L;
+                    DirectMidiNoteValue note = new(
+                        project.AllocateStableId(),
+                        startTick,
+                        24,
+                        ordinal % 128,
+                        100,
+                        0,
+                        ordinal * 2L,
+                        ordinal * 2L + 1);
+                    notes[ordinal] = note;
+                    writer.AddNote(segment.Id, note);
+                }
+
+                using PureMidiContentPack pack = writer.Complete();
+                IPureMidiSegmentContentSource source = pack.GetSegmentSource(segment.Id);
+                IPureMidiContentOverviewSource overview =
+                    Assert.IsAssignableFrom<IPureMidiContentOverviewSource>(source);
+                IPureMidiNoteExclusionAwareSource exclusionAware =
+                    Assert.IsAssignableFrom<IPureMidiNoteExclusionAwareSource>(source);
+                ImmutableDictionary<MidoraId, int> excluded = notes[..sourcePageSize]
+                    .ToImmutableDictionary(static note => note.Id, static _ => 0);
+                Dictionary<MidoraId, int> ordinals = notes[..sourcePageSize]
+                    .Select((note, ordinal) => (note.Id, ordinal))
+                    .ToDictionary(static value => value.Id, static value => value.ordinal);
+                PureMidiSourceExclusionSet<int> exclusions = new(
+                    ImmutableHashSet<MidoraId>.Empty,
+                    excluded,
+                    ordinals);
+
+                byte[] columns = new byte[20];
+                Assert.True(overview.TryAccumulateNoteStartColumns(
+                    200_000,
+                    columns,
+                    exclusions));
+                Assert.Equal(0, pack.PageCacheMissCount);
+                Assert.Contains((byte)1, columns[..3]);
+                Assert.DoesNotContain((byte)1, columns[14..]);
+
+                DirectMidiNoteValue[] remaining = exclusionAware.QueryNotesExcluding(
+                        0,
+                        200_000,
+                        0,
+                        127,
+                        exclusions)
+                    .ToArray();
+                Assert.Single(remaining);
+                Assert.Equal(
+                    notes[sourcePageSize..].Select(static note => note.Id).Order(),
+                    remaining.Select(static note => note.Id).Order());
+                Assert.Equal(1, pack.PageCacheMissCount);
+
+                // An unresolved exclusion ordinal must disable page-level skipping,
+                // then fall back to exact stable-ID filtering rather than leaking it.
+                Dictionary<MidoraId, int> incompleteOrdinals = new(ordinals);
+                incompleteOrdinals.Remove(notes[123].Id);
+                PureMidiSourceExclusionSet<int> incomplete = new(
+                    ImmutableHashSet<MidoraId>.Empty,
+                    excluded,
+                    incompleteOrdinals);
+                Assert.True(incomplete.HasUnknownOrdinals);
+                Assert.False(incomplete.ContainsAllOrdinals(0, sourcePageSize));
+                Assert.Equal(
+                    notes[sourcePageSize..].Select(static note => note.Id).Order(),
+                    exclusionAware.QueryNotesExcluding(
+                            0,
+                            200_000,
+                            0,
+                            127,
+                            incomplete)
+                        .Select(static note => note.Id)
+                        .Order());
+                Assert.Equal(2, pack.PageCacheMissCount);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BackgroundEncoderFaultIsObservedAndDeletesTheUnpublishedPack()
+    {
+        string directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "midora-paged-content-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = System.IO.Path.Combine(directory, "faulted.mpk");
+        try
+        {
+            MidoraProject project = new(192);
+            MidiSegment segment = new(project);
+            PureMidiContentPackWriter writer = new(
+                path,
+                CancellationToken.None,
+                encoderConcurrency: 1,
+                encodeBufferBudget: 64L * 1024 * 1024,
+                encodePageTestHook: static () =>
+                    throw new IOException("Injected background encoder failure."));
+            for (int index = 0; index < 16_385; index++)
+            {
+                writer.AddNote(segment.Id, new(
+                    project.AllocateStableId(),
+                    index,
+                    12,
+                    index % 128,
+                    100,
+                    0,
+                    index * 2L,
+                    index * 2L + 1));
+            }
+
+            InvalidDataException failure = Assert.Throws<InvalidDataException>(writer.Dispose);
+            Assert.IsType<IOException>(failure.InnerException);
+            writer.Dispose();
+        }
+        finally
+        {
+            Assert.False(File.Exists(path));
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BoundedParallelEncodingIsByteDeterministicAcrossConcurrencyLevels()
+    {
+        string directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "midora-paged-content-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string serialPath = System.IO.Path.Combine(directory, "serial.mpk");
+        string parallelPath = System.IO.Path.Combine(directory, "parallel.mpk");
+        try
+        {
+            MidoraProject project = new(192);
+            MidiSegment segment = new(project);
+            DirectMidiNoteValue[] notes = Enumerable.Range(0, 100_000)
+                .Select(index => new DirectMidiNoteValue(
+                    project.AllocateStableId(),
+                    index * 3L,
+                    48 + index % 97,
+                    index % 128,
+                    1 + index % 127,
+                    index % 128,
+                    index * 2L,
+                    index * 2L + 1))
+                .ToArray();
+
+            Write(serialPath, encoderConcurrency: 1);
+            Write(parallelPath, encoderConcurrency: 4);
+
+            Assert.Equal(File.ReadAllBytes(serialPath), File.ReadAllBytes(parallelPath));
+
+            void Write(string path, int encoderConcurrency)
+            {
+                using PureMidiContentPackWriter writer = new(
+                    path,
+                    CancellationToken.None,
+                    encoderConcurrency,
+                    64L * 1024 * 1024);
+                foreach (DirectMidiNoteValue note in notes) writer.AddNote(segment.Id, note);
+                using PureMidiContentPack completed = writer.Complete();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CancelledParallelEncodingDeletesTheUnpublishedPack()
+    {
+        string directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "midora-paged-content-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = System.IO.Path.Combine(directory, "cancelled.mpk");
+        try
+        {
+            MidoraProject project = new(192);
+            MidiSegment segment = new(project);
+            using CancellationTokenSource cancellation = new();
+            using PureMidiContentPackWriter writer = new(path, cancellation.Token);
+            for (int index = 0; index < 70_000; index++)
+            {
+                writer.AddNote(segment.Id, new(
+                    project.AllocateStableId(),
+                    index,
+                    12,
+                    index % 128,
+                    100,
+                    0,
+                    index * 2L,
+                    index * 2L + 1));
+            }
+            cancellation.Cancel();
+
+            Assert.ThrowsAny<OperationCanceledException>(() => writer.Complete());
+        }
+        finally
+        {
+            Assert.False(File.Exists(path));
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void PlaybackEndpointPagesAreGloballyOrderedAcrossLocalPageRuns()
     {
@@ -173,6 +488,10 @@ public sealed class PureMidiContentPackTests
                     opaqueEventId, 30, OpaqueMidiEventKind.Meta, 6, new byte[] { 1, 2, 3 }, 6));
                 using PureMidiContentPack pack = writer.Complete();
                 IPureMidiSegmentContentSource contentSource = pack.GetSegmentSource(segment.Id);
+                Assert.Equal(
+                    1_100,
+                    Assert.IsAssignableFrom<IPureMidiContentBoundsSource>(contentSource)
+                        .MaximumNoteEndTick);
                 IPureMidiContentOverviewSource overviewSource =
                     Assert.IsAssignableFrom<IPureMidiContentOverviewSource>(contentSource);
                 long missesBeforeOverview = pack.PageCacheMissCount;
@@ -189,6 +508,13 @@ public sealed class PureMidiContentPackTests
                     overviewSource.GetOpaqueEventRangeSummaries()
                         .Select(value => (value.MinimumTick, value.MaximumTick, value.RecordCount)));
                 Assert.Equal(missesBeforeOverview, pack.PageCacheMissCount);
+                IPureMidiContentRangeFingerprintSource rangeFingerprints =
+                    Assert.IsAssignableFrom<IPureMidiContentRangeFingerprintSource>(contentSource);
+                long missesBeforeFingerprints = pack.PageCacheMissCount;
+                _ = rangeFingerprints.GetNoteRangeFingerprint(0, 200, 0, 127);
+                _ = rangeFingerprints.GetChannelEventRangeFingerprint(0, 200);
+                _ = rangeFingerprints.GetOpaqueEventRangeFingerprint(0, 200);
+                Assert.Equal(missesBeforeFingerprints, pack.PageCacheMissCount);
                 segment.AttachPagedContent(contentSource);
 
                 Assert.Equal(2, segment.Notes.Count);
@@ -290,6 +616,58 @@ public sealed class PureMidiContentPackTests
             .Where(static item => item.value != 0)
             .Select(static item => item.index)
             .ToArray();
+    }
+
+    [Fact]
+    public void PagedNoteRasterColumnsPreserveDistinctBoundaries()
+    {
+        string directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "midora-paged-content-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = System.IO.Path.Combine(directory, "raster-starts.mpk");
+        try
+        {
+            using MidoraProject project = new(192);
+            MidiSegment segment = new(project) { LengthTicks = 128 };
+            using PureMidiContentPackWriter writer = new(path);
+            writer.AddNote(segment.Id, new(
+                project.AllocateStableId(), 8, 32, 60, 100, 0, 0, 1));
+            writer.AddNote(segment.Id, new(
+                project.AllocateStableId(), 40, 32, 60, 100, 0, 2, 3));
+            using PureMidiContentPack pack = writer.Complete();
+            IPureMidiContentOverviewSource source =
+                Assert.IsAssignableFrom<IPureMidiContentOverviewSource>(
+                    pack.GetSegmentSource(segment.Id));
+            var projection = new TimelineRasterColumnProjection(
+                0,
+                128,
+                0,
+                0,
+                0.125,
+                16);
+            TimelineRasterColumnSummary[] columns = new TimelineRasterColumnSummary[16];
+
+            Assert.True(source.TryAccumulateNoteRasterColumns(
+                projection,
+                60,
+                60,
+                columns,
+                excludedIds: null,
+                out int sourceWorkCount));
+
+            const ulong noteMask = 1UL << 60;
+            Assert.Equal(noteMask, columns[1].StartLaneMaskLow & noteMask);
+            Assert.Equal(noteMask, columns[5].StartLaneMaskLow & noteMask);
+            Assert.Equal(noteMask, columns[4].EndLaneMaskLow & noteMask);
+            Assert.Equal(noteMask, columns[8].EndLaneMaskLow & noteMask);
+            Assert.InRange(sourceWorkCount, 1, 2);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

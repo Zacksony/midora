@@ -9,6 +9,7 @@ public static partial class ProjectObjectClipboard
         MidoraId eventInstrumentId,
         MidoraId sourceMappingChainId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         EventInstrument instrument = document.Project.EventInstruments
             .SingleOrDefault(value => value.Id == eventInstrumentId)
@@ -30,6 +31,7 @@ public static partial class ProjectObjectClipboard
         MidoraId sourceSubVoiceId,
         IReadOnlyCollection<MidoraId> templateEventIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(templateEventIds);
         if (templateEventIds.Count == 0)
@@ -44,30 +46,33 @@ public static partial class ProjectObjectClipboard
         SubVoice voice = instrument.SubVoices
             .SingleOrDefault(value => value.Id == sourceSubVoiceId)
             ?? throw new ArgumentOutOfRangeException(nameof(sourceSubVoiceId));
-        HashSet<MidoraId> requested = ValidateDistinctIds(
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(
             templateEventIds,
             nameof(templateEventIds));
-        TemplateEvent[] selected = voice.Events
-            .Where(value => requested.Contains(value.Id))
-            .OrderBy(value => value.Tick)
-            .ThenBy(value => value.Id)
-            .ToArray();
-        if (selected.Length != requested.Count)
+        BoundedEditRecordStore<TemplateEventSnapshotValue> selected = ClipboardCaptureScope.Sort(
+            EnumerateClipboardSelection(document.Project, voice.Events.CreateQuerySnapshot(), requested),
+            Comparer<TemplateEventSnapshotValue>.Create((left, right) =>
+            {
+                int order = left.Tick.CompareTo(right.Tick);
+                return order != 0 ? order : left.Id.CompareTo(right.Id);
+            }), reportSelectionProgress: true);
+        if (selected.Count != requested.Count)
         {
             throw new ArgumentException(
                 "Every copied Template Event must belong to the source SubVoice.",
                 nameof(templateEventIds));
         }
         long earliest = selected[0].Tick;
-        TemplateEventClipboardSnapshot[] snapshots = selected.Select(value =>
-            SnapshotTemplateEvent(value, checked(value.Tick - earliest))).ToArray();
+        IReadOnlyList<TemplateEventClipboardSnapshot> snapshots = new ProjectedClipboardList<TemplateEventSnapshotValue, TemplateEventClipboardSnapshot>(selected,
+            value => new(value.Kind, checked(value.Tick - earliest), value.LengthTicks,
+                value.Number, value.Value, value.SecondaryValue, value.HasBankMsb, value.HasBankLsb, value.FollowPitchDelta));
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.SubVoiceTimelineEvents,
-            snapshots.Length,
-            snapshots.Length == 1
+            snapshots.Count,
+            snapshots.Count == 1
                 ? "1 SubVoice Timeline Event"
-                : $"{snapshots.Length} SubVoice Timeline Events",
+                : $"{snapshots.Count} SubVoice Timeline Events",
             new SubVoiceTimelineEventsClipboardData(eventInstrumentId, snapshots));
     }
 
@@ -78,6 +83,7 @@ public static partial class ProjectObjectClipboard
         MidoraId sourceCurveId,
         IReadOnlyCollection<MidoraId> pointIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(pointIds);
         if (pointIds.Count == 0)
@@ -95,22 +101,20 @@ public static partial class ProjectObjectClipboard
         ValueCurve curve = voice.Curves
             .SingleOrDefault(value => value.Id == sourceCurveId)
             ?? throw new ArgumentOutOfRangeException(nameof(sourceCurveId));
-        HashSet<MidoraId> requested = ValidateDistinctIds(pointIds, nameof(pointIds));
-        CurvePoint[] selected = curve.Points
-            .Where(value => requested.Contains(value.Id))
-            .ToArray();
-        if (selected.Length != requested.Count)
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(pointIds, nameof(pointIds));
+        IReadOnlyList<CurvePointClipboardSnapshot> points = SnapshotTimelinePointValues(
+            EnumerateClipboardSelection(document.Project, curve.Points.CreateQuerySnapshot(), requested));
+        if (points.Count != requested.Count)
         {
             throw new ArgumentException(
                 "Every copied Value Curve point must belong to the source Curve.",
                 nameof(pointIds));
         }
-        CurvePointClipboardSnapshot[] points = SnapshotTimelinePoints(selected);
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.ValueCurveContent,
-            points.Length,
-            points.Length == 1 ? "1 Value Curve Point" : $"{points.Length} Value Curve Points",
+            points.Count,
+            points.Count == 1 ? "1 Value Curve Point" : $"{points.Count} Value Curve Points",
             new ValueCurveContentClipboardData(eventInstrumentId, curve.Target, points));
     }
 
@@ -119,18 +123,19 @@ public static partial class ProjectObjectClipboard
         ProjectObjectClipboardPayload payload,
         MidoraId targetEventInstrumentId,
         MidoraId targetSubVoiceId,
-        long editCursorTick)
+        long editCursorTick,
+        MidiValueTarget? target = null)
     {
         SubVoiceTimelineEventsClipboardData data =
             RequirePayload<SubVoiceTimelineEventsClipboardData>(
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.SubVoiceTimelineEvents);
-        return ProjectDomainEditCommands.PasteSubVoiceTimelineEventsClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteSubVoiceTimelineEventsClipboard(
             data,
             targetEventInstrumentId,
             targetSubVoiceId,
-            editCursorTick);
+            editCursorTick), new(payload.Kind, targetEventInstrumentId, targetSubVoiceId, MidiTarget: target));
     }
 
     public static IProjectEditCommand CreatePasteValueCurveContentCommand(
@@ -145,12 +150,12 @@ public static partial class ProjectObjectClipboard
             targetDocument,
             payload,
             ProjectObjectClipboardKind.ValueCurveContent);
-        return ProjectDomainEditCommands.PasteValueCurveContentClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteValueCurveContentClipboard(
             data,
             targetEventInstrumentId,
             targetSubVoiceId,
             targetCurveId,
-            editCursorTick);
+            editCursorTick));
     }
 
     public static IProjectEditCommand CreatePasteMappingChainCommand(
@@ -164,11 +169,11 @@ public static partial class ProjectObjectClipboard
             targetDocument,
             payload,
             ProjectObjectClipboardKind.MappingChain);
-        return ProjectDomainEditCommands.PasteMappingChainClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteMappingChainClipboard(
             data,
             targetEventInstrumentId,
             targetMappingChainId,
-            nonEmptyReplacementConfirmed);
+            nonEmptyReplacementConfirmed));
     }
 
     private static TemplateEventClipboardSnapshot SnapshotTemplateEvent(
@@ -185,8 +190,10 @@ public static partial class ProjectObjectClipboard
             value.HasBankLsb,
             value.FollowPitchDelta);
 
-    private static MappingChainClipboardSnapshot SnapshotMappingChain(MappingChain chain) =>
-        new(
+    private static MappingChainClipboardSnapshot SnapshotMappingChain(MappingChain chain)
+    {
+        ClipboardCaptureScope.ReserveMetadata(chain.Count);
+        return new(
             chain.IsEnabled,
             chain.Select(value => new MappingStepClipboardSnapshot(
                 value.IsEnabled,
@@ -202,22 +209,23 @@ public static partial class ProjectObjectClipboard
                 value.TargetMaximum,
                 value.InputOverflow,
                 value.DivideByZero)).ToArray());
+    }
 }
 
 internal sealed record SubVoiceTimelineEventsClipboardData(
     MidoraId SourceEventInstrumentId,
-    TemplateEventClipboardSnapshot[] Events) : ProjectObjectClipboardData;
+    IReadOnlyList<TemplateEventClipboardSnapshot> Events) : ProjectObjectClipboardData;
 
 internal sealed record ValueCurveContentClipboardData(
     MidoraId SourceEventInstrumentId,
     MidiValueTarget Target,
-    CurvePointClipboardSnapshot[] Points) : ProjectObjectClipboardData;
+    IReadOnlyList<CurvePointClipboardSnapshot> Points) : ProjectObjectClipboardData;
 
 internal sealed record MappingChainClipboardData(
     MidoraId SourceEventInstrumentId,
     MappingChainClipboardSnapshot Chain) : ProjectObjectClipboardData;
 
-internal sealed record TemplateEventClipboardSnapshot(
+internal readonly record struct TemplateEventClipboardSnapshot(
     TemplateEventKind Kind,
     long TickOffset,
     long LengthTicks,
@@ -307,7 +315,7 @@ public static partial class ProjectDomainEditCommands
         Command("Paste subvoice timeline events", project =>
         {
             ArgumentNullException.ThrowIfNull(snapshot);
-            if (editCursorTick < 0 || snapshot.Events.Length == 0)
+            if (editCursorTick < 0 || snapshot.Events.Count == 0)
             {
                 throw new ArgumentOutOfRangeException(
                     editCursorTick < 0 ? nameof(editCursorTick) : nameof(snapshot));
@@ -319,38 +327,13 @@ public static partial class ProjectDomainEditCommands
             }
             EventInstrument instrument = FindEventInstrument(project, targetEventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, targetSubVoiceId);
-            TemplateEventClipboardValue[] values = snapshot.Events.Select(value =>
-                PrepareTemplateEventClipboardValue(value, editCursorTick)).ToArray();
-            long oldTemplateLength = instrument.TemplateLengthTicks;
-            long replacementTemplateLength = Math.Max(
-                oldTemplateLength,
-                values.Max(value => value.Value.Kind == TemplateEventKind.Note
-                    ? checked(value.Value.Tick + value.Value.LengthTicks)
-                    : checked(value.Value.Tick + 1)));
-            TemplateEvent[]? copies = null;
-            return ResolveExactSubVoiceEventCollisions(Prepared(
-                hasChanges: true,
-                EventInstrumentChange(targetEventInstrumentId),
-                owner =>
-                {
-                    copies ??= values.Select(value =>
-                        CreateTemplateEventClipboardCopy(owner, value)).ToArray();
-                    voice.Events.AddRange(copies);
-                    instrument.TemplateLengthTicks = replacementTemplateLength;
-                },
-                _ =>
-                {
-                    if (copies is null)
-                    {
-                        throw new InvalidOperationException(
-                            "Pasted Template Events do not exist before Apply.");
-                    }
-                    foreach (TemplateEvent value in copies)
-                    {
-                        RemoveRequired(voice.Events, value, "pasted Template Event");
-                    }
-                    instrument.TemplateLengthTicks = oldTemplateLength;
-                }), voice);
+            return AppendBoundedTemplateEventPoints(instrument.Id, voice.Id, snapshot.Events.Select(value =>
+            {
+                TemplateEventValue candidate = PrepareTemplateEventClipboardValue(value, editCursorTick).Value;
+                return new TemplateEventSnapshotValue(default, candidate.Kind, candidate.Tick, candidate.LengthTicks,
+                    candidate.Number, candidate.Value, candidate.SecondaryValue, candidate.HasBankMsb,
+                    candidate.HasBankLsb, candidate.FollowPitchDelta);
+            })).Prepare(project);
         });
 
     internal static IProjectEditCommand PasteValueCurveContentClipboard(
@@ -362,7 +345,7 @@ public static partial class ProjectDomainEditCommands
         Command("Paste value curve points", project =>
         {
             ArgumentNullException.ThrowIfNull(snapshot);
-            if (editCursorTick < 0 || snapshot.Points.Length == 0)
+            if (editCursorTick < 0 || snapshot.Points.Count == 0)
             {
                 throw new ArgumentOutOfRangeException(
                     editCursorTick < 0 ? nameof(editCursorTick) : nameof(snapshot));
@@ -380,53 +363,7 @@ public static partial class ProjectDomainEditCommands
                 throw new InvalidOperationException(
                     "Value Curve content requires an exact MIDI target.");
             }
-            CurvePointClipboardValue[] values = snapshot.Points.Select(value =>
-            {
-                long tick = checked(editCursorTick + value.Tick);
-                ValidateValueCurvePoint(
-                    curve,
-                    default,
-                    tick,
-                    value.Value,
-                    value.Interpolation);
-                return new CurvePointClipboardValue(tick, value.Value, value.Interpolation);
-            }).ToArray();
-            if (values.Select(value => value.Tick).Distinct().Count() != values.Length)
-            {
-                throw new InvalidOperationException(
-                    "Pasted Value Curve points would create duplicate point ticks.");
-            }
-            long oldTemplateLength = instrument.TemplateLengthTicks;
-            long replacementTemplateLength = Math.Max(
-                oldTemplateLength,
-                checked(values.Max(value => value.Tick) + 1));
-            CurvePoint[]? copies = null;
-            return Prepared(
-                hasChanges: true,
-                EventInstrumentChange(targetEventInstrumentId),
-                owner =>
-                {
-                    copies ??= values.Select(value => new CurvePoint(
-                        owner,
-                        value.Tick,
-                        value.Value,
-                        value.Interpolation)).ToArray();
-                    curve.Points.AddRange(copies);
-                    instrument.TemplateLengthTicks = replacementTemplateLength;
-                },
-                _ =>
-                {
-                    if (copies is null)
-                    {
-                        throw new InvalidOperationException(
-                            "Pasted Value Curve points do not exist before Apply.");
-                    }
-                    foreach (CurvePoint point in copies)
-                    {
-                        RemoveRequired(curve.Points, point, "pasted Value Curve point");
-                    }
-                    instrument.TemplateLengthTicks = oldTemplateLength;
-                });
+            return PrepareBoundedValueCurveClipboard(project, instrument, voice, curve, snapshot.Points, editCursorTick);
         });
 
     private static TemplateEventClipboardValue PrepareTemplateEventClipboardValue(
@@ -454,15 +391,6 @@ public static partial class ProjectDomainEditCommands
         {
             ValidateMappingStepValue(ToMappingStepValue(step));
         }
-    }
-
-    private static TemplateEvent CreateTemplateEventClipboardCopy(
-        MidoraProject project,
-        TemplateEventClipboardValue value)
-    {
-        TemplateEvent result = new(project);
-        SetTemplateEvent(result, value.Value);
-        return result;
     }
 
     private static void ApplyMappingChainClipboard(
@@ -494,5 +422,5 @@ public static partial class ProjectDomainEditCommands
             value.InputOverflow,
             value.DivideByZero);
 
-    private sealed record TemplateEventClipboardValue(TemplateEventValue Value);
+    private readonly record struct TemplateEventClipboardValue(TemplateEventValue Value);
 }

@@ -12,6 +12,7 @@ internal static class MidoraPackagePathsV1
     public const string ProjectSettings = "settings/project-settings.json";
     public const string GlobalResetDefaults = "settings/global-reset-defaults.json";
     public const string GlobalEventScopeDefaults = "settings/global-event-scope-defaults.json";
+    public const string ProjectPresentation = "settings/project-presentation.json";
 
     public static string PureMidiContentPack(MidoraId trackId) =>
         $"midi-content/mt_{trackId}.mpk";

@@ -1,4 +1,5 @@
 using System.Text;
+using Midora.Common;
 using Midora.Domain;
 
 namespace Midora.Persistence;
@@ -101,10 +102,8 @@ internal sealed class SessionContentDirectoryLease : IDisposable
         TryDeleteOwnedDirectory(_rootPath, DirectoryPath);
     }
 
-    private static string DefaultRootPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Midora",
-        "SessionContent");
+    private static string DefaultRootPath() =>
+        MidoraProgramData.Current.SessionContentDirectory;
 
     private static string NormalizeRoot(string rootPath)
     {
@@ -146,9 +145,7 @@ internal sealed class SessionContentDirectoryLease : IDisposable
                 }
 
                 bool currentSession = IsCurrentSessionPath(path) && HasValidManifest(path);
-                bool legacySession = IsRecognizedLegacySession(path);
-                if ((!currentSession && !legacySession)
-                    || (currentSession && IsSessionActive(path)))
+                if (!currentSession || IsSessionActive(path))
                 {
                     continue;
                 }
@@ -245,38 +242,6 @@ internal sealed class SessionContentDirectoryLease : IDisposable
         {
             return true;
         }
-    }
-
-    private static bool IsRecognizedLegacySession(string path)
-    {
-        string name = Path.GetFileName(path);
-        if (!Guid.TryParseExact(name, "N", out _)) return false;
-        try
-        {
-            if (Directory.EnumerateDirectories(path).Any()) return false;
-            return Directory.EnumerateFiles(path).All(IsLegacyContentPackFile);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static bool IsLegacyContentPackFile(string path)
-    {
-        string name = Path.GetFileName(path);
-        if (!name.StartsWith("mt_", StringComparison.Ordinal)
-            || !name.EndsWith(".mpk", StringComparison.Ordinal))
-        {
-            return false;
-        }
-        ReadOnlySpan<char> id = name.AsSpan(3, name.Length - 7);
-        return long.TryParse(
-            id,
-            System.Globalization.NumberStyles.None,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out long value)
-            && value > 0;
     }
 
     private static bool IsReparsePoint(string path)

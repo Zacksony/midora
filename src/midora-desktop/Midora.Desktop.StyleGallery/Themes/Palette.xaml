@@ -79,6 +79,7 @@
   <SolidColorBrush x:Key="Brush.PianoKey.Label" Color="{StaticResource Color.PianoKey.Label}" />
   <SolidColorBrush x:Key="Brush.Damaged" Color="{StaticResource Color.Damaged}" />
   <SolidColorBrush x:Key="Brush.Damaged.Subtle" Color="{StaticResource Color.Damaged.Subtle}" />
+  <SolidColorBrush x:Key="Brush.Timeline.PreRoll" Color="{StaticResource Color.Damaged}" />
 
   <CornerRadius x:Key="Radius.Small">3</CornerRadius>
   <CornerRadius x:Key="Radius.Medium">5</CornerRadius>

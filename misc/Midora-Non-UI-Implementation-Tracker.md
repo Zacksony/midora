@@ -5,6 +5,7 @@
 最近结构决策更新：2026-08-20；Pure MIDI Track / SMF Import 已实施，2026-08-18 parent/child ownership 又被 global mixed Track order、Event Instrument Usage 与非空内部 Root 取代。正式范围见 SRS 第 23～24 章、INV-050～064、INV-073～074、ADR-PMIDI-001～009 与 ADR-CORE-046。
 上位规范：`misc/Midora-SRS-Initial-Release-v0.1/`
 问题库：`misc/Midora-Non-UI-Decision-Question-Library.md`
+2026-09-10 定案补充：Q-NUI-021 的旧“超长 delta 严格失败”已由 [SMF 导出边界决定](Midora-SMF-Export-Timing-Padding-and-Size-Limits-Architecture-Decisions.md) 取代；空 Text Meta 填充、MTrk 不拆分/导出专属大小门和汇总提示**尚待产品实施**。下文历史测试不作为新规则的通过证据。
 缓存设计讨论：`misc/Midora-Segment-Compilation-and-Audio-Cache-Design-Discussion-2026-08-08.md`
 八组 SF2 发布门矩阵：`misc/Midora-SF2-Release-Gate-Matrix-2026-08-08.md`
 
@@ -182,7 +183,7 @@
 - 显式 Track 编译已按 §12.6.3 将普通语义与 Stable ID 诊断统一限制到选择作用域；Whole Project compile 仍是发现未选内容损坏的正式入口，后续消费者不得自行扩大诊断范围。
 - 正常 Track 对 Damaged Event Instrument 占位的绑定已按 §16.19.3 作为编译 Error；普通断裂引用仍按未绑定 Track 的 Info 语义保留，消费者不得把两者合并成同一级别。
 - Q-NUI-020 已确认 Global Event Scope Defaults 在初版保持不可编辑的版本化空 marker；现有固定事件作用域继续有效，不新增 schema/History/compiler 配置分支。SRS 第 3、12、16、17、18 章已同步收口，旧有“可修改 Project Content”字面冲突已消除。
-- Q-NUI-021 已确认并完成：SMF 单个 delta 超过 `0x0FFFFFFF` 时结构化失败且不发布文件，不向 canonical 事件之外插入 Meta spacer；exporter 最大/越界及 task 无输出边界均有直接测试。
+- Q-NUI-021 历史严格失败实现及测试已完成；2026-09-10 新决定改为导出专属空 Text Meta 填充，MTrk 不拆分且超 `0xFFFFFFFF` 字节仅导出失败。SRS/INV-118 已更新，代码、字节预算/诊断修正与新验证门待实施；原 2026-08-07 测试行只保留历史事实。
 - Q-NUI-022 held Preview 非 UI 全链已实施：Gate Open 哨兵、Gate End 实际长度、producer frontier splice、Render-Ahead 不回写、Event/SubVoice/Pitch Ruler/单 Note 草稿、编辑提交隔离及托管/Native AOT Worker 一致性均有自动覆盖。当前剩余的是 WPF pointer capture/失焦接线与人工交互时延验收；8 秒窗口和 4 秒续接阈值作为 Q-NUI-031 小决定待确认。
 - Q-NUI-023 已选择备选 A：开发期 v1 的领域、创建和 schema 已收窄到 `1..32767`，并以 32767/32768 边界回归锁定；Q-NUI-030 已进一步闭合 TPQ/Time Signature 整除组合约束。
 - Q-NUI-024/Q-NUI-025 已实施：`MidoraId`/Project allocator 为单个正 `long`，JSON 使用 canonical integer，对象文件名为十进制，protobuf 为标量 `int64`，Mapping 内部 ABI 为 v2；旧 `Guid`/`UInt128`、32 位十六进制和 protobuf high/low 正式消费路径已移除。

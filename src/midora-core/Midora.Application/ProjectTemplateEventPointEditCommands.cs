@@ -11,6 +11,9 @@ public static partial class ProjectDomainEditCommands
         MidoraId subVoiceId,
         MidiValueTarget target,
         IReadOnlyCollection<TemplateEventPointEdit> points) =>
+        points.Count >= BoundedPointThreshold
+        ? BoundedUpsertTemplatePoints(eventInstrumentId, subVoiceId, target, points)
+        :
         Command("Draw template event points", project =>
         {
             ArgumentNullException.ThrowIfNull(points);
@@ -20,6 +23,8 @@ public static partial class ProjectDomainEditCommands
             }
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (voice.Events.Count >= BoundedPointThreshold)
+                return BoundedUpsertTemplatePoints(eventInstrumentId, subVoiceId, target, points).Prepare(project);
             TemplateEventPointEdit[] edits = points
                 .OrderBy(value => value.Tick)
                 .ToArray();
@@ -32,11 +37,26 @@ public static partial class ProjectDomainEditCommands
                 ValidateTemplateEventPoint(target, edit);
             }
 
+            HashSet<long> editedTicks = edits
+                .Select(static value => value.Tick)
+                .ToHashSet();
+            MidoraId[] candidateIds = voice.Events.CreateQuerySnapshot()
+                .QueryEventTicks(editedTicks)
+                .Select(static value => value.Id)
+                .ToArray();
+            Dictionary<long, TemplateEvent[]> candidatesByTick = voice.Events
+                .ResolveByIdsInCollectionOrder(candidateIds)
+                .GroupBy(static value => value.Tick)
+                .ToDictionary(
+                    static values => values.Key,
+                    static values => values.ToArray());
             List<ExistingTemplateEventPointEdit> existing = [];
             List<TemplateEventPointEdit> additions = [];
             foreach (TemplateEventPointEdit edit in edits)
             {
-                TemplateEvent? current = FindTemplateEventForTarget(voice, target, edit.Tick);
+                TemplateEvent? current = FindTemplateEventForTarget(
+                    candidatesByTick.GetValueOrDefault(edit.Tick, []),
+                    target);
                 if (current is null)
                 {
                     additions.Add(edit);
@@ -54,11 +74,12 @@ public static partial class ProjectDomainEditCommands
             bool existingChanges = existing.Any(value =>
                 !TemplateEventMidiTargets.Enumerate(value.Event).Contains(target)
                 || TemplateEventMidiTargets.GetValue(value.Event, target) != value.Value);
-            return ResolveExactSubVoiceEventCollisions(Prepared(
+            return ResolveTargetedExactTemplateEventPointCollisions(Prepared(
                 existingChanges || additions.Count != 0 || oldTemplateLength != replacementTemplateLength,
                 EventInstrumentChange(eventInstrumentId),
                 owner =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     foreach (ExistingTemplateEventPointEdit edit in existing)
                     {
                         SetTemplateEventTarget(edit.Event, target, edit.Value);
@@ -71,7 +92,7 @@ public static partial class ProjectDomainEditCommands
                     }
                     foreach (TemplateEvent value in created)
                     {
-                        if (voice.Events.Any(candidate => candidate.Id == value.Id))
+                        if (voice.Events.TryGetById(value.Id, out _))
                         {
                             throw new InvalidOperationException("A pasted Template Event point stable ID is already present.");
                         }
@@ -81,29 +102,30 @@ public static partial class ProjectDomainEditCommands
                 },
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     if (created is null)
                     {
                         throw new InvalidOperationException("Template Event points do not exist before the first Apply.");
                     }
-                    foreach (TemplateEvent value in created)
-                    {
-                        RemoveRequired(voice.Events, value, "drawn Template Event point");
-                    }
+                    int removed = voice.Events.RemoveRange(created);
+                    if (removed != created.Length)
+                        throw new InvalidOperationException("The drawn Template Event point set is no longer present.");
                     foreach (ExistingTemplateEventPointEdit edit in existing)
                     {
                         SetTemplateEvent(edit.Event, edit.OldValue);
                     }
                     instrument.TemplateLengthTicks = oldTemplateLength;
-                }), voice);
+                }), edits.SelectMany(edit => GetTemplateEventPointCollisionDetails(target)
+                    .Select(detail => new TemplateEventPointCollisionTarget(
+                        voice,
+                        edit.Tick,
+                        detail))));
         });
 
     private static TemplateEvent? FindTemplateEventForTarget(
-        SubVoice voice,
-        MidiValueTarget target,
-        long tick)
+        IEnumerable<TemplateEvent> candidates,
+        MidiValueTarget target)
     {
-        IEnumerable<TemplateEvent> candidates = voice.Events.Where(value =>
-            value.Kind != TemplateEventKind.Note && value.Tick == tick);
         return target.Kind switch
         {
             MidiValueKind.BankMsb or MidiValueKind.BankLsb =>
@@ -114,6 +136,53 @@ public static partial class ProjectDomainEditCommands
                 TemplateEventMidiTargets.Enumerate(value).Contains(target))
         };
     }
+
+    private static int[] GetTemplateEventPointCollisionDetails(MidiValueTarget target) =>
+        target.Kind switch
+        {
+            MidiValueKind.ControlChange => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.ControlChange,
+                target.Number,
+                false,
+                false),
+            MidiValueKind.BankMsb => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.Bank,
+                0,
+                true,
+                false),
+            MidiValueKind.BankLsb => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.Bank,
+                0,
+                false,
+                true),
+            MidiValueKind.Program => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.Program,
+                0,
+                false,
+                false),
+            MidiValueKind.PitchBend => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.PitchBend,
+                0,
+                false,
+                false),
+            MidiValueKind.RegisteredParameter => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.RegisteredParameter,
+                target.Number,
+                false,
+                false),
+            MidiValueKind.NonRegisteredParameter => TemplateEventExactCollision.GetNonNoteDetails(
+                TemplateEventKind.NonRegisteredParameter,
+                target.Number,
+                false,
+                false),
+            MidiValueKind.PitchBendRangeSemitones or MidiValueKind.PitchBendRangeCents =>
+                TemplateEventExactCollision.GetNonNoteDetails(
+                    TemplateEventKind.PitchBendRange,
+                    0,
+                    false,
+                    false),
+            _ => throw new ArgumentOutOfRangeException(nameof(target))
+        };
 
     private static void ValidateTemplateEventPoint(MidiValueTarget target, TemplateEventPointEdit point)
     {
@@ -159,52 +228,68 @@ public static partial class ProjectDomainEditCommands
         MidiValueTarget target,
         int value)
     {
+        TemplateEventKind kind = targetEvent.Kind;
+        int number = targetEvent.Number;
+        int primaryValue = targetEvent.Value;
+        int secondaryValue = targetEvent.SecondaryValue;
+        bool hasBankMsb = targetEvent.HasBankMsb;
+        bool hasBankLsb = targetEvent.HasBankLsb;
         switch (target.Kind)
         {
             case MidiValueKind.ControlChange:
-                targetEvent.Kind = TemplateEventKind.ControlChange;
-                targetEvent.Number = target.Number;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.ControlChange;
+                number = target.Number;
+                primaryValue = value;
                 break;
             case MidiValueKind.BankMsb:
-                targetEvent.Kind = TemplateEventKind.Bank;
-                targetEvent.HasBankMsb = true;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.Bank;
+                hasBankMsb = true;
+                primaryValue = value;
                 break;
             case MidiValueKind.BankLsb:
-                targetEvent.Kind = TemplateEventKind.Bank;
-                targetEvent.HasBankLsb = true;
-                targetEvent.SecondaryValue = value;
+                kind = TemplateEventKind.Bank;
+                hasBankLsb = true;
+                secondaryValue = value;
                 break;
             case MidiValueKind.Program:
-                targetEvent.Kind = TemplateEventKind.Program;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.Program;
+                primaryValue = value;
                 break;
             case MidiValueKind.PitchBend:
-                targetEvent.Kind = TemplateEventKind.PitchBend;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.PitchBend;
+                primaryValue = value;
                 break;
             case MidiValueKind.RegisteredParameter:
-                targetEvent.Kind = TemplateEventKind.RegisteredParameter;
-                targetEvent.Number = target.Number;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.RegisteredParameter;
+                number = target.Number;
+                primaryValue = value;
                 break;
             case MidiValueKind.NonRegisteredParameter:
-                targetEvent.Kind = TemplateEventKind.NonRegisteredParameter;
-                targetEvent.Number = target.Number;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.NonRegisteredParameter;
+                number = target.Number;
+                primaryValue = value;
                 break;
             case MidiValueKind.PitchBendRangeSemitones:
-                targetEvent.Kind = TemplateEventKind.PitchBendRange;
-                targetEvent.Value = value;
+                kind = TemplateEventKind.PitchBendRange;
+                primaryValue = value;
                 break;
             case MidiValueKind.PitchBendRangeCents:
-                targetEvent.Kind = TemplateEventKind.PitchBendRange;
-                targetEvent.SecondaryValue = value;
+                kind = TemplateEventKind.PitchBendRange;
+                secondaryValue = value;
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(target));
         }
+        targetEvent.SetValues(
+            kind,
+            targetEvent.Tick,
+            targetEvent.LengthTicks,
+            number,
+            primaryValue,
+            secondaryValue,
+            hasBankMsb,
+            hasBankLsb,
+            targetEvent.FollowPitchDelta);
         targetEvent.EnsureMappings();
     }
 

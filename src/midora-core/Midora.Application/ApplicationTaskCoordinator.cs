@@ -243,6 +243,16 @@ public sealed class ApplicationTaskCoordinator : IDisposable
         }
     }
 
+    public void StartInstrumentPresetPreview(Guid owner, InstrumentPresetPreviewRequest request, bool held)
+    {
+        _playback.StopInstrumentPresetPreview(owner);
+        StartPlaybackTask(ApplicationTaskKind.EventInstrumentPreview,
+            () => _playback.StartInstrumentPresetPreview(owner, request, held));
+    }
+
+    public void StopInstrumentPresetPreview(Guid owner) => _playback.StopInstrumentPresetPreview(owner);
+    public void ReleaseInstrumentPresetPreviewKey(Guid owner) => _playback.ReleaseInstrumentPresetPreviewKey(owner);
+
     public void StartHeldSegmentPitchRulerPreview(
         MidoraId trackId,
         MidoraId segmentId,

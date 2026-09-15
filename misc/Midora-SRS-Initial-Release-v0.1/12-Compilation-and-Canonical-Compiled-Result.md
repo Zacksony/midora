@@ -259,6 +259,8 @@ Channel Unit 当前状态
 ```text
 从中途冷启动播放时，范围前已经开始发声的持续音不会被重新触发。
 ```
+
+该限制同样适用于 Pre-Roll 实例：当实例/模板 origin 早于 `startTick` 时，不因其 Logical Gate anchor 位于范围内而补发范围前模板 Note On，也不在 canonical、播放或渲染消费者中执行隐藏音频预滚以恢复 sample 相位。
 ### 12.4.3 非音符状态恢复
 范围起点应恢复必要非音符状态。
 包括：
@@ -381,6 +383,15 @@ Logical Note start 在 Segment 内，但 length 超过 Segment End：
 编译时按 Segment End 硬裁剪生命周期。
 不自动修改 Project 数据。
 ```
+
+Logical Note anchor 在 Segment 内，但其 Definition 的 `Pre-Roll Ticks` 使 `anchor - Pre-Roll Ticks` 早于 Segment 有效起点：
+
+```text
+编译 Error，并定位 Logical Note、Segment 与 Event Instrument Definition。
+不得 Clamp、丢弃前缀、自动扩张 Segment 或跨 Segment 边界生成实例。
+```
+
+全部 `anchor - Pre-Roll Ticks`、`origin + templateTick` 和 local/absolute tick 换算必须使用 checked `Int64` 算术；下溢、上溢或得到负 Project tick 均为 Error，不得环绕或饱和。
 Logical Note length <= 0：
 ```text
 非法，编译失败，并定位到 Logical Note。
@@ -392,6 +403,18 @@ Pure MIDI Track 的 Midi Segment 使用相同 Content Window 与裁剪规则，�
 ### 12.7.1 触发源
 初版中，Segment 内 `Logical Note` 是生成 Event Instrument Instance 的唯一触发源。
 Logical Parameter Point / Curve 不单独触发实例。
+
+设 Logical Note absolute anchor 为 `A`、Definition `Pre-Roll Ticks` 为 `O`、有效 Logical Gate Length 为 `L`，则编译器必须冻结：
+
+```text
+Instance / template origin I = A - O
+template tick t -> absolute tick I + t
+Logical Gate Start = A
+Logical Gate End = A + L（随后服从 Segment End / consumer end 硬裁剪）
+instance-local Gate horizon = O + L
+```
+
+`O` 不进入 Logical Note 源字段，不改变 `MappingContext.gateLength`，也不用于 Pure MIDI、Event Instrument standalone Preview、SubVoice standalone Preview 或 Segment Pitch Ruler audition。
 ### 12.7.2 MappingContext 基础输入
 Logical Note 的以下信息应进入 MappingContext：
 ```text
@@ -412,6 +435,8 @@ Logical Parameter 信息
 目标参数 key
 ```
 具体字段名称和类型由实现设计阶段细化。
+
+其中 `projectTick` / `segmentLocalTick` 使用提前后的实际事件位置，`templateTick` 保持模板局部位置，`Gate Length` 保持有效 Logical Gate Length而不包含 Pre-Roll。
 ### 12.7.3 无输出实例
 被触发的 Event Instrument Instance 如果最终完全不产生任何 MIDI / 高级事件输出：
 ```text
@@ -597,6 +622,8 @@ Initial State 注入在：
 ```text
 实例开始 tick
 ```
+
+对 Pre-Roll 实例，该 tick 是提前后的 Instance Origin `A - O`，不是 Logical Gate Start `A`。Reset Defaults、Initial State、模板 tick 0 用户状态与参数映射必须在这个实际时间点按正式优先级建立；不得读取并倒灌 anchor 时刻才生效的未来 Logical Parameter 状态。
 并在语义排序上早于该 tick 的模板用户事件。
 如果 Initial State 与同 tick 用户事件冲突：
 ```text
@@ -685,6 +712,8 @@ Pure MIDI 编译必须先对同一 Root 的全部已选择 Segment 求活动连�
 ### 12.10.8 Event Instrument Usage 生命周期
 
 未启用逐音符隔离时，编译器必须对同一 Usage 的全部已选择 Logical Segment 求活动连通区间，并按 SubVoice 共享 Channel Unit。子 Segment End 只精确关闭该 Segment 的 Instance/Note；Usage 连通区间结束才做 Usage 级 CC120、最终 Reset 和释放。启用逐音符隔离时 Unit 仍按实例分配，但 Overlap、来源与 dirty owner 继续属于 Usage。
+
+Usage 活动连通区间、Overlap 扫描和 lane 激活起点必须包含 Pre-Roll 提前后的 Instance Origin；不得以 Logical Note anchor 代替起点。Pre-Roll 可以把原本分离的实例区间连接起来并提高同一编译上下文中的资源峰值。
 ---
 ## 12.11 同 tick 语义排序
 ### 12.11.1 系统级排序原则
@@ -805,6 +834,8 @@ Channel Unit 占用区间采用左闭右开：
 [occupyStartTick, occupyEndTick)
 ```
 occupyEndTick 应包含必要 Release、Tail、Note Off 和 Reset 完成后的释放边界。
+
+Logical/Event Instrument 实例的 `occupyStartTick` 使用 Pre-Roll 后的 Instance Origin。Gate End 仍由 Logical Note anchor 与 effective Gate Length 决定，因此未裁剪时 origin 到 Gate End 的局部跨度为 `Pre-Roll Ticks + Gate Length`。
 ### 12.13.2 资源占用与输出事件分离
 某个实例在某段范围内没有恰好输出事件，不代表它不占用资源。
 如果该实例生命周期仍占用 Channel Unit：
@@ -1138,6 +1169,8 @@ Warning 失败策略
 以下情况可能导致 Error：
 ```text
 Logical Note length <= 0
+Event Instrument Pre-Roll Ticks 不在 0..Template Length 范围内
+Logical Note 的 Pre-Roll Instance Origin 早于所属 Segment 有效起点或产生 tick 算术溢出
 同一 Track 内 Segment 重叠
 实际输出 MIDI Note number 越界
 基础 MIDI 参数非法
@@ -1241,6 +1274,17 @@ Overlap Strategy = Warn   -> Warning
 
 ### 12.19.9 Time Signature 截断 Warning
 Time Signature 变化 tick 立即开启新小节。如果该 tick 不是前一个拍号段起点之后的自然完整小节边界，编译器必须产生一条 Warning，定位到该 Time Signature 稳定 ID 和 tick。Warning 默认不阻止消费；启用 Warning-as-error 时按第 12.19.7 节使结果不可消费，但诊断级别仍为 Warning。
+---
+### 12.19.10 完整诊断容量与有界展示
+
+正式诊断的逻辑总数、ordinal 和各严重程度计数使用非负 Int64，最多 `9,223,372,036,854,775,807` 条。同一输入的顺序、重复次数、SourceReference 和失败策略保持不变；不得在 Int32 边界截断、聚合、降级或丢弃诊断。ordinal 只属于本次冻结结果，不是业务 stable ID，不跨修订复用。
+
+允许用共享来源和紧凑 range 表示大量重复诊断，按需物化单行；Canonical、异常与消费者不得通过 Int32 Count 接口静默截断完整总数。物理来源、range、索引和筛选工作仍受实际资源约束，Int64 不是无限内存承诺。
+
+逻辑计数超过 Int64 时必须以专用、明确的诊断容量错误中止本次编译，不发布半份新诊断或可消费结果；之前完整结果仅保留为旧结果，不得冒充当前成功结果。不得把无关算术溢出或内存不足误报成诊断计数超限。
+
+Diagnostics 条件分页见 §17.5；MIDI README 的前 1000 条文本上限见 §14.15.4。两种展示边界都不得改变完整诊断及 §12.19.7 的 Warning-as-error 判定。
+
 ---
 ## 12.20 编译成功判定与失败结果
 ### 12.20.1 成功判定
@@ -1367,6 +1411,8 @@ Dirty 起点应是：
 ```text
 所有实际使用该 Event Instrument 的触发实例中，最早可能受影响的实例起点
 ```
+
+这里的实例起点必须使用 `Logical Note anchor - Pre-Roll Ticks`。修改 Pre-Roll Ticks 时，dirty 起点至少取旧值与新值各自能够产生的最早 origin；不得只从可见 Logical Note anchor 向后重编。
 如果修改影响生命周期、Mapping、Reset、SubVoice 数量、资源需求，则需要从该起点向后重编直到状态收敛或编译上下文结束。
 #### 12.21.6.4 修改 Conductor Track
 Conductor Track 修改需要分情况处理：
@@ -1476,6 +1522,7 @@ Overlap
 Per-Note Instance Isolation
 Mapping Function
 Envelope / Loop
+Pre-Roll Ticks
 ```
 应使所有引用该 Event Instrument 的相关编译、播放、预览、渲染缓存失效。
 ### 12.22.5 Global Defaults 修改
@@ -1524,6 +1571,9 @@ Logical Track 排序通常不改变音乐语义，但可能影响：
 Pure MIDI Track 排序是 Root 内同 tick 合并顺序的正式语义，必须使该 Root 的 canonical、SMF 投影和相关音频缓存失效。Direct MIDI Note/Event、Midi Segment 和 Root mode/routing 的缓存失效、checkpoint 收敛与 Root PCM key 以第 23.10 节为准。
 ---
 ## 12.23 输出消费者边界
+
+Pre-Roll 已在 canonical 编译阶段表现为提前后的正式事件 tick、实例生命周期与 Unit 占用。播放、MIDI 导出和音频渲染不得回读 Event Instrument Definition 再次应用偏移，也不得只在某个消费者中忽略、Clamp 或补偿它。
+
 ### 12.23.1 播放系统
 播放系统可以在 canonical compiled result 基础上做：
 ```text
@@ -1537,7 +1587,7 @@ Mute / Solo 过滤
 ### 12.23.2 MIDI 导出器
 MIDI 导出器可以在 canonical compiled result 基础上做：
 ```text
-拆分 MIDI Track
+按冻结 SMF Track Projection 组织 MIDI Track
 写 Port meta event
 Track 命名
 文件命名
@@ -1545,6 +1595,8 @@ Track 命名
 导出格式整理
 ```
 但不得改变编译语义，也不得回读 Project 重新推断 Pure MIDI Track 拓扑、Root 归属、Track EOT 或同 tick 顺序。
+
+SMF delta-time 填充与文件编码限制属于导出器，见 §14.12.2、§14.12.8～9。Compiler 不为超长 delta 扫描相邻事件、不计算 MTrk 字节长度、不产生占位 Meta，也不因 MTrk 超过 `0xFFFFFFFF` 字节而拒绝编译；Full/Incremental 的音乐结果、诊断和 fingerprint 不受影响。MTrk 不因超限拆分，只让该次 MIDI 导出失败。TPQ、Tempo、事件值和安全 Tick 算术等既有语义检查不取消。
 ### 12.23.3 音频渲染器
 音频渲染应使用与播放一致的 compiled result 语义。
 播放与音频渲染的差异只应体现在：

@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Midora.Playback\Midora.Playback.csproj" />
+    <ProjectReference Include="..\Midora.MidiExport\Midora.MidiExport.csproj" />
     <ProjectReference Include="..\Midora.Playback.BassWasapi\Midora.Playback.BassWasapi.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -19,10 +19,10 @@ public static partial class ProjectDomainEditCommands
             ArgumentNullException.ThrowIfNull(noteIds);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (noteIds.Count >= BoundedNoteThreshold || voice.Events.Count >= BoundedNoteThreshold)
+                return PrepareBoundedTemplateDuplicate(project, instrument, voice, noteIds, newEarliestTick, pitchDelta);
             HashSet<MidoraId> requested = ValidateBatchIds(noteIds, nameof(noteIds), "Template Note");
-            TemplateEvent[] notes = voice.Events
-                .Where(item => requested.Contains(item.Id))
-                .ToArray();
+            TemplateEvent[] notes = ResolveTemplateEventsByIds(voice.Events, noteIds);
             if (notes.Length != requested.Count || notes.Any(item => item.Kind != TemplateEventKind.Note))
             {
                 throw new ArgumentException(
@@ -64,14 +64,7 @@ public static partial class ProjectDomainEditCommands
                             copies[index] = copy;
                         }
                     }
-                    for (int index = 0; index < copies.Length; index++)
-                    {
-                        InsertAt(
-                            voice.Events,
-                            insertionIndex + index,
-                            copies[index],
-                            "Template Note copy");
-                    }
+                    voice.Events.InsertRange(insertionIndex, copies);
                     instrument.TemplateLengthTicks = replacementTemplateLength;
                 },
                 _ =>
@@ -81,10 +74,9 @@ public static partial class ProjectDomainEditCommands
                         throw new InvalidOperationException(
                             "Template Note copies do not exist before the first Apply.");
                     }
-                    foreach (TemplateEvent copy in copies)
-                    {
-                        RemoveRequired(voice.Events, copy, "Template Note copy");
-                    }
+                    int removed = voice.Events.RemoveRange(copies);
+                    if (removed != copies.Length)
+                        throw new InvalidOperationException("The Template Note copy set is no longer present.");
                     instrument.TemplateLengthTicks = oldTemplateLength;
                 }), replacements.Select(value => new TemplateNoteCollisionTarget(
                     voice,
@@ -103,10 +95,18 @@ public static partial class ProjectDomainEditCommands
             ArgumentNullException.ThrowIfNull(noteIds);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (noteIds.Count >= BoundedNoteThreshold || voice.Events.Count >= BoundedNoteThreshold)
+                return PrepareBoundedTemplateNotes(project, instrument, voice, noteIds, _ => value =>
+                {
+                    int pitch = checked(value.Number + pitchDelta);
+                    long tick = checked(value.Tick + tickDelta);
+                    ValidateLogicalNote(tick, value.LengthTicks, pitch is < 0 or > 127 ? 0 : pitch, value.Value);
+                    return pitch is < 0 or > 127 ? null : value with { Tick = tick, Number = pitch };
+                }, collisions: tickDelta != 0 || pitchDelta != 0);
             HashSet<MidoraId> requested = ValidateBatchIds(noteIds, nameof(noteIds), "Template Note");
-            (TemplateEvent Note, int Index)[] selected = voice.Events
-                .Select((item, index) => (Note: item, Index: index))
-                .Where(item => requested.Contains(item.Note.Id))
+            TemplateEvent[] notes = ResolveTemplateEventsByIds(voice.Events, noteIds);
+            (TemplateEvent Note, int Index)[] selected = notes
+                .Select(static item => (Note: item, Index: -1))
                 .ToArray();
             if (selected.Length != requested.Count || selected.Any(item => item.Note.Kind != TemplateEventKind.Note))
             {
@@ -121,6 +121,11 @@ public static partial class ProjectDomainEditCommands
                 Number = checked(value.Number + pitchDelta)
             }).ToArray();
             bool[] discarded = replacement.Select(value => value.Number is < 0 or > 127).ToArray();
+            TemplateEvent[] discardedNotes = selected
+                .Where((_, index) => discarded[index])
+                .Select(static value => value.Note)
+                .ToArray();
+            Action? restoreDiscarded = null;
             for (int index = 0; index < selected.Length; index++)
             {
                 ValidateTemplateEventEdit(
@@ -139,30 +144,30 @@ public static partial class ProjectDomainEditCommands
                 EventInstrumentChange(eventInstrumentId),
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     for (int index = 0; index < selected.Length; index++)
                     {
-                        if (discarded[index])
-                        {
-                            RemoveRequired(voice.Events, selected[index].Note, "Template Note");
-                        }
-                        else
+                        if (!discarded[index])
                         {
                             SetTemplateEvent(selected[index].Note, replacement[index]);
                         }
                     }
+                    if (discardedNotes.Length != 0)
+                        restoreDiscarded = voice.Events.RemoveRangeWithUndo(discardedNotes);
                     instrument.TemplateLengthTicks = replacementTemplateLength;
                 },
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     for (int index = 0; index < selected.Length; index++)
                     {
                         SetTemplateEvent(selected[index].Note, old[index]);
                     }
-                    foreach ((TemplateEvent Note, int Index) value in selected
-                        .Where((_, index) => discarded[index])
-                        .OrderBy(value => value.Index))
+                    if (discardedNotes.Length != 0)
                     {
-                        InsertAt(voice.Events, value.Index, value.Note, "Template Note");
+                        (restoreDiscarded ?? throw new InvalidOperationException(
+                            "Discarded Template Notes do not have a pending removal to restore."))();
+                        restoreDiscarded = null;
                     }
                     instrument.TemplateLengthTicks = oldTemplateLength;
                 });
@@ -248,8 +253,19 @@ public static partial class ProjectDomainEditCommands
             ArgumentNullException.ThrowIfNull(noteIds);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (noteIds.Count >= BoundedNoteThreshold || voice.Events.Count >= BoundedNoteThreshold)
+                return PrepareBoundedTemplateNotes(project, instrument, voice, noteIds, selected =>
+                {
+                    long delta = startDelta < 0 ? Math.Max(startDelta, -selected.Min(v => v.Value.Tick)) : startDelta;
+                    return value =>
+                    {
+                        var result = AdjustLogicalNoteEdgesSaturated(new(value.Tick, value.LengthTicks, value.Number, value.Value),
+                            delta, endDelta, minimumLengthTicks);
+                        return value with { Tick = result.StartTick, LengthTicks = result.LengthTicks };
+                    };
+                }, collisions: startDelta != 0);
             HashSet<MidoraId> requested = ValidateBatchIds(noteIds, nameof(noteIds), "Template Note");
-            TemplateEvent[] notes = voice.Events.Where(item => requested.Contains(item.Id)).ToArray();
+            TemplateEvent[] notes = ResolveTemplateEventsByIds(voice.Events, noteIds);
             if (notes.Length != requested.Count || notes.Any(item => item.Kind != TemplateEventKind.Note))
             {
                 throw new ArgumentException(
@@ -280,11 +296,13 @@ public static partial class ProjectDomainEditCommands
                 EventInstrumentChange(eventInstrumentId),
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     for (int index = 0; index < notes.Length; index++) SetTemplateEvent(notes[index], replacement[index]);
                     instrument.TemplateLengthTicks = replacementTemplateLength;
                 },
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     for (int index = 0; index < notes.Length; index++) SetTemplateEvent(notes[index], old[index]);
                     instrument.TemplateLengthTicks = oldTemplateLength;
                 });
@@ -297,4 +315,9 @@ public static partial class ProjectDomainEditCommands
                         value.Tick,
                         value.Number)));
         });
+
+    private static TemplateEvent[] ResolveTemplateEventsByIds(
+        TemplateEventCollection events,
+        IReadOnlyCollection<MidoraId> ids)
+        => events.ResolveByIdsInCollectionOrder(ids).ToArray();
 }

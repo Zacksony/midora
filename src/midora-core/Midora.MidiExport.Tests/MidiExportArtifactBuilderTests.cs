@@ -2,6 +2,7 @@ using Midora.Compiler;
 using Midora.Domain;
 using Midora.Midi;
 using Midora.OutputPlanning;
+using System.Reflection;
 
 namespace Midora.MidiExport.Tests;
 
@@ -101,6 +102,50 @@ public sealed class MidiExportArtifactBuilderTests
         Assert.Empty(result.Artifacts);
         Assert.Contains(result.Diagnostics, item =>
             item.Diagnostic.Code == "MIDORA-MIDI-EXPORT-CONTEXT");
+    }
+
+    [Fact]
+    public void ReadmeArtifactFreezesItsSnapshotAndWritesLazilyWithCancellation()
+    {
+        (MidoraProject project, _) = CreateProject();
+        using MidoraCompiler compiler = new();
+        MidiExportCompilationResult compilation = new MidiExportCompilationCoordinator(compiler).Compile(new()
+        {
+            Project = project,
+            Mode = MidiExportMode.WholeProject,
+            Routing = MidiExportRoutingStrategy.Compact,
+            EndTick = 192
+        });
+        MidiExportFrozenOutputPlan plan = MidiExportOutputPlanner.PlanWholeProject(
+            Path.Combine(Path.GetTempPath(), "midora-readme-streaming-artifact"),
+            "Project", null, includeReadme: true);
+        MidiExportReadmeRequest readme = MidiExportReadmeFactory.Create(project, compilation, plan,
+            MidiExportRangeSource.Manual, "0.1", "0.1", "0.1", DateTimeOffset.UnixEpoch);
+        byte[] expected = MidiExportReadmeBuilder.Build(readme);
+        MidiExportArtifactBuildResult artifacts = MidiExportArtifactBuilder.BuildWholeProject(plan,
+            new()
+            {
+                CompiledResult = compilation.CompiledResult,
+                ConductorTrackName = compilation.ConductorTrackName,
+                LogicalTracks = compilation.Layouts
+            }, readme);
+        MidiExportPreparedArtifact artifact = Assert.Single(artifacts.Artifacts, value => value.SourceKey == "readme");
+        foreach (MidiExportPreparedArtifact midi in artifacts.Artifacts.Where(value => value.SourceKey != "readme"))
+        {
+            using MemoryStream encoded = new();
+            midi.WriteTo(encoded);
+        }
+        FieldInfo content = typeof(MidiExportPreparedArtifact).GetField("_content",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.Null(content.GetValue(artifact));
+        ((string[])readme.FileNames)[0] = "MUTATED.md";
+        using MemoryStream output = new();
+        artifact.WriteTo(output);
+        Assert.Equal(expected, output.ToArray());
+        Assert.Null(content.GetValue(artifact));
+        using MemoryStream canceled = new();
+        Assert.Throws<OperationCanceledException>(() => artifact.WriteTo(canceled, new CancellationToken(true)));
+        Assert.Equal(0, canceled.Length);
     }
 
     private static void AssertArtifactSet(MidiExportArtifactBuildResult result, string sourceKey)

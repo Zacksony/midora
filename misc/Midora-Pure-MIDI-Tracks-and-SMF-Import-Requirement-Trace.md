@@ -9,7 +9,7 @@
 - 完整 Project，包括 Conductor Track、global mixed Logical/Pure MIDI Track order、内部非空 MIDI Channel Roots、Event Instrument Definitions/Usages、两类 Segment、Project Settings 与单一 Project SoundFont。
 - 纯 MIDI 数据源包括直接 MIDI Note、完整 MIDI 1.0 Channel Voice Event、导入后只读保留的 opaque SysEx / Meta Event、显式 Track 顺序与 Segment 暴露范围。
 - SMF 导入输入仅限 Format 0 / 1、TPQN division；读取器必须支持 Running Status、MIDI Port Meta 与单个源 MTrk 内的多 Channel 数据。
-- 外部 SMF 可缺失 tick 0 Tempo / Time Signature，可在同 tick 包含多个 Tempo，Track Name 也可缺失、空白或不是严格 UTF-8；这些差异只在导入边界归一化，不成为 Project 源数据的宽松表示。
+- 外部 SMF 可缺失 tick 0 Tempo / Time Signature，可在同 tick 包含多个 Tempo，Track Name / Marker 也可使用严格 UTF-8、传统 Windows-31J/CP932 或含不可解码 payload；这些差异只在导入边界归一化，不成为 Project 源数据的宽松表示。
 - 多 Channel/Port 源 MTrk 的 opaque 事件必须恰好保留一次；无 Channel 内容但需要保留结构的源 Track 使用确定的 structure-only Pure MIDI Track，不虚构 Channel Event。
 - 编译请求仍显式携带 `[startTick, endTick)`、Track 选择、用途与 Warning-as-error 策略。
 
@@ -21,7 +21,7 @@
 - SMF 导出保持 Pure MIDI Track 的独立 MTrk、名称、顺序和自身 EOT；Logical 内容继续按 Channel Unit 组织 MTrk。
 - Whole Project 与 Per Port 保持 Pure MIDI Track 拓扑；既有 Per Logical Track 模式只输出 Logical/Event Instrument。单独导出 Pure MIDI Track 使用 Whole Project 的显式选择。
 - SMF 导入创建一个新的、尚未保存的 Project；不合并到当前 Project。
-- 导入 candidate 在验证前已显式补全必需的 tick 0 Conductor 状态、对重复 Tempo 实施确定的后来者优先，并为不可用 Track Name 产生非空回退名称。
+- 导入 candidate 在验证前已显式补全必需的 tick 0 Conductor 状态、对重复 Tempo 实施确定的后来者优先、按 UTF-8→Windows-31J 解释已建模文本，并为不可用 Track Name 产生非空回退名称；不可解码 Marker 被局部丢弃而不阻止其余内容导入。
 - Arrangement 对 Pure MIDI Segment 组合 Direct Note layer 与位于其上、50% 透明度的 non-Note event layer；Conductor 第一行组合按类型着色的 point layer。
 
 ## 3. 边界
@@ -37,6 +37,7 @@
 ## 4. 失败条件
 
 - SMF 不是 Format 0 / 1、使用 SMPTE division、结构损坏、VLQ/长度越界、Running Status 非法、事件截断或存在无法安全界定的 chunk。
+- Track Name / Marker 的文本编码不可解码不是结构失败；只按确定兼容规则局部丢弃。未建模文本 Meta 作为 opaque payload 保留，不进行编码验证。
 - Port 映射后仍超出 16 Ports、Root 总数或 Root 加 Logical 峰值需求超过 256 Units、固定 Root 路由重复、Root/Track/Segment 引用断裂。
 - 同一 Pure MIDI Track 内 Segment 重叠、Segment 时间范围非法或直接事件数据越出 MIDI 1.0 wire 值域。
 - 编译、导出、保存或导入事务失败时不得提交 partial Project、partial canonical 或 partial 输出文件。
@@ -44,7 +45,7 @@
 ## 5. 诊断
 
 - 导入诊断必须定位到源文件、MTrk index、absolute tick、effective Port / Channel 与事件偏移；格式错误导致整个导入失败。
-- 缺失默认状态、冗余同值 Tempo、非法/空白 Track Name 与回退命名记录 `Info`；同 tick 不同 Tempo 被后来者取代记录 `Warning`。UI 在成功原子提交后显示一份汇总、可复制的导入报告。
+- 缺失默认状态、冗余同值 Tempo、Windows-31J 文本、非法/空白 Track Name 与回退命名记录 `Info`；同 tick 不同 Tempo及不可解码而被丢弃的 Marker 记录 `Warning`。UI 在成功原子提交后显示一份汇总、可复制的导入报告。
 - 未配对的 Note message 以可保留的原始事件导入并产生汇总 Warning，不得静默删除或虚构 Gate。
 - Pure MIDI Root 内跨 MTrk 的顺序敏感同 tick 组合不阻止编译；SMF 导出时按 Root 汇总为非阻塞 Warning，说明外部播放器的跨 Track 顺序可能不同。
 - CC91 / CC93 在 Pure MIDI 数据、canonical 和 MIDI 导出中不产生 Warning 或 Error。
@@ -73,7 +74,7 @@
 ## 9. 验证门
 
 - Format 0/1、单/多 Channel MTrk、Running Status、MIDI Port 中途变化、无 Port、边界 VLQ、损坏 chunk、SMPTE/Format 2 拒绝。
-- 缺失 tick 0 Tempo/Time Signature 补全、同 tick Tempo 的跨 MTrk/同 MTrk 后来者优先、同值/冲突诊断分级、空白/非法 UTF-8 Track Name 回退，以及其他文本 Meta 仍严格失败。
+- 缺失 tick 0 Tempo/Time Signature 补全、同 tick Tempo 的跨 MTrk/同 MTrk 后来者优先、同值/冲突诊断分级、UTF-8 与 Windows-31J Track Name/Marker、双重解码失败后的局部丢弃/回退，以及未建模文本 Meta 的 opaque 原始保留。
 - opaque single-owner、纯 Conductor MTrk 0、非 Conductor 空 Track 与 structure-only Root/Track round-trip。
 - 固定 Root 冲突、Auto 分配、Logical 绕开 Root、256 Unit 边界、Channel 10 Melodic/Percussion 投影。
 - Root 活动连通区间、同 tick Segment 交接、子 Segment Note 精确关闭、Root 最终 Reset、同 Root 跨 Track 重叠 Note FIFO。

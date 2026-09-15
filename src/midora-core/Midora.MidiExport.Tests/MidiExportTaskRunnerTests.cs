@@ -96,7 +96,7 @@ public sealed class MidiExportTaskRunnerTests
     }
 
     [Fact]
-    public async Task SmfDeltaOverflowFailsBeforePublishingAnyOutput()
+    public async Task SmfLongDeltaPublishesWithExportOnlyInfoEvenWithoutReadme()
     {
         using TemporaryDirectory temporary = new();
         MidoraProject project = new(192);
@@ -122,13 +122,12 @@ public sealed class MidiExportTaskRunnerTests
         });
 
         Assert.True(compilation.Succeeded);
-        Assert.Equal(MidiExportTaskStatus.Failed, result.Status);
-        Assert.Null(result.Output);
+        Assert.Equal(MidiExportTaskStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Output);
         Assert.Null(result.OutputFailure);
-        MidiExportArtifactDiagnostic diagnostic = Assert.Single(result.ArtifactDiagnostics);
-        Assert.Equal("MIDORA-MIDI-EXPORT-ENCODING", diagnostic.Diagnostic.Code);
-        Assert.Contains("delta time", diagnostic.Diagnostic.Message, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(outputDirectory));
+        Assert.Empty(result.ArtifactDiagnostics);
+        Assert.Equal(new MidiExportPaddingSummary(1, 1, 1), result.PaddingSummary);
+        Assert.True(Directory.Exists(outputDirectory));
     }
 
     [Fact]

@@ -189,7 +189,9 @@ Requirement trace：
 
 `metadata.json` v1 同时冻结项目名称、用户版本、作者/团队、原作、版权、备注、UTC 创建 / 修改时间和总耗时字段。会话内部保留 100 ns `TimeSpan` tick 余数，生成持久快照时向下取完整毫秒；重复取快照不会重复累计同一区间，系统墙钟校时不改变累计值。
 
-## 12. ADR-CORE-010（已接受，21A/22A；Pure MIDI 拓扑部分由 ADR-PMIDI-007 取代）：SMF Type 1 兼容编码档
+## 12. ADR-CORE-010（已接受，21A/22A；Pure MIDI 拓扑与超长 delta 部分由后续决定取代）：SMF Type 1 兼容编码档
+
+2026-09-10 修订：Pure MIDI 拓扑继续以 ADR-PMIDI-007 及后续 global order 决定为准；超长 delta 改由 [ADR-SMF-001～002](Midora-SMF-Export-Timing-Padding-and-Size-Limits-Architecture-Decisions.md) 规定：仅在导出时用空 Text Meta `FF 01 00` 分段，MTrk 数据区保留 `0xFFFFFFFF` 字节上限且绝不按大小拆分，超限只拒绝本次导出。Compiler 不新增间隔扫描或编码字节检查。新规则已进入 SRS/INV-118，产品代码与新测试待实施；下文历史垂直切片的完成范围不代表此项已实现。
 
 决定：初版 `.mid` 编码固定使用 SMF Type 1 和 Project TPQ。Tempo 以十进制 `60,000,000 / BPM` 计算，并只对最终 microseconds-per-quarter-note 执行一次 `AwayFromZero`；舍入结果超出 `1..0xFFFFFF` 时整体失败。Time Signature 固定写 `cc=24`、`bb=8`。同 tick 的 Bank/Program 字节顺序固定为 CC0、CC32、Program Change。所有文本 Meta 使用严格 UTF-8；事件 Track 只写 Track Name 与 MIDI Port Meta，不写 Device Name / Program Name。每个 Channel Event 都显式写 status byte，不使用 Running Status。
 
@@ -198,7 +200,7 @@ Requirement trace：
 - 输入：用途为 `MidiExport`、成功、完整、可消费且已冻结 SMF Track Projection 的 `CanonicalCompiledResult`。编码器不读取 Project、播放状态、SoundFont、设备或 Mute/Solo。
 - 正式输出：范围起点重基为 MIDI tick 0 的确定性 SMF Type 1 字节；Track 0 为 Conductor，随后为 Pure MIDI ExportTrack MTrks，再为 Logical Unit MTrks。Logical Unit 仍一 Unit 一 Track、按 Port→Channel；Pure MIDI 一 Track 一 MTrk、按 Root/Track 顺序并使用自身 EOT。
 - 边界：Channel Event 逐条保持 canonical 子序列和真实 NoteOff velocity 0；RPN/NRPN/Pitch Bend Range 使用 canonical 已展开的标准 CC；导出器不得折叠状态，不得在 canonical 外追加 All Notes Off、All Sound Off、Reset All Controllers 或其他 Channel 清理。Track Name 的最终可见字符串由上层工作流显式提供，编码器不隐藏选择命名模板。
-- 失败条件：非 MidiExport 上下文、不可消费/partial 结果、非法 TPQ、超出四字节 VLQ 的事件间隔、24-bit Tempo 越界、非法 Time/Key Signature、未知 Channel Event、Event Instrument 路径非法 CC91/93、非法 Note 编码、路由/来源不一致、Track descriptor 缺失或自校验失败均整体失败且返回零 partial 字节。合法 Pure MIDI CC91/93 和 NoteOff velocity `0..127` 必须可编码。
+- 失败条件：非 MidiExport 上下文、不可消费/partial 结果、非法 TPQ、24-bit Tempo 越界、非法 Time/Key Signature、未知 Channel Event、Event Instrument 路径非法 CC91/93、非法 Note 编码、路由/来源不一致、Track descriptor 缺失或自校验失败均整体失败且不发布 partial 产物。单条 payload 的 VLQ、ntrks 与 MTrk 字节超限仍拒绝；原“超出四字节 VLQ 的事件间隔一律失败”已被 ADR-SMF-001 的导出专属填充取代。合法 Pure MIDI CC91/93 和 NoteOff velocity `0..127` 必须可编码。
 - 诊断：当前垂直切片区分 canonical consistency 与 encoding 两类结构化诊断；完整工作流实现时再接入统一任务/文件写入诊断，不把异常文本当持久协议。
 - 持久化归属：SMF 是导出产物，不进入 `.midora`；Track 可见名称布局和输出路径是本次工作流快照。受文件命名决定影响的 Export Settings schema 仍未发布。
 - 运行时归属：SMF 组织、字节编码和读取后自校验属于 MIDI 导出 Preparing/Encoding；不进入 compiler canonical 语义，也不进入音频 Worker。
@@ -664,3 +666,55 @@ Requirement trace：输入为 Project Mapping Function expression/ABI/dependency
 同日冻结当前 `.midora` Format 1，作为完整作品验收和 1.0.0 的持久化基线。V1 JSON schema set hash、protobuf descriptor hash、代表性 wire golden、strict reader、deterministic package 与事务测试构成自动门；后续 1.x 新软件必须读取此前有效 Format 1。无法由 V1 表示的新数据必须建立 V2 codec/schema/content-pack contract 和 detached V1 migration，不得修改 V1 字段/field number/wire 语义或通过更新 golden 掩盖破坏。缓存只提升 generation 并淘汰，不进入格式迁移。
 
 Requirement trace：输入为单一产品版本源、Git commit/tag、Format 1 schema/descriptor/golden assets、既有 Project package 与各独立 ABI/protocol version；正式输出为一致软件标识、严格版本预检、持续 V1 读取和可审计 release。失败边界包括版本源/EXE/manifest/Readme 不一致、dirty/mismatched tag、V1 hash/golden/旧文件重开失败、未知未来格式和部分迁移；失败不得发布或部分提交 Project。产品版本/tag/changelog 属于发布契约，Format/schema/Project source 属于持久化，ABI/IPC 属于对应执行边界，cache generation 属于运行时；明确非目标是一个全局万能版本号、旧 reader 前向猜读、保存回旧格式或在 V1 中隐藏新字段。
+
+## 56. ADR-CORE-054（已接受）：大规模时间线的内存分页、批量历史与范围局部栅格缓存
+
+决定：Pure MIDI 保持 Format 1 Content Pack 的不可变外存分页与增量覆盖层；Logical Segment Note 与 SubVoice Template Event 在运行时改用固定 4,096 项的内存页集合。后两者的页是实现细节，只按稳定 ID、确定集合顺序和正式字段建立不可变值快照；页面首次变更采用 copy-on-write，连续批量编辑只标记受影响页，直到消费者请求快照时才重建脏页。该实现不得改变 `.midora` Format 1 的 JSON/protobuf 字段、顺序语义、stable ID、编译输入或 Undo/Redo 可观察结果，也不得把运行时页边界持久化。
+
+批量 Paste/Duplicate/编辑的 Apply、Undo、Redo 与同 Tick 精确碰撞处理不得逐项在线性 List/overlay 上查找并移动尾部。正式集合提供按 stable ID HashSet 的一次稳定压缩、一次 generation 提升和可恢复的原页/overlay位置记录；Undo 必须恢复相同对象引用、原有全局顺序、原页边界和选择语义。Direct MIDI Note 仍遵循“保留原占位者、删除后来编辑者”；Logical/SubVoice Note 的相同策略由同一 targeted collision transaction 执行。失败或冲突检测必须在发布 History entry 前完成，不能留下部分删除。
+
+钢琴卷帘、Velocity、Event Point 与 Arrangement Segment Preview 的栅格 identity 使用查询范围内的内容及选择局部指纹，不再把整个 Segment generation 或全局 selection revision 注入每个 tile。不可变 Pure MIDI Content Pack 的范围指纹只读取 page directory 与既有 page SHA-256，不解码 page payload；编辑 overlay、Logical Note 与 SubVoice Template Event 使用固定大小 block summary 的交换律聚合，只扫描范围首尾 block。WPF `OnRender` 只组合这些有界元数据和少量 materialized item，真正的分页查询、候选遍历与位图生成只在后台 raster worker 发生。远处编辑不能仅因 overlay 索引位移使未相交 tile 失效；Undo 恢复原内容时必须恢复原局部 fingerprint，从而直接重用编辑前缓存。
+
+Arrangement Segment Preview 固定为两层：第一层是每个 Segment 唯一、与当前 viewport zoom 无关、最多四个 tile 的 coarse fallback，Project/Workspace 建立后即后台预热，并在任何缩放下直接缩放显示；第二层才按半八度量化的显示 LOD 分 tile 生成。某 detail tile 完成后只在其覆盖区替换 coarse，未完成区继续显示 coarse，不得叠加两层造成重影，也不得因进入新缩放级别同步重算整条 Segment。钢琴卷帘、Velocity 和 Event Point 继续使用可见世界 tile；UI thread 建 key 时不得查询大型数据源，空白内容右侧不得创建无意义 piano tile。
+
+栅格调度固定为可见、邻域预取、全局预热三级优先级。可见 tile worker 数按逻辑处理器数量取 `clamp(processorCount / 4, 2, 4)`，从而在多核机器缩短冷视区收敛；在至少 8 个逻辑处理器的机器上，至少保留四分之三逻辑处理器给 UI、编译和音频。无论可见 worker 数多少，预取/预热最多只占一个 worker。64 项总在途上限中，非可见任务最多占 32 项，不能以后台暖缓存填满队列。Snapshot/Workspace/Surface Mode/精确投影修订后取消旧计划；已进入队列但已无有效消费者的请求在取得 worker 后必须跳过 factory；执行中的旧任务可以完成，但结果按 generation 丢弃且不得写入当前缓存。完成缓存继续受 256 MiB LRU 上限约束。
+
+Requirement trace：输入为 Project 时间线对象、stable ID、编辑范围、History command、Workspace selection、可见/预热 tile 范围及 Project revision；正式输出为与原数据模型完全相同的编辑结果、精确可逆 History、范围局部不可变 presentation snapshot 和确定栅格。边界包括跨页编辑、整页删除、碰撞产生的后来者删除、Redo、跨 Segment 粘贴、极端空白视区、缩放/平移、旧任务取消、缓存上限与 Project Close。Project 源对象和 Format 1 持久化不变；页、overlay 索引、快照、指纹、tile、取消令牌和 WPF bitmap 只属于进程内运行时。失败条件包括 stable ID 重复/缺失、恢复位置不一致、算术溢出和损坏分页源；失败不得发布部分 Project 或错误缓存。明确非目标是把 Logical/SubVoice 改成新的磁盘格式、让页边界影响编译顺序、无限保留 WPF 位图、保证执行中原生 WPF 栅格可抢占，或以缓存命中改变正式语义。
+
+## 57. ADR-CORE-055（已接受）：极端时间线统一修订、非阻塞消费与端到端性能门
+
+决定：Direct MIDI Note/Event、Logical Note/Parameter Point 与 SubVoice Template Note/Event 的运行时表示收敛为按正式空间键排序的不可变分页修订。页采用结构共享 copy-on-write，固定保存 ID 索引、区间 `maxEnd`、tick/lane/category 摘要、局部内容 hash 与缩小时使用的有界 occupancy 摘要；编辑事务只替换受影响页并生成精确 range change set。Undo/Redo 保存页根或紧凑页 delta，不保存逐对象查找/插入脚本、每碰撞键一个 HashSet 或整份 owner 深拷贝。Project 的稳定 ID、顺序、碰撞、边界、选择结果和 canonical 语义不因页布局改变。
+
+UI、Compiler 与后台 raster 只消费同一不可变 Project revision；发布新编辑不得等待后台编译复制或持有的大型 Project gate。后台编译和渲染都采用 latest-wins：旧 revision 可以在安全取消点终止，不能发布到新 revision。Desktop 每个 Dispatcher frame 最多合并一次模型刷新；普通 Note/Event 局部编辑不得重建无关 Workspace、Project Tree、全量 Properties 或无关诊断视图。Selection 使用可共享的持久 ID/page-local bitmap 与按页摘要；历史恢复不得在 UI 线程重新解析全部 ID 或解码冷页。
+
+后台编译的不可变修订捕获固定为两阶段。第一阶段只能在 Project source mutation gate 内冻结 revision/generation、Project 标量、顶层稳定 ID/顺序、受影响 owner 的结构标量，以及集合已经发布的不可变分页快照引用：Logical Segment 保存 `LogicalNoteQuerySnapshot` 和各 Logical Parameter Lane 的 `CurvePointQuerySnapshot`；Event Instrument/SubVoice 保存 `TemplateEventQuerySnapshot`、Value Curve 的 `CurvePointQuerySnapshot` 及不可变 Mapping/Initial State 标量；Pure MIDI 继续保存 Content Pack/overlay 的不可变查询修订。第一阶段只允许 `O(top-level owners + segments/lanes + page-directory metadata)`，不得遍历或实例化百万级 Note/Event/Point，也不得把 live mutable object 引用交给 gate 外消费者。第二阶段在 gate 外按取消令牌把捕获修订物化为 compiler-owned mirror；每页及最多每 256 个值检查取消。所有受影响 branch 必须先形成独立候选图，只有候选图完整且 revision/generation 仍有效时才以一个非取消的短结构提交替换当前 mirror；取消不得留下部分更新的 compiler mirror，旧 revision 只可被丢弃、不可发布。每个 Project compilation session 同时最多保留当前已发布 mirror、一个正在物化的 capture 和一个 latest-wins 待处理 change set；取消/Project Close 后必须释放 page snapshot 引用，不能形成后台任务或旧修订队列。
+
+现有 `MidoraCompiler` 继续消费 compiler-owned `MidoraProject` shell，但 Pure MIDI collection 不再把 editable overlay 物化为等量 `DirectMidiNote` / Event 对象。mutation gate 内冻结 Content Pack 引用、removed/replacement persistent roots 与分块 formal-added root；gate 外为 mirror 建立只读 compilation query snapshot 和空间 overlay index。Validation、stable-ID 检查、canonical range query、endpoint query 与 fingerprint 直接消费 value struct / `ReadOnlyMemory<byte>`，只有遗留 `IList` 消费者显式枚举时才惰性产生领域对象。该 shell 不可编辑、不得返回 live mutable source object；取消只能丢弃候选 shell。Logical/SubVoice 继续复用其不可变内存页捕获。后续可以将 compiler 入口进一步收敛为统一 immutable compilation graph，但不再把“重建超大 Pure MIDI 对象图”作为允许的过渡路径。无论后续是否继续收敛，同一源 revision 的 Full/Incremental 输出、诊断来源、正式集合顺序、同 tick 顺序和 fingerprint 必须完全一致，缓存或取消时机不得改变语义。
+
+Arrangement 继续严格保留唯一 zoom-independent coarse fallback 与分级 detail 两层；detail 只局部替代 coarse。Piano Note + Selection 作为一个视觉提交单元，Velocity 与 Event/Parameter Point 各作为一个视觉提交单元：同一 `ProjectionKey`、同一精确水平/垂直投影和同一 DPI 下，新内容/选择修订的全部可见 tile 完整前保留上一完整单元，完整后一次切换；不得把旧选择层与新内容层混合，也不得跨缩放、LOD 或 DPI 缩放复用位图。新投影只显示该投影已完成的 tile。基础内容、选择和手势预览仍是独立计算层，但提交必须遵守上述一致性。少量 Note 的 Move/Copy/Resize 直接构造当前 viewport 的有界即时矢量预览；超过固定阈值后才使用 latest-only 的像素瓦片预览。大选区 Resize 只显示当前 signature 已完成的局部 tile 与当前 anchor，不得复用上一 delta、selection、DPI 或内容修订的手势预览。所有 range fingerprint 由相交页摘要组合，`OnRender`、hover 与 hit test 不允许读取文件、Brotli 解压、SHA-256、全量枚举或大型排序；hit test 使用专用有界邻近索引，不复用渲染范围查询，并须事务式暂存结果，Pending/异常/重入不得部分修改调用者集合。
+
+低缩放 occupancy 不允许用“节点时间包围盒 × lane 并集”近似多个 device column，因为该笛卡尔积会生成并不存在的灰色矩形。聚合节点只有在其全部时间范围精确落入同一 device column、且 category 完全匹配时才可直接合并；否则递归到子节点、空间 block 或原值。聚合与逐项 raster 必须共用同一个以邻近 tick 为原点、边界执行 half-up rounding 的 `TimelineRasterColumnProjection`，选择层也必须用同一列映射，避免低缩放边缘出现 1～2 device pixel 错位。
+
+`TimelineOverviewSurface` 的内容摘要 extent 与导航 extent 分离：内容摘要只依赖正式 content extent、fingerprint 和 overview 宽度；viewport 进入 Segment 右侧空白只扩大导航投影和 thumb/cursor，不得同步重扫内容。摘要在后台 latest-wins 构建，UI 始终保留上一完整摘要，发布时才整体替换；无 Project 时不得残留显示旧摘要。
+
+Raster scheduler 以 `(surface, layer, world tile, viewport generation)` 合并请求，工厂接受协作取消；新 viewport/revision 使尚未运行的旧请求失效，运行中的旧请求不得发布。完成通知按 Dispatcher frame 合并为一次 invalidate；在途容量同时受任务数和字节预算限制。极端缩小时由 occupancy 摘要以输出像素为界生成结果，渲染成本不能继续随映射到同一像素的原始对象数线性增长。
+
+Pure MIDI 导入的 Content Pack 写入采用有界、确定的页编码流水线：source page ordinal 与提交顺序仍由导入线程冻结，endpoint 排序、确定性 little-endian 序列化、decoded SHA-256 和现有 Brotli Fastest 编码在后台并行，文件写入与目录项发布严格按冻结页顺序进行。默认 worker 数为 `min(8, max(1, logicalProcessorCount - 2))`，至少为 UI/音频保留两个逻辑处理器（不足三个处理器的机器只能退化为单 worker）；pending task 另受 `2 × worker` 上限约束。主要内存门不是 task 数，而是 64 MiB 的 decoded/source-record 加 codec 最大输出 reservation；endpoint 页同时计入 detached record buffer 与 serialized decoded buffer。Complete、取消、fault 与 Dispose 都必须停止调度、drain 并观察全部后台任务；未成功重开验证的 pack 不发布并删除，导入主异常与 cleanup 异常并存时以 `AggregateException` 保留原异常为首项，不得被 Dispose 掩盖。页仍按原顺序写入且 codec 未变，因此调度竞争不能改变 pack 字节。
+
+2026-08-26 对 9KX2 真实 2,808,250,692 decoded page bytes 的同 payload 诊断表明：Brotli Fastest 为 12.981 s / 395,535,799 bytes，Deflate Fastest 为 10.242 s / 657,098,821 bytes，无压缩计数 sink 为 0.002 s / 2,808,250,692 bytes；当前并行 Brotli 的前台 queue wait 只有 0.82～0.87 s，而原主线程 endpoint 排序/序列化才是明确瓶颈。Deflate 的 21% codec wall-time 改善不能转化为相称的端到端收益且 payload 增加 66%，无压缩则增加约 6.1 倍。因此本决定不新增 codec 字段、不提升 Content Pack 格式，也不以未经真实端到端数据证明的格式破坏换取推测性能。保存 pristine Pure MIDI pack 时只把 staging copy 与 whole-pack SHA 合并为一个流式 pass；save-owned 自校验仍完整读取并校验 Zip entry SHA，但直接以锁定的同一 staging pack 做目录/语义重开，避免再写一份 session extraction。普通 `.midora` Open 仍执行 Zip→session backing 的单次流式 copy+SHA，保持会话所有权、损坏隔离与 Project Dispose 清理不变。
+
+正式性能门使用 Release WPF 进程与真实异步完成时间，而不是只计一次 `OnRender` 返回。千万级 MIDI 的连续 pan/zoom、冷区域 hover、60,000 Note Move/Copy/Resize、首次 Undo/Redo、跨 Track/远位置编辑及三种 Piano/Velocity/Event Lane 都必须覆盖；同时运行朴素参考模型或 golden/property tests 验证最终对象、顺序、碰撞、选择和 Undo/Redo 完全相同。性能测试分别记录 Dispatcher stall、后台完成延迟、managed/LOH、decoded page cache、raster completed/in-flight 与 WPF native working set，禁止用第二次热缓存结果代替首次冷路径结果。
+
+Requirement trace：输入为 Project revision、空间分页对象、编辑事务、selection、viewport/LOD、后台编译与 raster 请求；正式输出为语义不变的 Project/canonical、精确 History、局部 change set 和非阻塞 UI presentation。边界包括空白 Segment 外区域、冷页、极端 zoom、跨页/跨 Track 编辑、碰撞、旧任务、关闭 Workspace/Project、取消与内存预算。Project 源数据是否需要新持久化格式由独立格式决定；本 ADR 不以 Format 1 兼容为性能实现前提，也不要求无收益地改变格式。明确非目标是改变任何既有编辑行为、用近似数据提交正式编辑、让缓存命中影响结果、在 UI 线程等待后台消费者，或以“平均/热路径够快”替代冷路径性能门。
+
+## 58. ADR-CORE-056（已接受）：Event Instrument Pre-Roll anchor 与 Project Format 2
+
+决定：Event Instrument Definition 新增持久 `long PreRollTicks`，默认 0，合法范围 `0..TemplateLengthTicks`。它只作用于 Logical Segment 中由 Logical Note 生成的正式实例。设 Logical Note absolute anchor 为 `A`、有效 Logical Gate Length 为 `L`、Pre-Roll 为 `O`，Compiler 冻结 Instance/template origin `I=A-O`，template tick `t` 映射为 `I+t`，Logical Gate Start/End 仍为 `A`/`A+L` 并服从 Segment End 硬裁剪，instance-local Gate horizon 为 `O+L`。`MappingContext.gateLength` 保持 `L`，短音/长音继续比较 `L` 与 Template Length；Initial State、Reset/用户 template tick 0 状态、实际 tick Logical Parameter、Overlap/Cut Previous、Usage 活动连通区间和 Unit occupancy 从 `I` 起算。由 Template Length 决定的 one-shot 边界仍从 template origin 计量，不能再额外加一次 `O`。
+
+Instance origin 必须位于所属 Segment 当前有效窗口内。`I < SegmentStart`、负 Project tick 或任意 checked Int64 换算溢出均产生可定位 Error；禁止把 `I` clamp 到 Segment Start、裁掉前缀后继续、自动扩展/移动 Segment、跨相邻 Segment 的硬 Reset 边界或修改 Logical Note 源数据。修改 Pre-Roll、Template Length、Logical Note、Segment window 或 Definition binding 时，dirty range 从旧/新值的最早可能 origin 回退，直到 Usage 共享状态、资源分配和 canonical 后缀收敛。Definition 的修改使全部引用 Usage 的 canonical/播放/导出/渲染缓存失效；消费者不得回读 Definition 二次偏移。
+
+Event Instrument/SubVoice standalone Preview、Segment Editor Pitch Ruler audition 及其他不创建 Logical Segment Instance 的试听入口按 `O=0`，不产生负 preview 时间或人为等待。项目中途播放、跳转、循环和 Segment 局部播放维持既有冷启动限制：origin 早于范围起点的 NoteOn 不补发，不为恢复 sample 相位执行范围前音频预滚；必要非 Note 状态仍按 canonical range restore 恢复。这一限制是统一消费者行为，不允许播放与离线输出各自选择不同补偿。
+
+Pre-Roll 无法由冻结 Project Format 1 表达，因此 writer 提升为 Format 2、`minimumReadableVersion=2`。Format 2 的 Event Instrument component 使用 Edition 2024 `EventInstrumentV2` wrapper：field 1 schema version、field 2 object type、field 3 冻结 `EventInstrumentV1 definition`、必填 field 4 `int64 pre_roll_ticks`，5..max 保留。V1 schema/descriptor/golden/reader 完全不变；打开 V1 后在 detached candidate 中为每个 Definition 显式设置 0，保持 stable ID、顺序、Usage/Track/Segment 与 Pure MIDI pages，完整验证后一次提交并标记迁移未保存。普通 Save/Save Copy 只写 V2，不覆盖来源 V1、不保存回 V1。
+
+Requirement trace：输入为 Event Instrument Definition、Logical Note anchor/gate、Segment content window、Logical Parameter timeline、Usage membership、CompileContext range 及冻结 Format 1 Project；正式输出为带提前 template origin、原 Gate anchor、确定来源/顺序/occupancy 的 canonical 结果，以及严格 Format 2 Project。边界覆盖 0/Template Length 上界、Segment 左边界等于/差 1 tick、Segment End gate clamp、跨 Track shared Usage、Overlap/Cut Previous、范围起点落在 origin 与 anchor 之间、checked tick 上下溢、Full/Incremental 等价及 V1 migration。Pre-Roll 与 Definition 属于 Project source；canonical、dirty/checkpoint、allocation、PCM 与 Preview override 属于派生或运行时。失败不得发布部分 Project/canonical、修改 V1 源包或静默采用 0。明确非目标是音频 latency compensation、隐藏预滚、跨 Segment 执行、Pure MIDI 时间偏移、修改 Logical Note 可见位置、给 Usage/Track 单独覆盖 Pre-Roll 或让 standalone Preview 等待 Pre-Roll。

@@ -15,6 +15,7 @@ public static partial class ProjectDomainEditCommands
                 throw new ArgumentOutOfRangeException(nameof(templateLengthTicks));
             }
             long minimum = GetMinimumTemplateLength(instrument);
+            minimum = Math.Max(minimum, instrument.PreRollTicks);
             if (templateLengthTicks < minimum)
             {
                 throw new InvalidOperationException(
@@ -26,6 +27,99 @@ public static partial class ProjectDomainEditCommands
                 EventInstrumentChange(eventInstrumentId),
                 _ => instrument.TemplateLengthTicks = templateLengthTicks,
                 _ => instrument.TemplateLengthTicks = oldLength);
+        });
+
+    public static IProjectEditCommand UpdateEventInstrumentPreRoll(
+        MidoraId eventInstrumentId,
+        long preRollTicks) =>
+        Command("Change event instrument pre-roll", project =>
+        {
+            EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
+            if (preRollTicks < 0 || preRollTicks > instrument.TemplateLengthTicks)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(preRollTicks),
+                    "Pre-Roll Ticks must be between zero and Template Length Ticks.");
+            }
+            long oldValue = instrument.PreRollTicks;
+            return Prepared(
+                oldValue != preRollTicks,
+                EventInstrumentChange(eventInstrumentId),
+                _ => instrument.PreRollTicks = preRollTicks,
+                _ => instrument.PreRollTicks = oldValue);
+        });
+
+    public static IProjectEditCommand UpdateEventInstrumentTiming(
+        MidoraId eventInstrumentId,
+        long templateLengthTicks,
+        long preRollTicks) =>
+        Command("Change event instrument timing", project =>
+        {
+            EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
+            if (templateLengthTicks <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(templateLengthTicks));
+            }
+            if (preRollTicks < 0 || preRollTicks > templateLengthTicks)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(preRollTicks),
+                    "Pre-Roll Ticks must be between zero and Template Length Ticks.");
+            }
+            long minimum = GetMinimumTemplateLength(instrument);
+            if (templateLengthTicks < minimum)
+            {
+                throw new InvalidOperationException(
+                    $"Template Length cannot be shorter than the required content boundary {minimum}.");
+            }
+            InstrumentTimingValue old = new(
+                instrument.TemplateLengthTicks,
+                instrument.PreRollTicks);
+            InstrumentTimingValue replacement = new(templateLengthTicks, preRollTicks);
+            return Prepared(
+                old != replacement,
+                EventInstrumentChange(eventInstrumentId),
+                _ => SetInstrumentTiming(instrument, replacement),
+                _ => SetInstrumentTiming(instrument, old));
+        });
+
+    public static IProjectEditCommand UpdateEventInstrumentTimingAndLoop(
+        MidoraId eventInstrumentId,
+        long templateLengthTicks,
+        long preRollTicks,
+        long? loopStartTick,
+        long? loopEndTick) =>
+        Command("Change event instrument timing and loop", project =>
+        {
+            EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
+            return PrepareInstrumentTimingLoopAndIsolation(
+                instrument,
+                eventInstrumentId,
+                templateLengthTicks,
+                preRollTicks,
+                loopStartTick,
+                loopEndTick,
+                instrument.RequiresChannelIsolation);
+        });
+
+    public static IProjectEditCommand UpdateEventInstrumentTimingLoopAndIsolation(
+        MidoraId eventInstrumentId,
+        long templateLengthTicks,
+        long preRollTicks,
+        long? loopStartTick,
+        long? loopEndTick,
+        bool requiresChannelIsolation) =>
+        Command("Change event instrument timing, loop, and isolation", project =>
+        {
+            EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
+            return PrepareInstrumentTimingLoopAndIsolation(
+                instrument,
+                eventInstrumentId,
+                templateLengthTicks,
+                preRollTicks,
+                loopStartTick,
+                loopEndTick,
+                requiresChannelIsolation);
         });
 
     public static IProjectEditCommand UpdateEventInstrumentIsolation(
@@ -290,7 +384,7 @@ public static partial class ProjectDomainEditCommands
 
     private static long GetMinimumTemplateLength(EventInstrument instrument)
     {
-        long minimum = 1;
+        long minimum = GetMinimumTemplateContentLength(instrument);
         if (instrument.LoopStartTick.HasValue)
         {
             minimum = Math.Max(minimum, checked(instrument.LoopStartTick.Value + 1));
@@ -299,6 +393,12 @@ public static partial class ProjectDomainEditCommands
         {
             minimum = Math.Max(minimum, instrument.LoopEndTick.Value);
         }
+        return minimum;
+    }
+
+    private static long GetMinimumTemplateContentLength(EventInstrument instrument)
+    {
+        long minimum = 1;
         foreach (SubVoice voice in instrument.SubVoices)
         {
             foreach (TemplateEvent templateEvent in voice.Events)
@@ -312,6 +412,120 @@ public static partial class ProjectDomainEditCommands
         }
         return minimum;
     }
+
+    private static void ValidateInstrumentTimingAndLoop(
+        EventInstrument instrument,
+        long templateLengthTicks,
+        long preRollTicks,
+        long? loopStartTick,
+        long? loopEndTick,
+        bool requiresChannelIsolation)
+    {
+        if (templateLengthTicks <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(templateLengthTicks));
+        }
+        if (preRollTicks < 0 || preRollTicks > templateLengthTicks)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(preRollTicks),
+                "Pre-Roll Ticks must be between zero and Template Length Ticks.");
+        }
+        long minimum = GetMinimumTemplateContentLength(instrument);
+        if (templateLengthTicks < minimum)
+        {
+            throw new InvalidOperationException(
+                $"Template Length cannot be shorter than the required content boundary {minimum}.");
+        }
+        bool disablingLoop = !loopStartTick.HasValue && !loopEndTick.HasValue;
+        if (disablingLoop)
+        {
+            return;
+        }
+        bool loopChanged = instrument.LoopStartTick != loopStartTick
+            || instrument.LoopEndTick != loopEndTick;
+        if (loopChanged && !requiresChannelIsolation)
+        {
+            throw new InvalidOperationException(
+                "A Loop can only be enabled or edited while Per-Note Instance Isolation is enabled.");
+        }
+        if (loopStartTick is < 0
+            || loopStartTick >= templateLengthTicks
+            || loopEndTick is <= 0
+            || loopEndTick > templateLengthTicks
+            || loopStartTick.HasValue && loopEndTick.HasValue
+                && loopEndTick.Value <= loopStartTick.Value)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(loopEndTick),
+                "Each Loop endpoint must be inside Template Length, and a complete Loop must be non-empty.");
+        }
+    }
+
+    private static void SetInstrumentTiming(
+        EventInstrument instrument,
+        InstrumentTimingValue value)
+    {
+        instrument.TemplateLengthTicks = value.TemplateLengthTicks;
+        instrument.PreRollTicks = value.PreRollTicks;
+    }
+
+    private readonly record struct InstrumentTimingValue(
+        long TemplateLengthTicks,
+        long PreRollTicks);
+
+    private static IPreparedProjectEdit PrepareInstrumentTimingLoopAndIsolation(
+        EventInstrument instrument,
+        MidoraId eventInstrumentId,
+        long templateLengthTicks,
+        long preRollTicks,
+        long? loopStartTick,
+        long? loopEndTick,
+        bool requiresChannelIsolation)
+    {
+        ValidateInstrumentTimingAndLoop(
+            instrument,
+            templateLengthTicks,
+            preRollTicks,
+            loopStartTick,
+            loopEndTick,
+            requiresChannelIsolation);
+        InstrumentTimingLoopAndIsolationValue old = new(
+            instrument.TemplateLengthTicks,
+            instrument.PreRollTicks,
+            instrument.LoopStartTick,
+            instrument.LoopEndTick,
+            instrument.RequiresChannelIsolation);
+        InstrumentTimingLoopAndIsolationValue replacement = new(
+            templateLengthTicks,
+            preRollTicks,
+            loopStartTick,
+            loopEndTick,
+            requiresChannelIsolation);
+        return Prepared(
+            old != replacement,
+            EventInstrumentChange(eventInstrumentId),
+            _ => SetInstrumentTimingLoopAndIsolation(instrument, replacement),
+            _ => SetInstrumentTimingLoopAndIsolation(instrument, old));
+    }
+
+    private static void SetInstrumentTimingLoopAndIsolation(
+        EventInstrument instrument,
+        InstrumentTimingLoopAndIsolationValue value)
+    {
+        instrument.TemplateLengthTicks = value.TemplateLengthTicks;
+        instrument.PreRollTicks = value.PreRollTicks;
+        instrument.LoopStartTick = value.LoopStartTick;
+        instrument.LoopEndTick = value.LoopEndTick;
+        instrument.RequiresChannelIsolation = value.RequiresChannelIsolation;
+    }
+
+    private readonly record struct InstrumentTimingLoopAndIsolationValue(
+        long TemplateLengthTicks,
+        long PreRollTicks,
+        long? LoopStartTick,
+        long? LoopEndTick,
+        bool RequiresChannelIsolation);
 
     private static long GetRequiredTemplateBoundary(TemplateEvent templateEvent)
     {

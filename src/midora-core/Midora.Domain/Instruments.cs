@@ -66,6 +66,13 @@ public readonly record struct TemplateEventMappingTarget(
     public static IEnumerable<TemplateEventMappingTarget> Enumerate(TemplateEvent value)
     {
         ArgumentNullException.ThrowIfNull(value);
+        return Enumerate(new TemplateEventSnapshotValue(value.Id, value.Kind, value.Tick,
+            value.LengthTicks, value.Number, value.Value, value.SecondaryValue,
+            value.HasBankMsb, value.HasBankLsb, value.FollowPitchDelta));
+    }
+
+    public static IEnumerable<TemplateEventMappingTarget> Enumerate(TemplateEventSnapshotValue value)
+    {
         switch (value.Kind)
         {
             case TemplateEventKind.Note:
@@ -173,17 +180,63 @@ public sealed class TemplateEvent
     private readonly MidoraProject _project;
     private readonly Dictionary<TemplateEventMappingParameter, SubVoiceEventMapping> _detachedMappings = [];
     private SubVoice? _owner;
+    private Action<TemplateEvent>? _changeSink;
+    private TemplateEventKind _kind;
+    private long _tick;
+    private long _lengthTicks;
+    private int _number;
+    private int _value;
+    private int _secondaryValue;
+    private bool _hasBankMsb = true;
+    private bool _hasBankLsb = true;
+    private bool _followPitchDelta = true;
 
     public MidoraId Id { get; init; }
-    public TemplateEventKind Kind { get; set; }
-    public long Tick { get; set; }
-    public long LengthTicks { get; set; }
-    public int Number { get; set; }
-    public int Value { get; set; }
-    public int SecondaryValue { get; set; }
-    public bool HasBankMsb { get; internal set; } = true;
-    public bool HasBankLsb { get; internal set; } = true;
-    public bool FollowPitchDelta { get; set; } = true;
+    public TemplateEventKind Kind
+    {
+        get => _kind;
+        set => Set(ref _kind, value);
+    }
+    public long Tick
+    {
+        get => _tick;
+        set => Set(ref _tick, value);
+    }
+    public long LengthTicks
+    {
+        get => _lengthTicks;
+        set => Set(ref _lengthTicks, value);
+    }
+    public int Number
+    {
+        get => _number;
+        set => Set(ref _number, value);
+    }
+    public int Value
+    {
+        get => _value;
+        set => Set(ref _value, value);
+    }
+    public int SecondaryValue
+    {
+        get => _secondaryValue;
+        set => Set(ref _secondaryValue, value);
+    }
+    public bool HasBankMsb
+    {
+        get => _hasBankMsb;
+        internal set => Set(ref _hasBankMsb, value);
+    }
+    public bool HasBankLsb
+    {
+        get => _hasBankLsb;
+        internal set => Set(ref _hasBankLsb, value);
+    }
+    public bool FollowPitchDelta
+    {
+        get => _followPitchDelta;
+        set => Set(ref _followPitchDelta, value);
+    }
     public MappingChain NumberMappings
     {
         get => GetMapping(TemplateEventMappingParameter.Number).Steps;
@@ -235,7 +288,56 @@ public sealed class TemplateEvent
         return newlyAttached;
     }
 
+    internal bool CanUseBulkAttachPath(SubVoice owner) =>
+        (_owner is null || ReferenceEquals(_owner, owner))
+        && _detachedMappings.Count == 0;
+
     internal void EnsureMappings() => _owner?.EnsureEventMappings(this, createOptional: false);
+
+    internal void SetChangeSink(Action<TemplateEvent>? sink) => _changeSink = sink;
+
+    internal void SetValues(
+        TemplateEventKind kind,
+        long tick,
+        long lengthTicks,
+        int number,
+        int value,
+        int secondaryValue,
+        bool hasBankMsb,
+        bool hasBankLsb,
+        bool followPitchDelta)
+    {
+        if (_kind == kind
+            && _tick == tick
+            && _lengthTicks == lengthTicks
+            && _number == number
+            && _value == value
+            && _secondaryValue == secondaryValue
+            && _hasBankMsb == hasBankMsb
+            && _hasBankLsb == hasBankLsb
+            && _followPitchDelta == followPitchDelta)
+        {
+            return;
+        }
+
+        _kind = kind;
+        _tick = tick;
+        _lengthTicks = lengthTicks;
+        _number = number;
+        _value = value;
+        _secondaryValue = secondaryValue;
+        _hasBankMsb = hasBankMsb;
+        _hasBankLsb = hasBankLsb;
+        _followPitchDelta = followPitchDelta;
+        _changeSink?.Invoke(this);
+    }
+
+    private void Set<T>(ref T field, T value)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        _changeSink?.Invoke(this);
+    }
 
     private SubVoiceEventMapping GetMapping(TemplateEventMappingParameter parameter)
     {
@@ -393,11 +495,25 @@ public sealed class SubVoice
 
     private readonly MidoraProject _project;
 
+    internal TemplateEvent MaterializeEvent(TemplateEventSnapshotValue value)
+    {
+        TemplateEvent result = new(_project, value.Id)
+        {
+            Kind = value.Kind, Tick = value.Tick, LengthTicks = value.LengthTicks,
+            Number = value.Number, Value = value.Value, SecondaryValue = value.SecondaryValue,
+            HasBankMsb = value.HasBankMsb, HasBankLsb = value.HasBankLsb,
+            FollowPitchDelta = value.FollowPitchDelta
+        };
+        result.AttachTo(this);
+        return result;
+    }
+
     public MidoraId Id { get; init; }
     public string? Name { get; set; }
     public int? RootNoteOverride { get; set; }
     public MidiInitialState InitialState { get; } = new();
     public TemplateEventCollection Events { get; }
+    public InstrumentChangeSet InstrumentChanges { get; set; } = InstrumentChangeSet.Empty;
     public List<SubVoiceEventMapping> EventMappings { get; } = [];
     public List<ValueCurve> Curves { get; } = [];
 
@@ -424,11 +540,12 @@ public sealed class SubVoice
     {
         foreach (TemplateEventMappingTarget target in TemplateEventMappingTarget.Enumerate(value))
         {
+            if (FindEventMapping(target) is not null) continue;
             bool mandatory = target.EventKind == TemplateEventKind.Note;
             // Optional non-Note owners are created only for a genuinely new
             // target. Existing raw events with no owner represent an explicit
             // Mapping deletion and must remain raw during edits/reinsertion.
-            if (!mandatory && (!createOptional || Events.Any(existing =>
+            if (!mandatory && (!createOptional || Events.CreateQuerySnapshot().EnumerateAll().Any(existing =>
                     TemplateEventMappingTarget.Enumerate(existing).Contains(target))))
             {
                 continue;
@@ -441,21 +558,165 @@ public sealed class SubVoice
 public sealed class TemplateEventCollection : Collection<TemplateEvent>
 {
     private readonly SubVoice _owner;
+    private readonly PagedTimelineObjectList<TemplateEvent, TemplateEventSnapshotValue> _store;
     private bool _suppressOptionalMappingCreation;
 
     internal TemplateEventCollection(SubVoice owner)
+        : this(owner, CreateStore(owner))
+    {
+    }
+
+    private TemplateEventCollection(
+        SubVoice owner,
+        PagedTimelineObjectList<TemplateEvent, TemplateEventSnapshotValue> store)
+        : base(store)
     {
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        _store = store;
     }
+
+    public long Generation => _store.Generation;
+    public int PageCount => _store.PageCount;
+    internal (int RetainedObjects, int FacadeSlots) StorageCounts => _store.StorageCounts;
 
     public void AddRange(IEnumerable<TemplateEvent> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        foreach (TemplateEvent value in values)
-        {
-            Add(value);
-        }
+        IReadOnlyList<TemplateEvent> materialized = values as IReadOnlyList<TemplateEvent>
+            ?? values.ToArray();
+        InsertRange(Count, materialized);
     }
+
+    public void InsertRange(int index, IReadOnlyList<TemplateEvent> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        if ((uint)index > (uint)Count) throw new ArgumentOutOfRangeException(nameof(index));
+        if (values.Count == 0) return;
+
+        // Detached events with authored mapping state retain the legacy
+        // item-by-item merge path. Fresh and already-owned events have no
+        // fallible detached merge, so they can publish one structural range
+        // without changing CLR object identity or mapping ownership semantics.
+        if (values.Any(value => value is null || !value.CanUseBulkAttachPath(_owner)))
+        {
+            using IDisposable batch = _store.BeginBatchChange();
+            for (int valueIndex = 0; valueIndex < values.Count; valueIndex++)
+                Insert(checked(index + valueIndex), values[valueIndex]);
+            return;
+        }
+
+        _store.ValidateInsertRange(values);
+        foreach (TemplateEvent item in values)
+        {
+            bool newlyAttached = item.AttachTo(_owner);
+            _owner.EnsureEventMappings(
+                item,
+                createOptional: newlyAttached && !_suppressOptionalMappingCreation);
+        }
+        _store.InsertRange(index, values);
+    }
+
+    public int RemoveRange(IReadOnlyCollection<TemplateEvent> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        return _store.RemoveRange(values);
+    }
+
+    internal Action RemoveRangeForExactCollision(IReadOnlyCollection<TemplateEvent> values) =>
+        _store.RemoveRangeForExactCollision(values);
+
+    internal Action RemoveRangeWithUndo(IReadOnlyCollection<TemplateEvent> values) =>
+        _store.RemoveRangeForExactCollision(values);
+
+    public IDisposable BeginBatchChange() => _store.BeginBatchChange();
+
+    public TemplateEventQuerySnapshot CreateQuerySnapshot() =>
+        new(_store.CreateSnapshot());
+
+    public void AdoptSnapshot(MidoraProject project, TemplateEventQuerySnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _store.AdoptSnapshot(snapshot.Values, value =>
+        {
+            TemplateEvent result = new(project, value.Id)
+            {
+                Kind = value.Kind, Tick = value.Tick, LengthTicks = value.LengthTicks,
+                Number = value.Number, Value = value.Value, SecondaryValue = value.SecondaryValue,
+                HasBankMsb = value.HasBankMsb, HasBankLsb = value.HasBankLsb,
+                FollowPitchDelta = value.FollowPitchDelta
+            };
+            result.AttachTo(_owner);
+            return result;
+        });
+    }
+
+    public void AdoptSource(MidoraProject project, IImmutableTimelineValueSource<TemplateEventSnapshotValue> source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        _store.AdoptSource(source, value =>
+        {
+            TemplateEvent result = new(project, value.Id)
+            {
+                Kind = value.Kind, Tick = value.Tick, LengthTicks = value.LengthTicks,
+                Number = value.Number, Value = value.Value, SecondaryValue = value.SecondaryValue,
+                HasBankMsb = value.HasBankMsb, HasBankLsb = value.HasBankLsb,
+                FollowPitchDelta = value.FollowPitchDelta
+            };
+            result.AttachTo(_owner);
+            return result;
+        }, cancellationToken);
+    }
+
+    public void AdoptEditedSnapshot(MidoraProject project, TemplateEventQuerySnapshot snapshot,
+        IImmutableTimelineValueSource<TimelineValueEdit<TemplateEventSnapshotValue>> changes,
+        IImmutableTimelineValueSource<TemplateEventSnapshotValue>? appended = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _store.AdoptEditedSnapshot(snapshot.Values, changes, appended, value =>
+        {
+            TemplateEvent result = new(project, value.Id)
+            {
+                Kind = value.Kind, Tick = value.Tick, LengthTicks = value.LengthTicks,
+                Number = value.Number, Value = value.Value, SecondaryValue = value.SecondaryValue,
+                HasBankMsb = value.HasBankMsb, HasBankLsb = value.HasBankLsb,
+                FollowPitchDelta = value.FollowPitchDelta
+            };
+            result.AttachTo(_owner);
+            return result;
+        }, cancellationToken);
+    }
+
+    public bool TryGetById(MidoraId id, out TemplateEvent? value) =>
+        _store.TryGetById(id, out value);
+
+    public void AdoptSplicedSnapshot(MidoraProject project, TemplateEventQuerySnapshot snapshot,
+        IImmutableTimelineValueSource<TimelineValueSplice> splices,
+        IIndexedImmutableTimelineValueSource<TemplateEventSnapshotValue> values, CancellationToken cancellationToken = default)
+    {
+        _store.AdoptSplicedSnapshot(snapshot.Values, splices, values, value =>
+        {
+            TemplateEvent result = new(project, value.Id)
+            {
+                Kind = value.Kind, Tick = value.Tick, LengthTicks = value.LengthTicks,
+                Number = value.Number, Value = value.Value, SecondaryValue = value.SecondaryValue,
+                HasBankMsb = value.HasBankMsb, HasBankLsb = value.HasBankLsb, FollowPitchDelta = value.FollowPitchDelta
+            };
+            result.AttachTo(_owner);
+            return result;
+        }, cancellationToken);
+    }
+
+    public IReadOnlyList<TemplateEvent> ResolveByIdsInCollectionOrder(
+        IReadOnlyCollection<MidoraId> ids) =>
+        _store.ResolveByIdsInCollectionOrder(ids);
+
+    public IReadOnlyList<(int Index, TemplateEvent Value)> ResolveByIdsWithIndicesInCollectionOrder(
+        IReadOnlyCollection<MidoraId> ids) =>
+        _store.ResolveByIdsWithIndicesInCollectionOrder(ids);
 
     internal void AddRangeWithoutOptionalMappingCreation(IEnumerable<TemplateEvent> values)
     {
@@ -465,6 +726,23 @@ public sealed class TemplateEventCollection : Collection<TemplateEvent>
         try
         {
             AddRange(values);
+        }
+        finally
+        {
+            _suppressOptionalMappingCreation = oldValue;
+        }
+    }
+
+    internal void InsertRangeWithoutOptionalMappingCreation(
+        int index,
+        IReadOnlyList<TemplateEvent> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        bool oldValue = _suppressOptionalMappingCreation;
+        _suppressOptionalMappingCreation = true;
+        try
+        {
+            InsertRange(index, values);
         }
         finally
         {
@@ -506,6 +784,37 @@ public sealed class TemplateEventCollection : Collection<TemplateEvent>
             createOptional: newlyAttached && !_suppressOptionalMappingCreation);
         base.SetItem(index, item);
     }
+
+    private static PagedTimelineObjectList<TemplateEvent, TemplateEventSnapshotValue> CreateStore(SubVoice owner) =>
+        new(
+            static value => new(
+                value.Id,
+                value.Kind,
+                value.Tick,
+                value.LengthTicks,
+                value.Number,
+                value.Value,
+                value.SecondaryValue,
+                value.HasBankMsb,
+                value.HasBankLsb,
+                value.FollowPitchDelta),
+            static value => value.Id,
+            static value => value.Tick,
+            static value => value.Kind == TemplateEventKind.Note
+                ? SaturatingAdd(value.Tick, Math.Max(1, value.LengthTicks))
+                : SaturatingAdd(value.Tick, 1),
+            static value => value.Kind == TemplateEventKind.Note ? value.Number : 0,
+            static value => PagedTimelineFingerprint.ForTemplateEvent(value),
+            static (value, sink) => value.SetChangeSink(sink),
+            static value => value.Kind == TemplateEventKind.Note ? 1UL : 2UL,
+            static value => value.Kind == TemplateEventKind.Note
+                ? value.Value / 127d
+                : value.Value,
+            static value => TemplateEventMidiTargets.EnumerateDiscoveryKeys(value),
+            owner.MaterializeEvent);
+
+    private static long SaturatingAdd(long left, long right) =>
+        right <= 0 || left > long.MaxValue - right ? long.MaxValue : left + right;
 }
 
 public sealed class InstrumentEnvelope
@@ -557,6 +866,7 @@ public sealed class EventInstrument
     public MidoraColor Color { get; set; } = MidoraColor.DefaultInstrument;
     public int RootNote { get; set; } = 60;
     public long TemplateLengthTicks { get; set; }
+    public long PreRollTicks { get; set; }
     public bool RequiresChannelIsolation { get; set; }
     public OverlapPolicy OverlapPolicy { get; set; } = OverlapPolicy.Reject;
     public OverlapScope OverlapScope { get; set; } = OverlapScope.SamePitch;

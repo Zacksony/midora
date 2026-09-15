@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>Midora.Desktop.Tests</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DiagnosticProbeReferenceDirectory Condition="'$(DiagnosticProbeReferenceDirectory)' == ''">$(MSBuildThisFileDirectory)..\..\src\midora-desktop\Midora.Desktop\bin\Release\net10.0-windows\win-x64</DiagnosticProbeReferenceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(DiagnosticProbeReferenceDirectory)\Midora.dll" />
+    <Reference Include="$(DiagnosticProbeReferenceDirectory)\Midora.*.dll" Exclude="$(DiagnosticProbeReferenceDirectory)\*.Tests.dll" />
+    <Reference Include="$(DiagnosticProbeReferenceDirectory)\Google.Protobuf.dll" />
+    <Reference Include="$(DiagnosticProbeReferenceDirectory)\Microsoft.CodeAnalysis*.dll" />
+    <Reference Include="$(DiagnosticProbeReferenceDirectory)\ICSharpCode.AvalonEdit.dll" />
+  </ItemGroup>
+  <Target Name="CheckProbeReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(DiagnosticProbeReferenceDirectory)\Midora.dll')" Text="Build Desktop Release before running the diagnostic WPF probe." />
+  </Target>
+</Project>

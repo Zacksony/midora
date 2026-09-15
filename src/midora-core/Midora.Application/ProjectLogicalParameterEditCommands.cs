@@ -224,7 +224,7 @@ public static partial class ProjectDomainEditCommands
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             LogicalParameterMapping mapping = FindLogicalParameterMapping(instrument, mappingId);
             _ = FindSubVoice(instrument, subVoiceId);
-            ValidateMidiStateValue(target, value: null);
+            MidiStateValueRules.Validate(target, value: null);
             LogicalParameterMappingTarget old = new(
                 mapping.SubVoiceId,
                 mapping.Target,
@@ -268,7 +268,7 @@ public static partial class ProjectDomainEditCommands
             LogicalParameterMapping mapping = FindLogicalParameterMapping(instrument, mappingId);
             _ = FindLogicalParameter(instrument, parameterId);
             _ = FindSubVoice(instrument, subVoiceId);
-            ValidateMidiStateValue(target, value: null);
+            MidiStateValueRules.Validate(target, value: null);
 
             MidoraId oldParameterId = mapping.ParameterId;
             LogicalParameterMappingTarget oldTarget = new(

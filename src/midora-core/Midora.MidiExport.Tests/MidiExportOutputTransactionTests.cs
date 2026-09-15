@@ -160,6 +160,8 @@ public sealed class MidiExportOutputTransactionTests
                 overwriteAuthorized: false));
 
         Assert.Equal(MidiExportOutputStage.SelfValidation, invalid.Stage);
+        Assert.NotNull(invalid.EncodingDiagnostic);
+        Assert.Equal(MidiExportDiagnosticCategory.Encoding, invalid.EncodingDiagnostic.Diagnostic.Category);
         Assert.False(Directory.Exists(invalidDirectory));
         AssertNoTransactionDirectories(temporary.Path);
 

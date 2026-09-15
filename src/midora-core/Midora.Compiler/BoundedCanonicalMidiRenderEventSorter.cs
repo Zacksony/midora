@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using Microsoft.Win32.SafeHandles;
 using Midora.Domain;
 using Midora.Midi;
+using Midora.Common;
 
 namespace Midora.Compiler;
 
@@ -11,15 +12,17 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
     private const int SortRunRecordCount = 131_072;
     private const int MaximumMergeFanIn = 64;
     private const int ReadBatchRecordCount = 256;
-    private const int RecordByteCount = 96;
+    private const int RecordByteCount = 112;
     private readonly int _sortRunRecordCount;
     private readonly int _maximumMergeFanIn;
     private readonly List<SortRecord> _buffer;
     private readonly List<RunDescriptor> _runs = [];
+    private MidoraOwnedTemporaryDirectoryLease? _runDirectoryLease;
     private FileStream? _runFile;
     private string? _runPath;
     private bool _reading;
     private bool _disposed;
+    private readonly IComparer<SortRecord> _comparer;
 
     public BoundedCanonicalMidiRenderEventSorter()
         : this(SortRunRecordCount, MaximumMergeFanIn)
@@ -28,7 +31,8 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
 
     internal BoundedCanonicalMidiRenderEventSorter(
         int sortRunRecordCount,
-        int maximumMergeFanIn)
+        int maximumMergeFanIn,
+        bool descending = false)
     {
         if (sortRunRecordCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(sortRunRecordCount));
@@ -36,8 +40,11 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maximumMergeFanIn));
         _sortRunRecordCount = sortRunRecordCount;
         _maximumMergeFanIn = maximumMergeFanIn;
-        // A 96-byte SortRecord times the full 131,072-record run is a 12 MiB
-        // LOH allocation. Most rolling 250 ms windows are far smaller; grow on
+        _comparer = descending
+            ? System.Collections.Generic.Comparer<SortRecord>.Create((x, y) => Comparer.Instance.Compare(y, x))
+            : Comparer.Instance;
+        // A full run is bounded at 131,072 records (112 wire bytes each).
+        // Avoid preallocating it on the LOH: most rolling windows are far smaller. Grow on
         // actual demand and spill at the same fixed run boundary.
         _buffer = new(Math.Min(sortRunRecordCount, 4_096));
     }
@@ -67,40 +74,59 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
             value.ExportTrackId,
             value.SmfTrackOrder,
             value.SmfEventOrder,
-            monitoringSourceId));
+            monitoringSourceId,
+            value.Source.MidiChannelRootId,
+            value.Source.Tick,
+            value.Source.Origin));
         if (_buffer.Count == _sortRunRecordCount) FlushRun();
     }
 
-    public IEnumerable<CanonicalMidiRenderEventPage> ReadPages(
-        CancellationToken cancellationToken)
+    public IEnumerable<CanonicalMidiRenderEventPage> ReadPages(CancellationToken cancellationToken)
+    {
+        List<CanonicalMidiRenderEvent> page = new(CanonicalMidiRenderEventPage.MaximumRecordCount);
+        foreach (SortRecord value in ReadSortedRecords(cancellationToken))
+        {
+            page.Add(value.ToRenderEvent());
+            if (page.Count != CanonicalMidiRenderEventPage.MaximumRecordCount) continue;
+            yield return new(page.ToArray());
+            page.Clear();
+        }
+        if (page.Count != 0) yield return new(page.ToArray());
+    }
+
+    public IEnumerable<CanonicalMidiEventPage> ReadCanonicalPages(CancellationToken cancellationToken)
+    {
+        List<CanonicalMidiEvent> page = new(CanonicalMidiEventPage.MaximumRecordCount);
+        foreach (SortRecord value in ReadSortedRecords(cancellationToken))
+        {
+            page.Add(value.ToCanonicalEvent());
+            if (page.Count != CanonicalMidiEventPage.MaximumRecordCount) continue;
+            yield return new(page.ToArray());
+            page.Clear();
+        }
+        if (page.Count != 0) yield return new(page.ToArray());
+    }
+
+    private IEnumerable<SortRecord> ReadSortedRecords(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_reading) throw new InvalidOperationException("The bounded MIDI render-event sorter can only be read once.");
+        if (_reading) throw new InvalidOperationException("The bounded MIDI sorter can only be read once.");
         _reading = true;
         if (_runFile is null)
         {
-            _buffer.Sort(Comparer.Instance);
-            foreach (CanonicalMidiRenderEventPage page in Page(_buffer, cancellationToken))
-                yield return page;
+            _buffer.Sort(_comparer);
+            foreach (SortRecord value in _buffer)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return value;
+            }
             yield break;
         }
-
         if (_buffer.Count != 0) FlushRun();
         _runFile.Flush(flushToDisk: false);
         CollapseRuns(cancellationToken);
-
-        List<CanonicalMidiRenderEvent> output = new(CanonicalMidiRenderEventPage.MaximumRecordCount);
-        foreach (SortRecord value in Merge(
-            _runFile.SafeFileHandle,
-            _runs,
-            cancellationToken))
-        {
-            output.Add(value.ToRenderEvent());
-            if (output.Count != CanonicalMidiRenderEventPage.MaximumRecordCount) continue;
-            yield return new(output.ToArray());
-            output.Clear();
-        }
-        if (output.Count != 0) yield return new(output.ToArray());
+        foreach (SortRecord value in Merge(_runFile.SafeFileHandle, _runs, cancellationToken))
+            yield return value;
     }
 
     public void Dispose()
@@ -109,17 +135,14 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
         _disposed = true;
         _runFile?.Dispose();
         _runFile = null;
-        if (_runPath is null) return;
-        try { File.Delete(_runPath); } catch (IOException) { }
-        try { Directory.Delete(Path.GetDirectoryName(_runPath)!); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        _runDirectoryLease?.Dispose();
+        _runDirectoryLease = null;
     }
 
     private void FlushRun()
     {
         if (_buffer.Count == 0) return;
-        _buffer.Sort(Comparer.Instance);
+        _buffer.Sort(_comparer);
         EnsureRunFile();
         long offset = _runFile!.Position;
         byte[] bytes = ArrayPool<byte>.Shared.Rent(ReadBatchRecordCount * RecordByteCount);
@@ -210,13 +233,10 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
     private void EnsureRunFile()
     {
         if (_runFile is not null) return;
-        string directory = Path.Combine(
-            Path.GetTempPath(),
-            "Midora",
-            "CanonicalRuns",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        _runPath = Path.Combine(directory, "midi-render.runs");
+        _runDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.CompilerRunsDirectory,
+            "midi-render-sort");
+        _runPath = Path.Combine(_runDirectoryLease.DirectoryPath, "midi-render.runs");
         _runFile = OpenRunFile(_runPath);
     }
 
@@ -230,12 +250,12 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
             256 * 1024,
             FileOptions.RandomAccess);
 
-    private static IEnumerable<SortRecord> Merge(
+    private IEnumerable<SortRecord> Merge(
         SafeFileHandle handle,
         IReadOnlyList<RunDescriptor> runs,
         CancellationToken cancellationToken)
     {
-        PriorityQueue<RunReader, SortRecord> queue = new(Comparer.Instance);
+        PriorityQueue<RunReader, SortRecord> queue = new(_comparer);
         foreach (RunDescriptor descriptor in runs)
         {
             RunReader reader = new(handle, descriptor);
@@ -246,24 +266,6 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             yield return value;
             if (reader.MoveNext()) queue.Enqueue(reader, reader.Current);
-        }
-    }
-
-    private static IEnumerable<CanonicalMidiRenderEventPage> Page(
-        IReadOnlyList<SortRecord> source,
-        CancellationToken cancellationToken)
-    {
-        for (int offset = 0; offset < source.Count;
-            offset += CanonicalMidiRenderEventPage.MaximumRecordCount)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int count = Math.Min(
-                CanonicalMidiRenderEventPage.MaximumRecordCount,
-                source.Count - offset);
-            CanonicalMidiRenderEvent[] page = new CanonicalMidiRenderEvent[count];
-            for (int index = 0; index < count; index++)
-                page[index] = source[offset + index].ToRenderEvent();
-            yield return new(page);
         }
     }
 
@@ -285,6 +287,9 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
         destination[88] = value.ZeroBasedPort;
         destination[89] = value.ZeroBasedChannel;
         destination[90] = (byte)value.Role;
+        destination[91] = (byte)value.Origin;
+        WriteId(destination[96..], value.RootId);
+        BinaryPrimitives.WriteInt64LittleEndian(destination[104..], value.SourceTick);
     }
 
     private static SortRecord ReadRecord(ReadOnlySpan<byte> source) => new(
@@ -302,7 +307,10 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
         ReadId(source[64..]),
         BinaryPrimitives.ReadInt32LittleEndian(source[84..]),
         BinaryPrimitives.ReadInt64LittleEndian(source[32..]),
-        ReadId(source[72..]));
+        ReadId(source[72..]),
+        ReadId(source[96..]),
+        BinaryPrimitives.ReadInt64LittleEndian(source[104..]),
+        (SourceOrigin)source[91]);
 
     private static void WriteId(Span<byte> destination, MidoraId value) =>
         BinaryPrimitives.WriteInt64LittleEndian(destination, value.Value);
@@ -328,8 +336,20 @@ internal sealed class BoundedCanonicalMidiRenderEventSorter : IDisposable
         MidoraId ExportTrackId,
         int SmfTrackOrder,
         long SmfEventOrder,
-        MidoraId MonitoringSourceId)
+        MidoraId MonitoringSourceId,
+        MidoraId RootId,
+        long SourceTick,
+        SourceOrigin Origin)
     {
+        public CanonicalMidiEvent ToCanonicalEvent() => new(
+            Tick, ZeroBasedPort, ZeroBasedChannel, Message, Role, StableOrder,
+            SemanticTargetKey, SemanticGroup,
+            new(TrackId: TrackId, SegmentId: SegmentId, SourceEventId: DirectMidiObjectId,
+                Tick: SourceTick, Origin: Origin, MidiChannelRootId: RootId,
+                PureMidiTrackId: TrackId, MidiSegmentId: SegmentId,
+                DirectMidiObjectId: DirectMidiObjectId, ExportTrackId: ExportTrackId),
+            ExportTrackId, SmfTrackOrder, SmfEventOrder);
+
         public CanonicalMidiRenderEvent ToRenderEvent() => new(
             Tick,
             ZeroBasedPort,

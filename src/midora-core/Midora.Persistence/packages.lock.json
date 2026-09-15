@@ -14,10 +14,14 @@
         "resolved": "2.83.0",
         "contentHash": "vK2Go/83W0v2Nn7tTP9fGrX4IjmOa93s3M0SZeFimU1vIIr2wL9yNJlIyK21y85SGm3++JncB8IF751cjoLHuQ=="
       },
+      "midora.common": {
+        "type": "Project"
+      },
       "midora.domain": {
         "type": "Project",
         "dependencies": {
-          "Midora.Mapping.Contract.V2": "[1.0.0, )"
+          "Midora.Common": "[1.0.0-dev, )",
+          "Midora.Mapping.Contract.V2": "[1.0.0-dev, )"
         }
       },
       "midora.mapping.contract.v2": {

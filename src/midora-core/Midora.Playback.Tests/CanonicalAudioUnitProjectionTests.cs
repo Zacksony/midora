@@ -10,6 +10,49 @@ namespace Midora.Playback.Tests;
 public sealed class CanonicalAudioUnitProjectionTests
 {
     [Fact]
+    public void ShortGateLoopReachesAudioPlanAndInvalidatesPreviouslyUnloopedPcm()
+    {
+        using MidoraProject project = new(480);
+        var fixture = AddVoice(project, 60);
+        fixture.Instrument.TemplateLengthTicks = 768;
+        fixture.Instrument.RequiresChannelIsolation = true;
+        fixture.Segment.LengthTicks = 1920;
+        fixture.Segment.Notes[0].LengthTicks = 576;
+        SubVoice voice = fixture.Instrument.SubVoices[0];
+        voice.Events[0].LengthTicks = 768;
+        voice.Events.Add(new(project) { Tick = 192, Kind = TemplateEventKind.PitchBend, Value = -7701 });
+        voice.Events.Add(new(project) { Tick = 288, Kind = TemplateEventKind.PitchBend, Value = 8191 });
+        using MidoraCompiler compiler = new();
+        CanonicalCompiledResult unlooped = compiler.CompileFull(project);
+        MidiUnitFragmentRenderPlan before = Assert.Single(
+            MidiRenderPlanAdapter.CreateRealtime(unlooped, 48_000).UnitFragments.ToArray());
+
+        fixture.Instrument.LoopStartTick = 192;
+        fixture.Instrument.LoopEndTick = 384;
+        ProjectChangeSet changes = new();
+        changes.EventInstrumentIds.Add(fixture.Instrument.Id);
+        CanonicalCompiledResult looped = compiler.CompileIncremental(project, changes);
+        Assert.True(looped.IsConsumable, string.Join(Environment.NewLine, looped.Diagnostics));
+        CanonicalAudioUnitFragment canonical = Assert.Single(
+            CanonicalAudioUnitProjection.Create(looped).Fragments.ToArray());
+        Assert.Equal(new long[] { 192, 288, 384, 480 }, canonical.Events.ToArray()
+            .Where(e => e.Role == CanonicalEventRole.PitchBend && e.Source.Origin == SourceOrigin.TemplateEvent)
+            .Select(e => e.RelativeTick));
+        MidiUnitFragmentRenderPlan after = Assert.Single(
+            MidiRenderPlanAdapter.CreateRealtime(looped, 48_000).UnitFragments.ToArray());
+        Assert.Equal(new[] { (9600L, -7701), (14400L, 8191), (19200L, -7701), (24000L, 8191) },
+            after.Events.ToArray().Where(e => e.Message.MessageType == MidiMessageType.PitchWheelChange
+                && e.SampleFrame > 0 && e.SampleFrame < 576 * 50)
+                .Select(e => (e.SampleFrame, (e.Message.Byte2 << 7 | e.Message.Byte1) - 8192)));
+        Assert.Equal(before.EndFrame, after.EndFrame);
+        Assert.NotEqual(before.SemanticFingerprint, after.SemanticFingerprint);
+        string fontIdentity = new('a', 64);
+        Assert.NotEqual(
+            MidiUnitPcmCacheKey.Create(before, 48_000, fontIdentity, "test-native", 500),
+            MidiUnitPcmCacheKey.Create(after, 48_000, fontIdentity, "test-native", 500));
+    }
+
+    [Fact]
     public void SharedMidiRootProducesOneChannelStateFragmentAcrossChildTracks()
     {
         MidoraProject project = new(480);

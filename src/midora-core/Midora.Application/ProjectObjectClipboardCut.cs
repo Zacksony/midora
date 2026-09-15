@@ -198,7 +198,12 @@ public static partial class ProjectObjectClipboard
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(deleteCommand);
-        _ = deleteCommand.Prepare(document.Project);
-        return new(payload, deleteCommand);
+        try
+        {
+            using StagedProjectEdit validation = document.PrepareEdit(deleteCommand,
+                BulkEditPreparationContext.Current?.Token ?? default);
+            return new(payload, deleteCommand);
+        }
+        catch { payload.Dispose(); throw; }
     }
 }

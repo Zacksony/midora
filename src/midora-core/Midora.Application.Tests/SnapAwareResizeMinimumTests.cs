@@ -50,8 +50,16 @@ public sealed class SnapAwareResizeMinimumTests
             startDelta: 90,
             endDelta: 0,
             minimumLengthTicks: 48));
-        Assert.Equal((152L, 48L), (logicalSegment.ProjectStartTick, logicalSegment.LengthTicks));
-        Assert.Equal((352L, 48L), (midiSegment.ProjectStartTick, midiSegment.LengthTicks));
+        Segment changedLogical = project.Tracks.Single(value => value.Id == logicalTrack.Id).Segments.Single();
+        MidiSegment changedMidi = project.PureMidiTracks.Single(value => value.Id == midiTrack.Id).Segments.Single();
+        Assert.Equal((152L, 48L), (changedLogical.ProjectStartTick, changedLogical.LengthTicks));
+        Assert.Equal((352L, 48L), (changedMidi.ProjectStartTick, changedMidi.LengthTicks));
+        document.Undo();
+        Assert.Same(logicalSegment, project.Tracks.Single(value => value.Id == logicalTrack.Id).Segments.Single());
+        Assert.Same(midiSegment, project.PureMidiTracks.Single(value => value.Id == midiTrack.Id).Segments.Single());
+        document.Redo();
+        Assert.Same(changedLogical, project.Tracks.Single(value => value.Id == logicalTrack.Id).Segments.Single());
+        Assert.Same(changedMidi, project.PureMidiTracks.Single(value => value.Id == midiTrack.Id).Segments.Single());
     }
 
     [Fact]

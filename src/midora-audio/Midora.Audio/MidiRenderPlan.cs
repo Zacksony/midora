@@ -2,7 +2,7 @@ using Midora.Midi;
 
 namespace Midora.Audio;
 
-public sealed class MidiRenderPlan
+public sealed partial class MidiRenderPlan
 {
     private readonly MidiPortRenderPlan[] _ports;
     private readonly MidiUnitRenderPlan[] _units;

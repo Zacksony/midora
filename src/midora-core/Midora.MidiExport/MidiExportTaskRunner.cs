@@ -23,23 +23,26 @@ public sealed class MidiExportTaskResult
 {
     internal MidiExportTaskResult(
         MidiExportTaskStatus status,
-        CompilerDiagnostic[] compilerDiagnostics,
+        IEnumerable<CompilerDiagnostic> compilerDiagnostics,
         MidiExportArtifactDiagnostic[] artifactDiagnostics,
         MidiExportOutputResult? output,
-        MidiExportOutputException? outputFailure)
+        MidiExportOutputException? outputFailure,
+        MidiExportPaddingSummary paddingSummary = default)
     {
         Status = status;
-        CompilerDiagnostics = Array.AsReadOnly(compilerDiagnostics);
+        CompilerDiagnostics = CompilerDiagnosticSequence.Wrap(compilerDiagnostics);
         ArtifactDiagnostics = Array.AsReadOnly(artifactDiagnostics);
         Output = output;
         OutputFailure = outputFailure;
+        PaddingSummary = paddingSummary;
     }
 
     public MidiExportTaskStatus Status { get; }
-    public ReadOnlyCollection<CompilerDiagnostic> CompilerDiagnostics { get; }
+    public ICompilerDiagnosticSequence CompilerDiagnostics { get; }
     public ReadOnlyCollection<MidiExportArtifactDiagnostic> ArtifactDiagnostics { get; }
     public MidiExportOutputResult? Output { get; }
     public MidiExportOutputException? OutputFailure { get; }
+    public MidiExportPaddingSummary PaddingSummary { get; }
 }
 
 public sealed class MidiExportTaskRunner
@@ -58,7 +61,8 @@ public sealed class MidiExportTaskRunner
 
     public async Task<MidiExportTaskResult> ExecuteAsync(
         MidiExportTaskRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<MidiExportProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Compilation);
@@ -73,58 +77,62 @@ public sealed class MidiExportTaskRunner
         {
             return new(
                 MidiExportTaskStatus.Failed,
-                request.Compilation.Diagnostics.ToArray(),
+                request.Compilation.Diagnostics,
                 [],
-                null,
-                null);
-        }
-
-        MidiExportArtifactBuildResult artifacts = BuildArtifacts(request);
-        if (!artifacts.Succeeded)
-        {
-            return new(
-                MidiExportTaskStatus.Failed,
-                request.Compilation.Diagnostics.ToArray(),
-                artifacts.Diagnostics.ToArray(),
                 null,
                 null);
         }
 
         try
         {
+            progress?.Report(new("", "Preparing encoding"));
+            MidiExportArtifactBuildResult artifacts = BuildArtifacts(request, cancellationToken);
+            if (!artifacts.Succeeded)
+            {
+                return new(
+                    MidiExportTaskStatus.Failed,
+                    request.Compilation.Diagnostics,
+                    artifacts.Diagnostics.ToArray(),
+                    null,
+                    null);
+            }
+
             MidiExportOutputResult output = await _outputTransaction.PublishAsync(
                 request.OutputPlan,
                 artifacts.Artifacts,
                 request.OverwriteAuthorized,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, progress).ConfigureAwait(false);
             return new(
                 MidiExportTaskStatus.Succeeded,
-                request.Compilation.Diagnostics.ToArray(),
+                request.Compilation.Diagnostics,
                 [],
                 output,
-                null);
+                null, artifacts.PaddingSummary);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return new(
                 MidiExportTaskStatus.Cancelled,
-                request.Compilation.Diagnostics.ToArray(),
+                request.Compilation.Diagnostics,
                 [],
                 null,
                 null);
         }
         catch (MidiExportOutputException exception)
         {
+            MidiExportArtifactDiagnostic? diagnostic = exception.EncodingDiagnostic
+                ?? (exception.InnerException as MidiExportOutputException)?.EncodingDiagnostic;
             return new(
                 MidiExportTaskStatus.Failed,
-                request.Compilation.Diagnostics.ToArray(),
-                [],
+                request.Compilation.Diagnostics,
+                diagnostic is null ? [] : [diagnostic],
                 null,
                 exception);
         }
     }
 
-    private static MidiExportArtifactBuildResult BuildArtifacts(MidiExportTaskRequest request)
+    private static MidiExportArtifactBuildResult BuildArtifacts(MidiExportTaskRequest request,
+        CancellationToken cancellationToken)
     {
         MidiExportCompilationResult compilation = request.Compilation;
         CanonicalCompiledResult compiled = compilation.CompiledResult;
@@ -139,7 +147,7 @@ public sealed class MidiExportTaskRunner
                     ConductorTrackName = conductorTrackName,
                     LogicalTracks = compilation.Layouts
                 },
-                request.Readme),
+                request.Readme, cancellationToken),
             MidiExportMode.PerLogicalTrack => MidiExportArtifactBuilder.BuildLogicalTracks(
                 request.OutputPlan,
                 compilation.Layouts.Select(layout => new LogicalTrackMidiArtifactRequest(
@@ -150,7 +158,7 @@ public sealed class MidiExportTaskRunner
                         ConductorTrackName = conductorTrackName,
                         LogicalTrack = layout
                     })),
-                request.Readme),
+                request.Readme, cancellationToken),
             MidiExportMode.PerPort => MidiExportArtifactBuilder.BuildPorts(
                 request.OutputPlan,
                 compilation.UsedZeroBasedPorts.Select(port => new PortMidiArtifactRequest(
@@ -161,7 +169,7 @@ public sealed class MidiExportTaskRunner
                         LogicalTracks = compilation.Layouts,
                         ZeroBasedOriginalPort = port
                     })),
-                request.Readme),
+                request.Readme, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(compilation.Mode))
         };
     }

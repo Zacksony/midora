@@ -1,3 +1,4 @@
+using System.Text;
 using Midora.Compiler;
 using Midora.Domain;
 using Midora.Midi;
@@ -7,6 +8,52 @@ namespace Midora.Application.Tests;
 
 public sealed class MidiProjectImportServiceTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SmfTimingPaddingReimportsAsOrdinaryOpaqueTextWithoutChangingNotes(bool streaming)
+    {
+        const long maximum = StandardMidiFile.MaximumVariableLengthValue;
+        byte[] midi = StandardMidiFile.EncodeType1(192,
+        [
+            new(maximum + 3, [StandardMidiFileEvent.Meta(0, StandardMidiFile.SetTempoMetaType, [0x07, 0xa1, 0x20])]),
+            new(2 * maximum + 6,
+            [
+                StandardMidiFileEvent.Text(0, StandardMidiFile.TrackNameMetaType, "Notes"),
+                StandardMidiFileEvent.ChannelVoice(0, MidiMessage.NoteOn(0, 60, 100)),
+                StandardMidiFileEvent.Meta(1, StandardMidiFile.TextMetaType, []),
+                StandardMidiFileEvent.ChannelVoice(2 * maximum + 5, MidiMessage.NoteOff(0, 60, 41))
+            ])
+        ]);
+        string directory = Path.Combine(AppContext.BaseDirectory, ".tmp", "padding-import-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        MidiProjectImportResult? result = null;
+        try
+        {
+            string path = Path.Combine(directory, "source.mid");
+            File.WriteAllBytes(path, midi);
+            result = streaming ? MidiProjectImportService.ImportFile(path, "Timing") : MidiProjectImportService.Import(midi, "Timing");
+            var segments = result.Project.PureMidiTracks.SelectMany(t => t.Segments).ToArray();
+            var note = Assert.Single(segments.SelectMany(s => s.Notes.EnumerateValues()));
+            Assert.Equal(0, note.StartTick);
+            Assert.Equal(2 * maximum + 5, note.LengthTicks);
+            Assert.Equal(41, note.NoteOffVelocity);
+            long[] expected = StandardMidiFile.ParseType0Or1(midi).Tracks.SelectMany(t => t.Events)
+                .Where(e => e.Kind == StandardMidiFileEventKind.Meta && e.Type == 1 && e.Data.IsEmpty)
+                .Select(e => e.Tick).Order().ToArray();
+            long[] actual = segments.SelectMany(s => s.OpaqueEvents.EnumerateValues())
+                .Where(e => e.Kind == OpaqueMidiEventKind.Meta && e.MetaType == 1 && e.Payload.IsEmpty)
+                .Select(e => e.Tick).Order().ToArray();
+            Assert.Equal(expected, actual);
+            Assert.Equal(4, actual.Length);
+        }
+        finally
+        {
+            result?.Project.Dispose();
+            Directory.Delete(directory, true);
+        }
+    }
+
     [Fact]
     public void ImportsMultiChannelTrackIntoFixedRootsAndPreservesTrackEnd()
     {
@@ -485,7 +532,7 @@ public sealed class MidiProjectImportServiceTests
         StandardMidiFileTrack conductor = new(
             120,
             [
-                StandardMidiFileEvent.Meta(0, StandardMidiFile.TrackNameMetaType, [0xff]),
+                StandardMidiFileEvent.Meta(0, StandardMidiFile.TrackNameMetaType, [0x81]),
                 StandardMidiFileEvent.Meta(
                     0,
                     StandardMidiFile.SetTempoMetaType,
@@ -498,7 +545,7 @@ public sealed class MidiProjectImportServiceTests
         StandardMidiFileTrack invalidName = new(
             120,
             [
-                StandardMidiFileEvent.Meta(0, StandardMidiFile.TrackNameMetaType, [0xc3, 0x28]),
+                StandardMidiFileEvent.Meta(0, StandardMidiFile.TrackNameMetaType, [0x81]),
                 StandardMidiFileEvent.ChannelVoice(0, MidiMessage.NoteOn(0, 60, 100)),
                 StandardMidiFileEvent.ChannelVoice(120, MidiMessage.NoteOff(0, 60, 0))
             ]);
@@ -529,19 +576,49 @@ public sealed class MidiProjectImportServiceTests
     }
 
     [Fact]
-    public void InvalidUtf8InOtherModeledTextMetaStillFailsImport()
+    public void Windows31JModeledTextIsDecodedAndUndecodableMarkersAreDiscarded()
     {
         StandardMidiFileTrack source = new(
-            0,
-            [StandardMidiFileEvent.Meta(0, StandardMidiFile.MarkerMetaType, [0xff])]);
+            120,
+            [
+                StandardMidiFileEvent.Meta(
+                    0,
+                    StandardMidiFile.TrackNameMetaType,
+                    EncodeWindows31J("ピアノ")),
+                StandardMidiFileEvent.Meta(
+                    0,
+                    StandardMidiFile.MarkerMetaType,
+                    EncodeWindows31J("サビ")),
+                StandardMidiFileEvent.ChannelVoice(0, MidiMessage.NoteOn(0, 60, 100)),
+                StandardMidiFileEvent.Meta(60, StandardMidiFile.MarkerMetaType, [0x81]),
+                StandardMidiFileEvent.ChannelVoice(120, MidiMessage.NoteOff(0, 60, 0))
+            ]);
 
-        InvalidDataException exception = Assert.Throws<InvalidDataException>(() =>
-            MidiProjectImportService.Import(
-                StandardMidiFile.EncodeType1(480, [source]),
-                "Invalid Marker"));
+        MidiProjectImportResult result = MidiProjectImportService.Import(
+            StandardMidiFile.EncodeType1(480, [source]),
+            "Japanese Text Compatibility");
 
-        Assert.Contains("Marker is not strict UTF-8", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("ピアノ", Assert.Single(result.Project.PureMidiTracks).Name);
+        ProjectMarker marker = Assert.Single(result.Project.Conductor.Markers);
+        Assert.Equal((0L, "サビ"), (marker.Tick, marker.Name));
+        Assert.Contains(result.Diagnostics, value =>
+            value.Code == "MIDORA-MIDI-IMPORT-WINDOWS-31J-TRACK-NAME"
+            && value.Severity == DiagnosticSeverity.Info);
+        Assert.Contains(result.Diagnostics, value =>
+            value.Code == "MIDORA-MIDI-IMPORT-WINDOWS-31J-MARKER"
+            && value.Severity == DiagnosticSeverity.Info);
+        Assert.Contains(result.Diagnostics, value =>
+            value.Code == "MIDORA-MIDI-IMPORT-INVALID-MARKER"
+            && value.Severity == DiagnosticSeverity.Warning
+            && value.Tick == 60);
+        using MidoraCompiler compiler = new();
+        Assert.True(compiler.CompileFull(result.Project).IsConsumable);
     }
+
+    private static byte[] EncodeWindows31J(string value) =>
+        (CodePagesEncodingProvider.Instance.GetEncoding(932)
+            ?? throw new InvalidOperationException("Windows-31J encoding is unavailable."))
+        .GetBytes(value);
 
     private static PureMidiTrack AddTrack(
         MidoraProject project,

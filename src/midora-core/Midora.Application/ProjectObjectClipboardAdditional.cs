@@ -9,12 +9,13 @@ public static partial class ProjectObjectClipboard
         MidoraId sourceSegmentId,
         MidoraId laneId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         Segment segment = FindSegment(document.Project, sourceSegmentId).Segment;
         LogicalParameterLane lane = segment.ParameterLanes
             .SingleOrDefault(value => value.Id == laneId)
             ?? throw new ArgumentOutOfRangeException(nameof(laneId));
-        CurvePointClipboardSnapshot[] points = SnapshotTimelinePoints(lane.Points);
+        IReadOnlyList<CurvePointClipboardSnapshot> points = SnapshotTimelinePoints(lane.Points);
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.LogicalParameterLane,
@@ -29,6 +30,7 @@ public static partial class ProjectObjectClipboard
         MidoraId laneId,
         IReadOnlyCollection<MidoraId> pointIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(pointIds);
         if (pointIds.Count == 0)
@@ -41,24 +43,22 @@ public static partial class ProjectObjectClipboard
         LogicalParameterLane lane = segment.ParameterLanes
             .SingleOrDefault(value => value.Id == laneId)
             ?? throw new ArgumentOutOfRangeException(nameof(laneId));
-        HashSet<MidoraId> requested = ValidateDistinctIds(pointIds, nameof(pointIds));
-        CurvePoint[] selected = lane.Points
-            .Where(value => requested.Contains(value.Id))
-            .ToArray();
-        if (selected.Length != requested.Count)
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(pointIds, nameof(pointIds));
+        IReadOnlyList<CurvePointClipboardSnapshot> points = SnapshotTimelinePointValues(
+            EnumerateClipboardSelection(document.Project, lane.Points.CreateQuerySnapshot(), requested));
+        if (points.Count != requested.Count)
         {
             throw new ArgumentException(
                 "Every copied Logical Parameter point must belong to the source Lane.",
                 nameof(pointIds));
         }
-        CurvePointClipboardSnapshot[] points = SnapshotTimelinePoints(selected);
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.LogicalParameterLaneContent,
-            points.Length,
-            points.Length == 1
+            points.Count,
+            points.Count == 1
                 ? "1 Logical Parameter Point"
-                : $"{points.Length} Logical Parameter Points",
+                : $"{points.Count} Logical Parameter Points",
             new LogicalParameterLaneContentClipboardData(lane.ParameterId, points));
     }
 
@@ -66,6 +66,7 @@ public static partial class ProjectObjectClipboard
         ProjectDocumentSession document,
         IReadOnlyCollection<MidoraId> eventIds)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(eventIds);
         if (eventIds.Count == 0)
@@ -74,72 +75,40 @@ public static partial class ProjectObjectClipboard
                 "At least one ordinary Conductor event must be copied.",
                 nameof(eventIds));
         }
-        HashSet<MidoraId> requested = ValidateDistinctIds(eventIds, nameof(eventIds));
-        List<ConductorEventAbsoluteSnapshot> selected = [];
-        selected.AddRange(document.Project.Conductor.Tempos
-            .Where(value => requested.Contains(value.Id))
-            .Select(value => new ConductorEventAbsoluteSnapshot(
-                ConductorClipboardEventKind.Tempo,
-                value.Tick,
-                value.BeatsPerMinute,
-                0,
-                0,
-                false,
-                null)));
-        selected.AddRange(document.Project.Conductor.TimeSignatures
-            .Where(value => requested.Contains(value.Id))
-            .Select(value => new ConductorEventAbsoluteSnapshot(
-                ConductorClipboardEventKind.TimeSignature,
-                value.Tick,
-                0,
-                value.Numerator,
-                value.Denominator,
-                false,
-                null)));
-        selected.AddRange(document.Project.Conductor.KeySignatures
-            .Where(value => requested.Contains(value.Id))
-            .Select(value => new ConductorEventAbsoluteSnapshot(
-                ConductorClipboardEventKind.KeySignature,
-                value.Tick,
-                0,
-                value.SharpsFlats,
-                0,
-                value.IsMinor,
-                null)));
-        selected.AddRange(document.Project.Conductor.Markers
-            .Where(value => requested.Contains(value.Id))
-            .Select(value => new ConductorEventAbsoluteSnapshot(
-                ConductorClipboardEventKind.Marker,
-                value.Tick,
-                0,
-                0,
-                0,
-                false,
-                value.Name)));
-        if (selected.Count != requested.Count)
+        IReadOnlySet<MidoraId> requested = ValidateDistinctIds(eventIds, nameof(eventIds));
+        ConductorTrack source = document.Project.Conductor.CloneFrozen();
+        ConductorClipboardList snapshots = ConductorClipboardList.Capture(
+            SelectRows(source.Tempos, static value => new ConductorEventClipboardSnapshot(
+                ConductorClipboardEventKind.Tempo, value.Tick, value.BeatsPerMinute, 0, 0, false, null))
+            .Concat(SelectRows(source.TimeSignatures, static value => new ConductorEventClipboardSnapshot(
+                ConductorClipboardEventKind.TimeSignature, value.Tick, 0, value.Numerator, value.Denominator, false, null)))
+            .Concat(SelectRows(source.KeySignatures, static value => new ConductorEventClipboardSnapshot(
+                ConductorClipboardEventKind.KeySignature, value.Tick, 0, value.SharpsFlats, 0, value.IsMinor, null)))
+            .Concat(SelectRows(source.Markers, static value => new ConductorEventClipboardSnapshot(
+                ConductorClipboardEventKind.Marker, value.Tick, 0, 0, 0, false, value.Name))));
+
+        IEnumerable<ConductorEventClipboardSnapshot> SelectRows<T>(ConductorCollection<T> collection,
+            Func<T, ConductorEventClipboardSnapshot> map) where T : class
         {
-            throw new ArgumentException(
-                "Every copied ID must identify an ordinary Conductor event; the Project End Marker is excluded.",
-                nameof(eventIds));
+            var frozen = collection.CreateQuerySnapshot();
+            var context = BulkEditPreparationContext.Current!;
+            frozen.PrepareOrdinalLookup(BoundedTimelineOrdinalIndexBuilder.Instance, context.Token);
+            using var ordinals = BoundedEditSort.Sort(Ordinals(), Comparer<int>.Default, context.Resources, context.Token);
+            foreach (int ordinal in ordinals) yield return map(frozen.GetByOrdinal(ordinal));
+            IEnumerable<int> Ordinals()
+            {
+                foreach (MidoraId id in requested)
+                {
+                    context.Token.ThrowIfCancellationRequested();
+                    if (frozen.TryFindOrdinalById(id, out int ordinal)) yield return ordinal;
+                }
+            }
         }
-        long earliest = selected.Min(value => value.Tick);
-        ConductorEventClipboardSnapshot[] snapshots = selected
-            .OrderBy(value => value.Tick)
-            .ThenBy(value => value.Kind)
-            .Select(value => new ConductorEventClipboardSnapshot(
-                value.Kind,
-                checked(value.Tick - earliest),
-                value.BeatsPerMinute,
-                value.Primary,
-                value.Secondary,
-                value.Flag,
-                value.Text))
-            .ToArray();
-        return new(
-            document.ClipboardSessionIdentity,
-            ProjectObjectClipboardKind.ConductorEvents,
-            snapshots.Length,
-            snapshots.Length == 1 ? "1 Conductor Event" : $"{snapshots.Length} Conductor Events",
+        if (snapshots.Count != requested.Count)
+            throw new ArgumentException(
+                "Every copied ID must identify an ordinary Conductor event; the Project End Marker is excluded.", nameof(eventIds));
+        return new(document.ClipboardSessionIdentity, ProjectObjectClipboardKind.ConductorEvents,
+            snapshots.Count, snapshots.Count == 1 ? "1 Conductor Event" : $"{snapshots.Count} Conductor Events",
             new ConductorEventsClipboardData(snapshots));
     }
 
@@ -154,10 +123,10 @@ public static partial class ProjectObjectClipboard
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.LogicalParameterLane);
-        return ProjectDomainEditCommands.PasteLogicalParameterLaneClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteLogicalParameterLaneClipboard(
             data,
             targetSegmentId,
-            editCursorTick);
+            editCursorTick), new(payload.Kind, targetSegmentId));
     }
 
     public static IProjectEditCommand CreatePasteLogicalParameterLaneContentCommand(
@@ -172,11 +141,11 @@ public static partial class ProjectObjectClipboard
                 targetDocument,
                 payload,
                 ProjectObjectClipboardKind.LogicalParameterLaneContent);
-        return ProjectDomainEditCommands.PasteLogicalParameterLaneContentClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteLogicalParameterLaneContentClipboard(
             data,
             targetSegmentId,
             targetLaneId,
-            editCursorTick);
+            editCursorTick), new(payload.Kind, targetSegmentId, targetLaneId));
     }
 
     public static IProjectEditCommand CreatePasteConductorEventsCommand(
@@ -188,40 +157,52 @@ public static partial class ProjectObjectClipboard
             targetDocument,
             payload,
             ProjectObjectClipboardKind.ConductorEvents);
-        return ProjectDomainEditCommands.PasteConductorEventsClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteConductorEventsClipboard(
             data.Events,
-            editCursorTick);
+            editCursorTick));
     }
 
-    private static CurvePointClipboardSnapshot[] SnapshotTimelinePoints(
-        IEnumerable<CurvePoint> source)
+    private static IReadOnlyList<CurvePointClipboardSnapshot> SnapshotTimelinePoints(
+        IEnumerable<CurvePoint> source) => SnapshotTimelinePointValues(source.Select(value =>
+            new CurvePointSnapshotValue(value.Id, value.Tick, value.Value, value.Interpolation)));
+
+    private static IReadOnlyList<CurvePointClipboardSnapshot> SnapshotTimelinePointValues(
+        IEnumerable<CurvePointSnapshotValue> source)
     {
-        CurvePoint[] selected = source
-            .OrderBy(value => value.Tick)
-            .ThenBy(value => value.Id)
-            .ToArray();
-        long earliest = selected.Length == 0 ? 0 : selected[0].Tick;
-        return selected.Select(value => new CurvePointClipboardSnapshot(
-            checked(value.Tick - earliest),
-            value.Value,
-            CurveInterpolation.Step)).ToArray();
+        BoundedEditRecordStore<CurvePointSnapshotValue> selected = ClipboardCaptureScope.Sort(source,
+            Comparer<CurvePointSnapshotValue>.Create((left, right) =>
+            {
+                int order = left.Tick.CompareTo(right.Tick);
+                return order != 0 ? order : left.Id.CompareTo(right.Id);
+            }), reportSelectionProgress: true);
+        long earliest = selected.Count == 0 ? 0 : selected[0].Tick;
+        return new ProjectedClipboardList<CurvePointSnapshotValue, CurvePointClipboardSnapshot>(selected,
+            value => new(checked(value.Tick - earliest), value.Value, CurveInterpolation.Step));
     }
 
-    private static HashSet<MidoraId> ValidateDistinctIds(
+    private static IReadOnlySet<MidoraId> ValidateDistinctIds(
         IEnumerable<MidoraId> values,
         string parameterName)
     {
-        HashSet<MidoraId> result = [];
-        foreach (MidoraId value in values)
+        if (values is IReadOnlySet<MidoraId> existing)
         {
-            if (value == default || !result.Add(value))
+            if (existing.Contains(default)) throw new ArgumentException(
+                "Clipboard selections must contain distinct valid stable IDs.", parameterName);
+            return existing;
+        }
+        BoundedEditRecordStore<MidoraId> result = ClipboardCaptureScope.Sort(values, Comparer<MidoraId>.Default);
+        MidoraId? previous = null;
+        foreach (MidoraId value in result)
+        {
+            if (value == default || previous == value)
             {
                 throw new ArgumentException(
                     "Clipboard selections must contain distinct valid stable IDs.",
                     parameterName);
             }
+            previous = value;
         }
-        return result;
+        return new ClipboardIdSet(result);
     }
 
     private readonly record struct ConductorEventAbsoluteSnapshot(
@@ -236,11 +217,11 @@ public static partial class ProjectObjectClipboard
 
 internal sealed record LogicalParameterLaneClipboardData(
     MidoraId ParameterId,
-    CurvePointClipboardSnapshot[] Points) : ProjectObjectClipboardData;
+    IReadOnlyList<CurvePointClipboardSnapshot> Points) : ProjectObjectClipboardData;
 
 internal sealed record LogicalParameterLaneContentClipboardData(
     MidoraId ParameterId,
-    CurvePointClipboardSnapshot[] Points) : ProjectObjectClipboardData;
+    IReadOnlyList<CurvePointClipboardSnapshot> Points) : ProjectObjectClipboardData;
 
 internal enum ConductorClipboardEventKind
 {
@@ -251,7 +232,7 @@ internal enum ConductorClipboardEventKind
 }
 
 internal sealed record ConductorEventsClipboardData(
-    ConductorEventClipboardSnapshot[] Events) : ProjectObjectClipboardData;
+    IReadOnlyList<ConductorEventClipboardSnapshot> Events) : ProjectObjectClipboardData;
 
 internal sealed record ConductorEventClipboardSnapshot(
     ConductorClipboardEventKind Kind,
@@ -286,40 +267,7 @@ public static partial class ProjectDomainEditCommands
                 throw new InvalidOperationException(
                     "The target Segment already has a Lane for the exact Logical Parameter.");
             }
-            CurvePointClipboardValue[] values = PrepareLogicalParameterPoints(
-                definition,
-                snapshot.Points,
-                editCursorTick);
-            LogicalParameterLane? copy = null;
-            int insertionIndex = target.Segment.ParameterLanes.Count;
-            return Prepared(
-                hasChanges: true,
-                TrackChange(target.Track.Id),
-                owner =>
-                {
-                    if (copy is null)
-                    {
-                        copy = new LogicalParameterLane(owner)
-                        {
-                            ParameterId = snapshot.ParameterId
-                        };
-                        copy.Points.AddRange(values.Select(value => new CurvePoint(
-                            owner,
-                            value.Tick,
-                            value.Value,
-                            CurveInterpolation.Step)));
-                    }
-                    InsertAt(
-                        target.Segment.ParameterLanes,
-                        insertionIndex,
-                        copy,
-                        "pasted Logical Parameter Lane");
-                },
-                _ => RemoveRequired(
-                    target.Segment.ParameterLanes,
-                    copy ?? throw new InvalidOperationException(
-                        "The pasted Logical Parameter Lane does not exist before Apply."),
-                    "pasted Logical Parameter Lane"));
+            return PrepareBoundedLogicalLaneClipboard(project, target, definition, snapshot.Points, editCursorTick);
         });
 
     internal static IProjectEditCommand PasteLogicalParameterLaneContentClipboard(
@@ -330,7 +278,7 @@ public static partial class ProjectDomainEditCommands
         Command("Paste logical parameter points", project =>
         {
             ArgumentNullException.ThrowIfNull(snapshot);
-            if (editCursorTick < 0 || snapshot.Points.Length == 0)
+            if (editCursorTick < 0 || snapshot.Points.Count == 0)
             {
                 throw new ArgumentOutOfRangeException(
                     editCursorTick < 0 ? nameof(editCursorTick) : nameof(snapshot));
@@ -342,113 +290,25 @@ public static partial class ProjectDomainEditCommands
                 throw new InvalidOperationException(
                     "Logical Parameter content requires an exact target Parameter ID.");
             }
-            LogicalParameterDefinition definition = FindBoundLogicalParameter(
-                project,
-                target.Track,
-                snapshot.ParameterId);
-            CurvePointClipboardValue[] values = PrepareLogicalParameterPoints(
-                definition,
-                snapshot.Points,
-                editCursorTick);
-            CurvePoint[]? copies = null;
-            return ResolveExactLogicalParameterPointCollisions(Prepared(
-                hasChanges: true,
-                TrackChange(target.Track.Id),
-                owner =>
-                {
-                    copies ??= values.Select(value => new CurvePoint(
-                        owner,
-                        value.Tick,
-                        value.Value,
-                        CurveInterpolation.Step)).ToArray();
-                    lane.Points.AddRange(copies);
-                },
-                _ =>
-                {
-                    if (copies is null)
-                    {
-                        throw new InvalidOperationException(
-                            "Pasted Logical Parameter points do not exist before Apply.");
-                    }
-                    foreach (CurvePoint point in copies)
-                    {
-                        RemoveRequired(lane.Points, point, "pasted Logical Parameter point");
-                    }
-                }), lane);
+            return AppendBoundedLogicalParameterPoints(targetSegmentId, targetLaneId,
+                snapshot.Points.Select(value => new CurvePointSnapshotValue(default,
+                    checked(editCursorTick + value.Tick), value.Value, CurveInterpolation.Step))).Prepare(project);
         });
 
     internal static IProjectEditCommand PasteConductorEventsClipboard(
-        IReadOnlyList<ConductorEventClipboardSnapshot> snapshots,
-        long editCursorTick) =>
-        Command("Paste conductor events", project =>
+        IReadOnlyList<ConductorEventClipboardSnapshot> snapshots, long editCursorTick) =>
+        ConductorMutation("Paste conductor events", incoming: _ =>
         {
             ArgumentNullException.ThrowIfNull(snapshots);
-            if (snapshots.Count == 0 || editCursorTick < 0)
+            if (snapshots.Count == 0) throw new ArgumentException("At least one Conductor event must be pasted.", nameof(snapshots));
+            ValidateConductorTick(editCursorTick, nameof(editCursorTick));
+            return snapshots.Select(snapshot =>
             {
-                throw new ArgumentOutOfRangeException(
-                    snapshots.Count == 0 ? nameof(snapshots) : nameof(editCursorTick));
-            }
-            ConductorClipboardValue[] values = snapshots.Select(value =>
-                ValidateConductorClipboardValue(value, editCursorTick)).ToArray();
-            ValidateConductorClipboardConflicts(project.Conductor, values);
-            PastedConductorEvents? copies = null;
-            return Prepared(
-                hasChanges: true,
-                ConductorChange(),
-                owner =>
-                {
-                    copies ??= CreateConductorClipboardCopies(owner, values);
-                    owner.Conductor.Tempos.AddRange(copies.Tempos);
-                    owner.Conductor.TimeSignatures.AddRange(copies.TimeSignatures);
-                    owner.Conductor.KeySignatures.AddRange(copies.KeySignatures);
-                    owner.Conductor.Markers.AddRange(copies.Markers);
-                },
-                owner =>
-                {
-                    if (copies is null)
-                    {
-                        throw new InvalidOperationException(
-                            "Pasted Conductor events do not exist before Apply.");
-                    }
-                    foreach (TempoChange value in copies.Tempos)
-                    {
-                        RemoveRequired(owner.Conductor.Tempos, value, "pasted Tempo");
-                    }
-                    foreach (TimeSignatureChange value in copies.TimeSignatures)
-                    {
-                        RemoveRequired(
-                            owner.Conductor.TimeSignatures,
-                            value,
-                            "pasted Time Signature");
-                    }
-                    foreach (KeySignatureChange value in copies.KeySignatures)
-                    {
-                        RemoveRequired(
-                            owner.Conductor.KeySignatures,
-                            value,
-                            "pasted Key Signature");
-                    }
-                    foreach (ProjectMarker value in copies.Markers)
-                    {
-                        RemoveRequired(owner.Conductor.Markers, value, "pasted Marker");
-                    }
-                });
-        });
-
-    private static CurvePointClipboardValue[] PrepareLogicalParameterPoints(
-        LogicalParameterDefinition definition,
-        IEnumerable<CurvePointClipboardSnapshot> snapshots,
-        long editCursorTick)
-    {
-        HashSet<long> pointTicks = [];
-        CurvePointClipboardValue[] values = snapshots.Select(value =>
-        {
-            long tick = checked(editCursorTick + value.Tick);
-            ValidatePointValue(definition, value.Value, CurveInterpolation.Step);
-            return new CurvePointClipboardValue(tick, value.Value, CurveInterpolation.Step);
-        }).Where(value => pointTicks.Add(value.Tick)).ToArray();
-        return values;
-    }
+                ConductorClipboardValue value = ValidateConductorClipboardValue(snapshot, editCursorTick);
+                return new ConductorRequest((ConductorKind)value.Kind, value.Tick, value.BeatsPerMinute,
+                    value.Primary, value.Secondary, value.Flag, value.Text);
+            });
+        }, incomingCount: snapshots?.Count);
 
     private static ConductorClipboardValue ValidateConductorClipboardValue(
         ConductorEventClipboardSnapshot snapshot,
@@ -495,82 +355,6 @@ public static partial class ProjectDomainEditCommands
             snapshot.Text);
     }
 
-    private static void ValidateConductorClipboardConflicts(
-        ConductorTrack conductor,
-        IReadOnlyCollection<ConductorClipboardValue> values)
-    {
-        ValidateUniqueConductorTicks(
-            values.Where(value => value.Kind == ConductorClipboardEventKind.Tempo),
-            conductor.Tempos.Select(value => value.Tick),
-            "Tempo");
-        ValidateUniqueConductorTicks(
-            values.Where(value => value.Kind == ConductorClipboardEventKind.TimeSignature),
-            conductor.TimeSignatures.Select(value => value.Tick),
-            "Time Signature");
-        ValidateUniqueConductorTicks(
-            values.Where(value => value.Kind == ConductorClipboardEventKind.KeySignature),
-            conductor.KeySignatures.Select(value => value.Tick),
-            "Key Signature");
-    }
-
-    private static void ValidateUniqueConductorTicks(
-        IEnumerable<ConductorClipboardValue> selected,
-        IEnumerable<long> existingTicks,
-        string eventName)
-    {
-        long[] ticks = selected.Select(value => value.Tick).ToArray();
-        HashSet<long> existing = existingTicks.ToHashSet();
-        if (ticks.Distinct().Count() != ticks.Length || ticks.Any(existing.Contains))
-        {
-            throw new InvalidOperationException(
-                $"Pasted {eventName} events would create duplicate ticks.");
-        }
-    }
-
-    private static PastedConductorEvents CreateConductorClipboardCopies(
-        MidoraProject project,
-        IEnumerable<ConductorClipboardValue> values)
-    {
-        List<TempoChange> tempos = [];
-        List<TimeSignatureChange> timeSignatures = [];
-        List<KeySignatureChange> keySignatures = [];
-        List<ProjectMarker> markers = [];
-        foreach (ConductorClipboardValue value in values)
-        {
-            switch (value.Kind)
-            {
-                case ConductorClipboardEventKind.Tempo:
-                    tempos.Add(new TempoChange(project, value.Tick, value.BeatsPerMinute));
-                    break;
-                case ConductorClipboardEventKind.TimeSignature:
-                    timeSignatures.Add(new TimeSignatureChange(
-                        project,
-                        value.Tick,
-                        value.Primary,
-                        value.Secondary));
-                    break;
-                case ConductorClipboardEventKind.KeySignature:
-                    keySignatures.Add(new KeySignatureChange(
-                        project,
-                        value.Tick,
-                        value.Primary,
-                        value.Flag));
-                    break;
-                case ConductorClipboardEventKind.Marker:
-                    markers.Add(new ProjectMarker(
-                        project,
-                        value.Tick,
-                        value.Text ?? string.Empty));
-                    break;
-            }
-        }
-        return new(tempos, timeSignatures, keySignatures, markers);
-    }
-
-    private readonly record struct CurvePointClipboardValue(
-        long Tick,
-        double Value,
-        CurveInterpolation Interpolation);
 
     private readonly record struct ConductorClipboardValue(
         ConductorClipboardEventKind Kind,
@@ -581,23 +365,4 @@ public static partial class ProjectDomainEditCommands
         bool Flag,
         string? Text);
 
-    private sealed record PastedConductorEvents(
-        TempoChange[] Tempos,
-        TimeSignatureChange[] TimeSignatures,
-        KeySignatureChange[] KeySignatures,
-        ProjectMarker[] Markers)
-    {
-        public PastedConductorEvents(
-            IEnumerable<TempoChange> tempos,
-            IEnumerable<TimeSignatureChange> timeSignatures,
-            IEnumerable<KeySignatureChange> keySignatures,
-            IEnumerable<ProjectMarker> markers)
-            : this(
-                tempos.ToArray(),
-                timeSignatures.ToArray(),
-                keySignatures.ToArray(),
-                markers.ToArray())
-        {
-        }
-    }
 }

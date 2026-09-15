@@ -1,6 +1,7 @@
 using Midora.Audio;
 using Midora.Compiler;
 using Midora.Domain;
+using System.Runtime.ExceptionServices;
 
 namespace Midora.Playback;
 
@@ -29,12 +30,14 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
     private readonly TimeSpan _backgroundDebounce;
     private readonly SemaphoreSlim _compileSignal = new(0, 1);
     private readonly CancellationTokenSource _disposeCancellation = new();
-    private readonly Dictionary<(long Fingerprint, int SampleRate), MidiRenderPlan> _samplePlans = [];
-    private readonly Dictionary<
+    private readonly PreparationStorageCache _preparationStorage = new(
+        PreparationStorageCache.DefaultBudgetBytes, PreparationStorageCache.DefaultMaximumEntries);
+    private readonly PreparationStorageMap<(long Fingerprint, int SampleRate), MidiRenderPlan> _samplePlans;
+    private readonly PreparationStorageMap<
         (long Fingerprint, long StartTick, long EndTick, int SampleRate),
-        MidiRenderPlan> _realtimePlans = [];
-    private readonly Dictionary<(long StartTick, long? EndTick), CanonicalCompiledResult>
-        _playbackRangeResults = [];
+        MidiRenderPlan> _realtimePlans;
+    private readonly PreparationStorageMap<(long StartTick, long? EndTick), CanonicalCompiledResult>
+        _playbackRangeResults;
     private MidoraProject _compilationProject;
     private AudioCacheSessionStore? _audioCacheStore;
     private AudioCacheWarning _audioCacheWarning;
@@ -53,8 +56,33 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
     private long _sampleDomainGeneration;
     private bool _compileSignalPending;
     private bool _forceImmediateCompilation;
+    private bool _compilerMirrorRecoveryRequired;
     private int _editLockCount;
     private bool _disposed;
+
+    internal Action<CancellationToken>? CompilationSnapshotSynchronizationStartingForTests
+    {
+        get;
+        set;
+    }
+
+    internal Action<CancellationToken>? CompilationSnapshotMaterializationStartingForTests
+    {
+        get;
+        set;
+    }
+
+    internal Action? CompilationSnapshotCommitFaultForTests
+    {
+        get;
+        set;
+    }
+
+    internal Action<CancellationToken>? CompilationStartingForTests
+    {
+        get;
+        set;
+    }
 
     public ProjectCompilationSession(
         MidoraProject project,
@@ -63,6 +91,9 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
         ProjectCompilationExecutionMode executionMode = ProjectCompilationExecutionMode.Synchronous,
         TimeSpan? backgroundDebounce = null)
     {
+        _samplePlans = new(_preparationStorage, 0);
+        _realtimePlans = new(_preparationStorage, 1);
+        _playbackRangeResults = new(_preparationStorage, 2);
         Project = project ?? throw new ArgumentNullException(nameof(project));
         _executionMode = executionMode;
         _backgroundDebounce = backgroundDebounce ?? TimeSpan.FromMilliseconds(75);
@@ -110,6 +141,11 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
     }
 
     public MidoraProject Project { get; }
+    public PreparationStorageSnapshot PreparationStorage => _preparationStorage.Snapshot;
+
+    /// <summary>Retains immutable preparation storage independently of cache eviction.</summary>
+    public IDisposable RetainPreparationStorage(Midora.Common.IRetainedStorageSource value) =>
+        _preparationStorage.Retain(value);
     internal ProjectEditingTimeSession EditingTimeSession => _editingTime;
     public IReadOnlyList<SoundFontConfiguration> EffectiveSoundFontConfigurations
     {
@@ -119,9 +155,44 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
     public IReadOnlyList<string> EffectiveSoundFontPaths { get; private set; }
     public string? EffectiveSoundFontPath => EffectiveSoundFontPaths.FirstOrDefault();
     public string? EffectiveSoundFontSetCacheIdentity { get; private set; }
-    public CanonicalCompiledResult LastAttempt { get; private set; }
-    public CanonicalCompiledResult? LastSuccessfulResult { get; private set; }
+    private CanonicalCompiledResult? _lastAttempt;
+    private CanonicalCompiledResult? _lastSuccessfulResult;
+    private IDisposable? _lastAttemptStorage;
+    private IDisposable? _lastSuccessfulStorage;
+    public CanonicalCompiledResult LastAttempt
+    {
+        get => _lastAttempt ?? throw new ObjectDisposedException(nameof(ProjectCompilationSession));
+        private set
+        {
+            IDisposable next = _preparationStorage.Retain(value, baseline: true);
+            IDisposable? previous = _lastAttemptStorage;
+            _lastAttempt = value;
+            _lastAttemptStorage = next;
+            previous?.Dispose();
+        }
+    }
+    public CanonicalCompiledResult? LastSuccessfulResult
+    {
+        get => _lastSuccessfulResult;
+        private set
+        {
+            IDisposable? next = value is null ? null : _preparationStorage.Retain(value, baseline: true);
+            IDisposable? previous = _lastSuccessfulStorage;
+            _lastSuccessfulResult = value;
+            _lastSuccessfulStorage = next;
+            previous?.Dispose();
+        }
+    }
     public CompilerRunTelemetry LastCompilationTelemetry => _compiler.LastTelemetry;
+    public string? DiagnosticCapacityFailureMessage
+    {
+        get
+        {
+            lock (_sync)
+                return _backgroundCompilationFailure is DiagnosticCapacityExceededException failure
+                    ? failure.Message : null;
+        }
+    }
     public ProjectCompilationExecutionMode ExecutionMode => _executionMode;
     public ProjectCompilationState CompilationState
     {
@@ -210,13 +281,21 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                     "Project edits are forbidden while a Project edit lock is active.");
             }
             edit(Project);
-            LastAttempt = _compiler.CompileIncremental(Project, changes);
-            RecordSynchronousCompilationLocked(changes, sourceChanged: AffectsCompilation(changes));
-            ClearSampleDomainCachesCore();
-            _playbackRangeResults.Clear();
-            if (LastAttempt.IsConsumable)
+            bool affectsCompilation = AffectsCompilation(changes);
+            if (affectsCompilation)
             {
-                LastSuccessfulResult = LastAttempt;
+                LastAttempt = _compiler.CompileIncremental(Project, changes);
+                RecordSynchronousCompilationLocked(changes, sourceChanged: true);
+                ClearSampleDomainCachesCore();
+                _playbackRangeResults.Clear();
+                if (LastAttempt.IsConsumable)
+                {
+                    LastSuccessfulResult = LastAttempt;
+                }
+            }
+            else if (changes.AffectsAudioPcmCacheGeneration)
+            {
+                ClearSampleDomainCachesCore();
             }
         }
         if (changes.AffectsAudioPcmCacheGeneration)
@@ -250,16 +329,24 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
             }
 
             CanonicalCompiledResult? previousSuccessful = LastSuccessfulResult;
+            bool affectsCompilation = AffectsCompilation(changes);
             try
             {
                 edit(Project);
-                LastAttempt = _compiler.CompileIncremental(Project, changes);
-                RecordSynchronousCompilationLocked(changes, sourceChanged: AffectsCompilation(changes));
-                ClearSampleDomainCachesCore();
-                _playbackRangeResults.Clear();
-                if (LastAttempt.IsConsumable)
+                if (affectsCompilation)
                 {
-                    LastSuccessfulResult = LastAttempt;
+                    LastAttempt = _compiler.CompileIncremental(Project, changes);
+                    RecordSynchronousCompilationLocked(changes, sourceChanged: true);
+                    ClearSampleDomainCachesCore();
+                    _playbackRangeResults.Clear();
+                    if (LastAttempt.IsConsumable)
+                    {
+                        LastSuccessfulResult = LastAttempt;
+                    }
+                }
+                else if (changes.AffectsAudioPcmCacheGeneration)
+                {
+                    ClearSampleDomainCachesCore();
                 }
                 result = LastAttempt;
             }
@@ -268,15 +355,18 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 try
                 {
                     rollback(Project);
-                    LastAttempt = _compiler.CompileFull(Project);
-                    RecordSynchronousCompilationLocked(
-                        ProjectChangeSet.Everything,
-                        sourceChanged: false);
-                    ClearSampleDomainCachesCore();
-                    _playbackRangeResults.Clear();
-                    LastSuccessfulResult = LastAttempt.IsConsumable
-                        ? LastAttempt
-                        : previousSuccessful;
+                    if (affectsCompilation)
+                    {
+                        LastAttempt = _compiler.CompileFull(Project);
+                        RecordSynchronousCompilationLocked(
+                            ProjectChangeSet.Everything,
+                            sourceChanged: false);
+                        ClearSampleDomainCachesCore();
+                        _playbackRangeResults.Clear();
+                        LastSuccessfulResult = LastAttempt.IsConsumable
+                            ? LastAttempt
+                            : previousSuccessful;
+                    }
                 }
                 catch (Exception rollbackError)
                 {
@@ -403,7 +493,9 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
             if (failure is not null)
             {
                 throw new InvalidOperationException(
-                    "The current Project revision could not be compiled.",
+                    failure is DiagnosticCapacityExceededException
+                        ? failure.Message
+                        : "The current Project revision could not be compiled.",
                     failure);
             }
             await stateChanged.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -426,6 +518,10 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
             _activeCompilationCancellation?.Cancel();
         }
 
+        // Source mutation and source-to-snapshot capture are mutually exclusive.
+        // The edit cancels the active capture before waiting; snapshot loops check
+        // that token at bounded intervals, so the gate protects correctness without
+        // waiting for the substantially longer compiler phase.
         lock (_projectGate)
         {
             lock (_sync)
@@ -469,9 +565,13 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                     _backgroundCompilationFailure = null;
                     SetCompilationStateLocked(ProjectCompilationState.Outdated);
                     ScheduleCompilationLocked(immediate: false);
+                    ClearSampleDomainCachesCore();
+                    _playbackRangeResults.Clear();
                 }
-                ClearSampleDomainCachesCore();
-                _playbackRangeResults.Clear();
+                else if (changes.AffectsAudioPcmCacheGeneration)
+                {
+                    ClearSampleDomainCachesCore();
+                }
             }
         }
 
@@ -510,6 +610,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 long targetRevision;
                 long targetGeneration;
                 ProjectChangeSet changes;
+                bool forceFullRecovery;
                 CancellationTokenSource compilationCancellation;
                 lock (_sync)
                 {
@@ -529,7 +630,10 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
 
                     targetRevision = _sourceRevision;
                     targetGeneration = _requestedCompilationGeneration;
-                    changes = CloneChanges(_pendingChanges);
+                    forceFullRecovery = _compilerMirrorRecoveryRequired;
+                    changes = forceFullRecovery
+                        ? CloneChanges(ProjectChangeSet.Everything)
+                        : CloneChanges(_pendingChanges);
                     compilationCancellation = CancellationTokenSource.CreateLinkedTokenSource(disposeToken);
                     _activeCompilationCancellation = compilationCancellation;
                     SetCompilationStateLocked(ProjectCompilationState.Compiling);
@@ -539,24 +643,51 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 CanonicalCompiledResult? result = null;
                 Exception? failure = null;
                 bool canceled = false;
+                bool materializationStarted = false;
                 MidoraProject compilationProject;
                 try
                 {
+                    ProjectCompilationSnapshot.RevisionCapture capture;
                     lock (_projectGate)
                     {
                         compilationCancellation.Token.ThrowIfCancellationRequested();
-                        _compilationProject = ProjectCompilationSnapshot.Synchronize(
+                        CompilationSnapshotSynchronizationStartingForTests?.Invoke(
+                            compilationCancellation.Token);
+                        capture = ProjectCompilationSnapshot.CaptureRevision(
                             _compilationProject,
                             Project,
                             changes,
                             compilationCancellation.Token);
-                        compilationProject = _compilationProject;
                     }
                     compilationCancellation.Token.ThrowIfCancellationRequested();
-                    result = _compiler.CompileIncremental(
-                        compilationProject,
-                        changes,
-                        cancellationToken: compilationCancellation.Token);
+                    CompilationSnapshotMaterializationStartingForTests?.Invoke(
+                        compilationCancellation.Token);
+                    materializationStarted = true;
+                    compilationProject = ProjectCompilationSnapshot.MaterializeRevision(
+                        capture,
+                        compilationCancellation.Token,
+                        afterFirstCommitMutationForTests:
+                            CompilationSnapshotCommitFaultForTests);
+                    compilationCancellation.Token.ThrowIfCancellationRequested();
+                    CompilationStartingForTests?.Invoke(compilationCancellation.Token);
+                    result = forceFullRecovery
+                        ? _compiler.CompileFull(
+                            compilationProject,
+                            cancellationToken: compilationCancellation.Token)
+                        : _compiler.CompileIncremental(
+                            compilationProject,
+                            changes,
+                            cancellationToken: compilationCancellation.Token);
+                    // Prepare compact Logical audio descriptors while still on the compile
+                    // worker, outside UI/project locks. Identical playback views share this
+                    // result-owned shared cache; first Play does not rescan a distant Logical suffix.
+                    if (result.IsConsumable && result.HasPagedLogicalEvents)
+                        CanonicalAudioUnitProjection.Create(result,
+                            cancellationToken: compilationCancellation.Token);
+                    // The mirror revision becomes observable to later attempts only
+                    // after the compiler transaction has also completed. A failed
+                    // or canceled candidate is never published here.
+                    _compilationProject = compilationProject;
                 }
                 catch (OperationCanceledException) when (compilationCancellation.IsCancellationRequested)
                 {
@@ -564,6 +695,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 }
                 catch (Exception exception)
                 {
+                    result = null;
                     failure = exception;
                 }
 
@@ -588,6 +720,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                         _compiledRevision = targetRevision;
                         _publishedCompilationGeneration = targetGeneration;
                         _pendingChanges = new ProjectChangeSet();
+                        _compilerMirrorRecoveryRequired = false;
                         _backgroundCompilationFailure = null;
                         if (result.IsConsumable)
                         {
@@ -601,12 +734,23 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                     {
                         _compiledRevision = targetRevision;
                         _publishedCompilationGeneration = targetGeneration;
-                        _pendingChanges = new ProjectChangeSet();
+                        // Materialization commits several mutable Domain lists. If
+                        // any commit or compiler stage throws, its candidate mirror
+                        // must never serve as the base of a later delta. Preserve an
+                        // Everything change so the next requested attempt creates a
+                        // fresh Project root and runs a full compiler transaction.
+                        _pendingChanges = CloneChanges(ProjectChangeSet.Everything);
+                        _compilerMirrorRecoveryRequired = true;
                         _backgroundCompilationFailure = failure;
                         SetCompilationStateLocked(ProjectCompilationState.Failed);
                     }
                     else
                     {
+                        if (materializationStarted)
+                        {
+                            _pendingChanges = CloneChanges(ProjectChangeSet.Everything);
+                            _compilerMirrorRecoveryRequired = true;
+                        }
                         SetCompilationStateLocked(ProjectCompilationState.Outdated);
                         ScheduleCompilationLocked(immediate: true);
                     }
@@ -680,6 +824,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
         || changes.AffectsConductor
         || changes.TrackIds.Count != 0
         || changes.EventInstrumentIds.Count != 0
+        || changes.EventInstrumentUsageIds.Count != 0
         || changes.MidiChannelRootIds.Count != 0
         || changes.PureMidiTrackIds.Count != 0;
 
@@ -693,8 +838,12 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
         };
         result.TrackIds.UnionWith(source.TrackIds);
         result.EventInstrumentIds.UnionWith(source.EventInstrumentIds);
+        result.EventInstrumentUsageIds.UnionWith(source.EventInstrumentUsageIds);
         result.MidiChannelRootIds.UnionWith(source.MidiChannelRootIds);
         result.PureMidiTrackIds.UnionWith(source.PureMidiTrackIds);
+        result.PresentationTrackIds.UnionWith(source.PresentationTrackIds);
+        result.PresentationEventInstrumentIds.UnionWith(
+            source.PresentationEventInstrumentIds);
         return result;
     }
 
@@ -713,10 +862,18 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
         result.TrackIds.UnionWith(right.TrackIds);
         result.EventInstrumentIds.UnionWith(left.EventInstrumentIds);
         result.EventInstrumentIds.UnionWith(right.EventInstrumentIds);
+        result.EventInstrumentUsageIds.UnionWith(left.EventInstrumentUsageIds);
+        result.EventInstrumentUsageIds.UnionWith(right.EventInstrumentUsageIds);
         result.MidiChannelRootIds.UnionWith(left.MidiChannelRootIds);
         result.MidiChannelRootIds.UnionWith(right.MidiChannelRootIds);
         result.PureMidiTrackIds.UnionWith(left.PureMidiTrackIds);
         result.PureMidiTrackIds.UnionWith(right.PureMidiTrackIds);
+        result.PresentationTrackIds.UnionWith(left.PresentationTrackIds);
+        result.PresentationTrackIds.UnionWith(right.PresentationTrackIds);
+        result.PresentationEventInstrumentIds.UnionWith(
+            left.PresentationEventInstrumentIds);
+        result.PresentationEventInstrumentIds.UnionWith(
+            right.PresentationEventInstrumentIds);
         return result;
     }
 
@@ -778,6 +935,10 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
 
     public MidiRenderPlan GetOrCreateRenderPlan(int sampleRate)
     {
+        CanonicalCompiledResult result;
+        long generation;
+        long revision;
+        (long Fingerprint, int SampleRate) key;
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -787,18 +948,27 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 throw new InvalidOperationException(
                     "The current Project source revision has not finished compiling.");
             }
-            CanonicalCompiledResult result = LastAttempt;
+            result = LastAttempt;
             if (!result.IsConsumable)
             {
                 throw new InvalidOperationException("The current Project source has no consumable canonical result.");
             }
-            (long Fingerprint, int SampleRate) key = (result.Fingerprint, sampleRate);
-            if (!_samplePlans.TryGetValue(key, out MidiRenderPlan? plan))
-            {
-                plan = MidiRenderPlanAdapter.Create(result, sampleRate);
-                _samplePlans.Add(key, plan);
-            }
-            return plan;
+            key = (result.Fingerprint, sampleRate);
+            if (_samplePlans.TryGetValue(key, out MidiRenderPlan? cached)) return cached;
+            generation = _sampleDomainGeneration;
+            revision = _sourceRevision;
+        }
+        MidiRenderPlan created = MidiRenderPlanAdapter.Create(result, sampleRate);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (generation != _sampleDomainGeneration || revision != _sourceRevision
+                || !ReferenceEquals(result, LastAttempt) || !IsCompilationCurrentCore())
+                throw new InvalidOperationException(
+                    "The Project source or audio configuration changed while the render plan was being prepared. Prepare the plan again.");
+            if (_samplePlans.TryGetValue(key, out MidiRenderPlan? concurrent)) return concurrent;
+            _samplePlans.Add(key, created);
+            return created;
         }
     }
 
@@ -1370,6 +1540,13 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
 
     public void Dispose()
     {
+        List<Exception>? failures = null;
+        void Cleanup(Action action)
+        {
+            try { action(); }
+            catch (Exception exception) { (failures ??= []).Add(exception); }
+        }
+
         Task? worker;
         lock (_sync)
         {
@@ -1378,8 +1555,11 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 return;
             }
             _disposed = true;
-            _activeCompilationCancellation?.Cancel();
-            _disposeCancellation.Cancel();
+            // Cancellation registrations are arbitrary control-thread code. One
+            // failing callback must not prevent the worker's lifetime token or
+            // any later owned resource from being released.
+            Cleanup(() => _activeCompilationCancellation?.Cancel());
+            Cleanup(_disposeCancellation.Cancel);
             _compilationStateChanged.TrySetResult(true);
             worker = _compileWorker;
         }
@@ -1393,34 +1573,51 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
             catch (OperationCanceledException)
             {
             }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
         }
 
         lock (_sync)
         {
-            ClearSampleDomainCachesCore();
-            _playbackRangeResults.Clear();
-            try
-            {
-                try
-                {
-                    _audioCacheStore?.Dispose();
-                    _audioCacheStore = null;
-                }
-                finally
-                {
-                    _editingTime.Dispose();
-                }
-            }
-            finally
-            {
-                _compiler.Dispose();
-                _editLockCount = 0;
-                _activeCompilationCancellation?.Dispose();
-                _activeCompilationCancellation = null;
-                _compileSignal.Dispose();
-                _disposeCancellation.Dispose();
-            }
+            Cleanup(ClearSampleDomainCachesCore);
+            Cleanup(_playbackRangeResults.Clear);
+            // Dropping an accounting lease must also drop this owner's strong
+            // product reference. An external consumer's result/lease remains
+            // valid independently; do not Dispose shared immutable sources.
+            _lastAttempt = null;
+            _lastSuccessfulResult = null;
+            IDisposable? attemptStorage = _lastAttemptStorage;
+            _lastAttemptStorage = null;
+            Cleanup(() => attemptStorage?.Dispose());
+            IDisposable? successfulStorage = _lastSuccessfulStorage;
+            _lastSuccessfulStorage = null;
+            Cleanup(() => successfulStorage?.Dispose());
+            // The public Project remains part of the session contract. Only
+            // release the extra background mirror, after its worker has ended.
+            _compilationProject = Project;
+            _compileWorker = null;
+            _backgroundCompilationFailure = null;
+            _pendingChanges = new();
+            CompilationChanged = null;
+            EffectiveSoundFontChanged = null;
+            AudioCacheSessionStore? audioCacheStore = _audioCacheStore;
+            _audioCacheStore = null;
+            Cleanup(() => audioCacheStore?.Dispose());
+            Cleanup(_editingTime.Dispose);
+            Cleanup(_compiler.Dispose);
+            _editLockCount = 0;
+            CancellationTokenSource? activeCancellation = _activeCompilationCancellation;
+            _activeCompilationCancellation = null;
+            Cleanup(() => activeCancellation?.Dispose());
+            Cleanup(_compileSignal.Dispose);
+            Cleanup(_disposeCancellation.Dispose);
         }
+
+        if (failures is { Count: 1 }) ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures is not null)
+            throw new AggregateException("Project compilation session cleanup failed.", failures);
     }
 
     private void ReleaseProjectEditLock()

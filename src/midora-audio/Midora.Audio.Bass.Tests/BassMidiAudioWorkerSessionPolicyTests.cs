@@ -805,9 +805,11 @@ public sealed class BassMidiAudioWorkerSessionPolicyTests
     }
 
     private static HashSet<string> EnumerateOwnedPlanDirectories() =>
-        Directory.EnumerateDirectories(
-            Path.GetTempPath(),
+        Directory.Exists(Midora.Common.MidoraProgramData.Current.AudioWorkerExchangeDirectory)
+        ? Directory.EnumerateDirectories(
+            Midora.Common.MidoraProgramData.Current.AudioWorkerExchangeDirectory,
             "midora-audio-worker-*")
         .Select(Path.GetFullPath)
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        .ToHashSet(StringComparer.OrdinalIgnoreCase)
+        : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 }

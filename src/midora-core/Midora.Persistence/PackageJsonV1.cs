@@ -88,6 +88,7 @@ internal sealed class ArrangementTrackIndexJsonV1
     public required string NameSnapshot { get; init; }
 
     [JsonPropertyOrder(4)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public required StableIdJsonV1? SharedGroupId { get; init; }
 }
 

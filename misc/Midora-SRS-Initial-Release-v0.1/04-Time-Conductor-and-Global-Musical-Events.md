@@ -537,6 +537,8 @@ MIDI 导出必须包含 Conductor Track 的全局音乐事件。
 ```
 Conductor Track 副本应保证分开导出后仍能保留一致的 Tempo、拍号、调号、Marker 等全局信息。
 具体导出事件顺序、Meta Event 字节编码、Project End Marker 是否导出为普通 Marker、文件结构由 第 14 章《MIDI 导出》 / 实现设计阶段细化。
+
+SMF 的四字节 delta-time VLQ 上限不限制 Project/canonical 的绝对 Tick、Gate 或事件间隔。超长间隔仅在导出编码时按 §14.12.2 插入零长度 Text Meta；MTrk 的 `0xFFFFFFFF` 字节上限仅在导出时检查，超限不拆分、不作为编译错误。TPQ、Tempo、拍号/调号及 Int64 Tick 运算的既有合法性要求不变。
 ---
 ## 4.14 错误、警告与诊断
 ### 4.14.1 错误

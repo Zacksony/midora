@@ -1,11 +1,19 @@
 using Midora.Compiler;
+using Midora.Common;
 
 namespace Midora.Playback;
 
-public sealed class TempoSampleMap
+public sealed class TempoSampleMap : IRetainedStorageSource
 {
     private readonly CanonicalTempo[] _tempos;
     private readonly decimal[] _secondsAtTempo;
+
+    public void CollectRetainedStorage(RetainedStorageCollector collector)
+    {
+        if (!collector.Add(this, 48)) return;
+        collector.Array(_tempos);
+        collector.Array(_secondsAtTempo);
+    }
 
     public TempoSampleMap(int ticksPerQuarterNote, ReadOnlySpan<CanonicalTempo> tempos)
     {

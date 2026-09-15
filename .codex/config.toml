@@ -1,0 +1,12 @@
+# Midora project-local Codex execution boundary.
+# This layer is loaded only when the repository is trusted. It intentionally
+# grants no additional writable roots and requests no command-network access.
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = false
+writable_roots = []
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true

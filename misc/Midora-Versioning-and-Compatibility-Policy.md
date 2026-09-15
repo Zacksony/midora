@@ -9,7 +9,7 @@
 | Midora 产品版本 | `1.0.0-dev` | 发布、EXE、诊断、Project manifest 与 MIDI Export Readme |
 | CLR AssemblyVersion | `1.0.0.0` | 1.x 程序集绑定身份 |
 | Windows FileVersion | `1.0.0.0` | Windows 文件属性 |
-| `.midora` Project Format | `1` | 整个 Project package 的持久化组合格式 |
+| `.midora` Project Format | 写 `4`，读 `1/2/3/4` | 当前组合格式；旧格式 detached 迁移及永久原字节备份 |
 | Format 1 JSON/object schema | `1` | 各 Format 1 结构性文件与对象 wire contract |
 | Mapping Function ABI | `3` | Project 内受限表达式语言与求值契约 |
 

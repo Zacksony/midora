@@ -59,6 +59,29 @@ public sealed class BatchEditExpressionProgramTests
         Assert.Equal(24, result.Tick);
     }
 
+    [Fact]
+    public void ResultDependenciesUseADeterministicDiamondTopologicalOrder()
+    {
+        using BatchEditExpressionProgram program = BatchEditExpressionProgram.Compile(
+            new Dictionary<BatchEditField, string?>
+            {
+                [BatchEditField.Velocity] = "=k1 + g1",
+                [BatchEditField.KeyNumber] = "=t1 + 1",
+                [BatchEditField.Gate] = "=t1 + 2",
+                [BatchEditField.Tick] = "=t0 + 3"
+            });
+
+        BatchEditValues result = program.Evaluate(
+            new BatchEditValues(100, 0, 60, 12, 10, 0),
+            Stopwatch.StartNew(),
+            TimeSpan.FromSeconds(10));
+
+        Assert.Equal(29, result.Velocity);
+        Assert.Equal(14, result.KeyNumber);
+        Assert.Equal(15, result.Gate);
+        Assert.Equal(13, result.Tick);
+    }
+
     [Theory]
     [InlineData("=new Random().Next()")]
     [InlineData("=Environment.TickCount")]

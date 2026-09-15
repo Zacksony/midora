@@ -1,3 +1,4 @@
+using System.Text;
 using Midora.Audio;
 using Midora.Compiler;
 using Midora.Domain;
@@ -153,6 +154,64 @@ public sealed class StreamingMidiProjectImportTests
     }
 
     [Fact]
+    public void ImportFileAcceptsWindows31JTrackNamesAndMarkers()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "midora-streaming-import-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "windows-31j.mid");
+        MidiProjectImportResult? result = null;
+        try
+        {
+            File.WriteAllBytes(path, StandardMidiFile.EncodeType1(
+                480,
+                [new StandardMidiFileTrack(
+                    120,
+                    [
+                        StandardMidiFileEvent.Meta(
+                            0,
+                            StandardMidiFile.TrackNameMetaType,
+                            EncodeWindows31J("メロディ")),
+                        StandardMidiFileEvent.Meta(
+                            0,
+                            StandardMidiFile.MarkerMetaType,
+                            EncodeWindows31J("イントロ")),
+                        StandardMidiFileEvent.ChannelVoice(
+                            0,
+                            MidiMessage.NoteOn(0, 60, 100)),
+                        StandardMidiFileEvent.Meta(
+                            60,
+                            StandardMidiFile.MarkerMetaType,
+                            [0x81]),
+                        StandardMidiFileEvent.ChannelVoice(
+                            120,
+                            MidiMessage.NoteOff(0, 60, 0))
+                    ])]));
+
+            result = MidiProjectImportService.ImportFile(path, "Japanese Text Compatibility");
+
+            Assert.Equal("メロディ", Assert.Single(result.Project.PureMidiTracks).Name);
+            ProjectMarker marker = Assert.Single(result.Project.Conductor.Markers);
+            Assert.Equal((0L, "イントロ"), (marker.Tick, marker.Name));
+            Assert.Contains(result.Diagnostics, value =>
+                value.Code == "MIDORA-MIDI-IMPORT-WINDOWS-31J-TRACK-NAME");
+            Assert.Contains(result.Diagnostics, value =>
+                value.Code == "MIDORA-MIDI-IMPORT-WINDOWS-31J-MARKER");
+            Assert.Contains(result.Diagnostics, value =>
+                value.Code == "MIDORA-MIDI-IMPORT-INVALID-MARKER"
+                && value.Severity == DiagnosticSeverity.Warning
+                && value.Tick == 60);
+        }
+        finally
+        {
+            result?.Project.Dispose();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ImportFileAssignsChannelModeSystemExclusiveToTargetChannel()
     {
         string directory = Path.Combine(
@@ -210,4 +269,9 @@ public sealed class StreamingMidiProjectImportTests
 
         public void Report(MidiProjectImportProgress value) => Values.Add(value);
     }
+
+    private static byte[] EncodeWindows31J(string value) =>
+        (CodePagesEncodingProvider.Instance.GetEncoding(932)
+            ?? throw new InvalidOperationException("Windows-31J encoding is unavailable."))
+        .GetBytes(value);
 }

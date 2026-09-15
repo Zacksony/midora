@@ -24,6 +24,19 @@ internal readonly record struct DirectMidiEventCollisionTarget(
     DirectMidiChannelEventKind Kind,
     int Data1);
 
+internal readonly record struct LogicalParameterPointCollisionTarget(
+    LogicalParameterLane Lane,
+    long Tick);
+
+internal readonly record struct TemplateEventPointCollisionTarget(
+    SubVoice SubVoice,
+    long Tick,
+    int Detail);
+
+internal readonly record struct ValueCurvePointCollisionTarget(
+    ValueCurve Curve,
+    long Tick);
+
 /// <summary>
 /// Resolves exact timeline-key collisions at the Project edit transaction boundary.
 /// Logical/Template/Direct MIDI Notes keep the existing occupant at an exact
@@ -45,7 +58,10 @@ internal static class ExactTimelineCollisionPolicy
         IEnumerable<LogicalNoteCollisionTarget>? logicalNoteTargets = null,
         IEnumerable<TemplateNoteCollisionTarget>? templateNoteTargets = null,
         IEnumerable<DirectMidiNoteCollisionTarget>? directMidiNoteTargets = null,
-        IEnumerable<DirectMidiEventCollisionTarget>? directMidiEventTargets = null)
+        IEnumerable<DirectMidiEventCollisionTarget>? directMidiEventTargets = null,
+        IEnumerable<LogicalParameterPointCollisionTarget>? logicalParameterPointTargets = null,
+        IEnumerable<TemplateEventPointCollisionTarget>? templateEventPointTargets = null,
+        IEnumerable<ValueCurvePointCollisionTarget>? valueCurvePointTargets = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         CollisionScopeSet additions = new(
@@ -57,7 +73,10 @@ internal static class ExactTimelineCollisionPolicy
             (logicalNoteTargets ?? []).Distinct().ToArray(),
             (templateNoteTargets ?? []).Distinct().ToArray(),
             (directMidiNoteTargets ?? []).Distinct().ToArray(),
-            (directMidiEventTargets ?? []).Distinct().ToArray());
+            (directMidiEventTargets ?? []).Distinct().ToArray(),
+            (logicalParameterPointTargets ?? []).Distinct().ToArray(),
+            (templateEventPointTargets ?? []).Distinct().ToArray(),
+            (valueCurvePointTargets ?? []).Distinct().ToArray());
         if (additions.IsEmpty) return source;
         if (source is CollisionScopedPreparedEdit existing)
         {
@@ -79,8 +98,551 @@ internal static class ExactTimelineCollisionPolicy
             return source;
         }
 
+        if (scoped.Scopes.HasOnlyTargets)
+        {
+            return new TargetedCollisionPreparedEdit(
+                scoped.Source,
+                CaptureTargetedLogicalNoteBaseline(scoped.Scopes.LogicalNoteTargets),
+                CaptureTargetedTemplateNoteBaseline(scoped.Scopes.TemplateNoteTargets),
+                CaptureTargetedDirectMidiNoteBaseline(scoped.Scopes.DirectMidiNoteTargets),
+                CaptureTargetedLogicalParameterPointBaseline(scoped.Scopes.LogicalParameterPointTargets),
+                CaptureTargetedTemplateEventPointBaseline(scoped.Scopes.TemplateEventPointTargets),
+                CaptureTargetedDirectMidiEventBaseline(scoped.Scopes.DirectMidiEventTargets),
+                CaptureTargetedValueCurvePointBaseline(scoped.Scopes.ValueCurvePointTargets));
+        }
+
         CollisionBaseline baseline = CaptureBaseline(scoped.Scopes);
-        return new CollisionResolvingPreparedEdit(source, baseline, scoped.Scopes);
+        return new CollisionResolvingPreparedEdit(scoped.Source, baseline, scoped.Scopes);
+    }
+
+    private static TargetedLogicalNoteBaseline[] CaptureTargetedLogicalNoteBaseline(
+        IReadOnlyCollection<LogicalNoteCollisionTarget> targets) => targets
+        .GroupBy(static target => target.Segment)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<TargetedNoteKey> keys = group
+                .Select(static target => new TargetedNoteKey(target.Tick, target.Key))
+                .ToHashSet();
+            Dictionary<TargetedNoteKey, MidoraId[]> occupants = QueryTargetedLogicalNotes(group.Key, keys)
+                .GroupBy(static note => new TargetedNoteKey(note.StartTick, note.Note))
+                .ToDictionary(static group => group.Key, static group => group.Select(static note => note.Id).ToArray());
+            return new TargetedLogicalNoteBaseline(group.Key, keys, occupants);
+        })
+        .ToArray();
+
+    private static TargetedTemplateNoteBaseline[] CaptureTargetedTemplateNoteBaseline(
+        IReadOnlyCollection<TemplateNoteCollisionTarget> targets) => targets
+        .GroupBy(static target => target.SubVoice)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<TargetedNoteKey> keys = group
+                .Select(static target => new TargetedNoteKey(target.Tick, target.Key))
+                .ToHashSet();
+            Dictionary<TargetedNoteKey, MidoraId[]> occupants = QueryTargetedTemplateNotes(group.Key, keys)
+                .GroupBy(static note => new TargetedNoteKey(note.Tick, note.Number))
+                .ToDictionary(static group => group.Key, static group => group.Select(static note => note.Id).ToArray());
+            return new TargetedTemplateNoteBaseline(group.Key, keys, occupants);
+        })
+        .ToArray();
+
+    private static TargetedDirectMidiNoteBaseline[] CaptureTargetedDirectMidiNoteBaseline(
+        IReadOnlyCollection<DirectMidiNoteCollisionTarget> targets) => targets
+        .GroupBy(static target => target.Segment)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<DirectMidiNoteStartKey> keys = group
+                .Select(static target => new DirectMidiNoteStartKey(target.Tick, target.Key))
+                .ToHashSet();
+            Dictionary<DirectMidiNoteStartKey, MidoraId[]> occupants = group.Key.Notes.QueryStartKeys(keys)
+                .GroupBy(static note => new DirectMidiNoteStartKey(note.StartTick, note.Key))
+                .ToDictionary(static group => group.Key, static group => group.Select(static note => note.Id).ToArray());
+            return new TargetedDirectMidiNoteBaseline(group.Key, keys, occupants);
+        })
+        .ToArray();
+
+    private static TargetedLogicalParameterPointBaseline[] CaptureTargetedLogicalParameterPointBaseline(
+        IReadOnlyCollection<LogicalParameterPointCollisionTarget> targets) => targets
+        .GroupBy(static target => target.Lane)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<long> ticks = group.Select(static target => target.Tick).ToHashSet();
+            Dictionary<long, MidoraId[]> occupants = QueryTargetedCurvePoints(group.Key.Points, ticks)
+                .GroupBy(static point => point.Tick)
+                .ToDictionary(static values => values.Key, static values => values.Select(static point => point.Id).ToArray());
+            return new TargetedLogicalParameterPointBaseline(group.Key, ticks, occupants);
+        })
+        .ToArray();
+
+    private static TargetedTemplateEventPointBaseline[] CaptureTargetedTemplateEventPointBaseline(
+        IReadOnlyCollection<TemplateEventPointCollisionTarget> targets) => targets
+        .GroupBy(static target => target.SubVoice)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<TargetedPointKey> keys = group
+                .Select(static target => new TargetedPointKey(target.Tick, target.Detail))
+                .ToHashSet();
+            Dictionary<TargetedPointKey, MidoraId[]> occupants = QueryTargetedTemplateEvents(group.Key, keys)
+                .SelectMany(static value => TemplateEventExactCollision.GetNonNoteDetails(
+                        value.Kind,
+                        value.Number,
+                        value.HasBankMsb,
+                        value.HasBankLsb)
+                    .Select(detail => (Key: new TargetedPointKey(value.Tick, detail), Value: value)))
+                .Where(value => keys.Contains(value.Key))
+                .GroupBy(static value => value.Key, static value => value.Value)
+                .ToDictionary(static values => values.Key, static values => values.Select(static value => value.Id).ToArray());
+            return new TargetedTemplateEventPointBaseline(group.Key, keys, occupants);
+        })
+        .ToArray();
+
+    private static TargetedDirectMidiEventBaseline[] CaptureTargetedDirectMidiEventBaseline(
+        IReadOnlyCollection<DirectMidiEventCollisionTarget> targets) => targets
+        .GroupBy(static target => target.Segment)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<DirectMidiEventStartKey> keys = group
+                .Select(static target => new DirectMidiEventStartKey(
+                    target.Tick,
+                    target.Kind,
+                    DirectMidiEventUsesData1Selector(target.Kind) ? target.Data1 : 0))
+                .ToHashSet();
+            Dictionary<DirectMidiEventStartKey, MidoraId[]> occupants = group.Key.ChannelEvents
+                .QueryStartKeys(keys)
+                .GroupBy(static value => new DirectMidiEventStartKey(
+                    value.Tick,
+                    value.Kind,
+                    DirectMidiEventUsesData1Selector(value.Kind) ? value.Data1 : 0))
+                .ToDictionary(static values => values.Key, static values => values.Select(static value => value.Id).ToArray());
+            return new TargetedDirectMidiEventBaseline(group.Key, keys, occupants);
+        })
+        .ToArray();
+
+    private static TargetedValueCurvePointBaseline[] CaptureTargetedValueCurvePointBaseline(
+        IReadOnlyCollection<ValueCurvePointCollisionTarget> targets) => targets
+        .GroupBy(static target => target.Curve)
+        .OrderBy(static group => group.Key.Id)
+        .Select(group =>
+        {
+            HashSet<long> ticks = group.Select(static target => target.Tick).ToHashSet();
+            Dictionary<long, MidoraId[]> occupants = QueryTargetedCurvePoints(group.Key.Points, ticks)
+                .GroupBy(static point => point.Tick)
+                .ToDictionary(static values => values.Key, static values => values.Select(static point => point.Id).ToArray());
+            return new TargetedValueCurvePointBaseline(group.Key, ticks, occupants);
+        })
+        .ToArray();
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedLogicalParameterPoints(
+        IReadOnlyList<TargetedLogicalParameterPointBaseline> baselines)
+    {
+        List<TargetedCurvePointCandidate> discarded = [];
+        long order = 0;
+        foreach (TargetedLogicalParameterPointBaseline baseline in baselines)
+        {
+            foreach (IGrouping<long, CurvePoint> group in QueryTargetedCurvePoints(
+                    baseline.Lane.Points,
+                    baseline.Ticks)
+                .GroupBy(static point => point.Tick))
+            {
+                baseline.Occupants.TryGetValue(group.Key, out MidoraId[]? occupants);
+                CurvePoint[] current = group.ToArray();
+                CurvePoint[] newcomers = current
+                    .Where(point => !ContainsId(occupants, point.Id))
+                    .ToArray();
+                if (newcomers.Length == 0)
+                {
+                    order += current.Length;
+                    continue;
+                }
+                CurvePoint winner = newcomers[^1];
+                foreach (CurvePoint point in current)
+                {
+                    if (!ReferenceEquals(point, winner))
+                        discarded.Add(new(baseline.Lane.Points, point, order));
+                    order++;
+                }
+            }
+        }
+        return RemoveTargetedCurvePoints(discarded);
+    }
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedTemplateEventPoints(
+        IReadOnlyList<TargetedTemplateEventPointBaseline> baselines)
+    {
+        List<TargetedTemplatePointCandidate> current = [];
+        long order = 0;
+        foreach (TargetedTemplateEventPointBaseline baseline in baselines)
+        {
+            foreach (TemplateEvent value in QueryTargetedTemplateEvents(baseline.SubVoice, baseline.Keys))
+            {
+                current.Add(new(baseline, value, order++));
+            }
+        }
+
+        HashSet<TemplateEvent> discarded = [];
+        foreach (IGrouping<(TargetedTemplateEventPointBaseline Baseline, TargetedPointKey Key), TargetedTemplatePointCandidate> group in
+            current.SelectMany(candidate => TemplateEventExactCollision.GetNonNoteDetails(
+                    candidate.Value.Kind,
+                    candidate.Value.Number,
+                    candidate.Value.HasBankMsb,
+                    candidate.Value.HasBankLsb)
+                .Select(detail => (Key: new TargetedPointKey(candidate.Value.Tick, detail), Candidate: candidate)))
+                .Where(value => value.Candidate.Baseline.Keys.Contains(value.Key))
+                .GroupBy(
+                    static value => (value.Candidate.Baseline, value.Key),
+                    static value => value.Candidate))
+        {
+            group.Key.Baseline.Occupants.TryGetValue(group.Key.Key, out MidoraId[]? occupants);
+            TargetedTemplatePointCandidate[] candidates = group
+                .Where(candidate => !discarded.Contains(candidate.Value))
+                .OrderBy(static value => value.Order)
+                .ToArray();
+            if (candidates.Length < 2) continue;
+            TargetedTemplatePointCandidate[] newcomers = candidates
+                .Where(candidate => !ContainsId(occupants, candidate.Value.Id))
+                .ToArray();
+            if (newcomers.Length == 0) continue;
+            TemplateEvent winner = newcomers[^1].Value;
+            foreach (TargetedTemplatePointCandidate candidate in candidates)
+            {
+                if (!ReferenceEquals(candidate.Value, winner)) discarded.Add(candidate.Value);
+            }
+        }
+
+        return current
+            .Where(candidate => discarded.Contains(candidate.Value))
+            .GroupBy(static candidate => candidate.Baseline.SubVoice.Events)
+            .OrderBy(static group => group.Min(static candidate => candidate.Order))
+            .Select(static group => new CollisionRemoval(group.Key.RemoveRangeForExactCollision(
+                group.OrderBy(static candidate => candidate.Order)
+                    .Select(static candidate => candidate.Value)
+                    .Distinct()
+                    .ToArray())))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedDirectMidiEvents(
+        IReadOnlyList<TargetedDirectMidiEventBaseline> baselines)
+    {
+        List<TargetedDirectMidiEventCandidate> discarded = [];
+        long order = 0;
+        foreach (TargetedDirectMidiEventBaseline baseline in baselines)
+        {
+            foreach (IGrouping<DirectMidiEventStartKey, DirectMidiChannelEvent> group in baseline.Segment.ChannelEvents
+                .QueryStartKeys(baseline.Keys)
+                .GroupBy(static value => new DirectMidiEventStartKey(
+                    value.Tick,
+                    value.Kind,
+                    DirectMidiEventUsesData1Selector(value.Kind) ? value.Data1 : 0)))
+            {
+                baseline.Occupants.TryGetValue(group.Key, out MidoraId[]? occupants);
+                DirectMidiChannelEvent[] current = group.ToArray();
+                DirectMidiChannelEvent[] newcomers = current
+                    .Where(value => !ContainsId(occupants, value.Id))
+                    .ToArray();
+                if (newcomers.Length == 0)
+                {
+                    order += current.Length;
+                    continue;
+                }
+                DirectMidiChannelEvent winner = newcomers[^1];
+                foreach (DirectMidiChannelEvent value in current)
+                {
+                    if (!ReferenceEquals(value, winner))
+                        discarded.Add(new(baseline.Segment.ChannelEvents, value, order));
+                    order++;
+                }
+            }
+        }
+        return discarded
+            .GroupBy(static candidate => candidate.Collection)
+            .OrderBy(static group => group.Min(static candidate => candidate.Order))
+            .Select(static group => new CollisionRemoval(group.Key.RemoveRangeWithUndo(
+                group.OrderBy(static candidate => candidate.Order)
+                    .Select(static candidate => candidate.Value)
+                    .ToArray())))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedValueCurvePoints(
+        IReadOnlyList<TargetedValueCurvePointBaseline> baselines)
+    {
+        List<TargetedCurvePointCandidate> discarded = [];
+        long order = 0;
+        foreach (TargetedValueCurvePointBaseline baseline in baselines)
+        {
+            foreach (IGrouping<long, CurvePoint> group in QueryTargetedCurvePoints(
+                    baseline.Curve.Points,
+                    baseline.Ticks)
+                .GroupBy(static point => point.Tick))
+            {
+                baseline.Occupants.TryGetValue(group.Key, out MidoraId[]? occupants);
+                CurvePoint[] current = group.ToArray();
+                CurvePoint? incumbent = current.FirstOrDefault(point => ContainsId(occupants, point.Id));
+                bool hasNewcomer = current.Any(point => !ContainsId(occupants, point.Id));
+                if (!hasNewcomer)
+                {
+                    order += current.Length;
+                    continue;
+                }
+                CurvePoint winner = incumbent ?? current[0];
+                foreach (CurvePoint point in current)
+                {
+                    if (!ReferenceEquals(point, winner))
+                        discarded.Add(new(baseline.Curve.Points, point, order));
+                    order++;
+                }
+            }
+        }
+        return RemoveTargetedCurvePoints(discarded);
+    }
+
+    private static IReadOnlyList<CollisionRemoval> RemoveTargetedCurvePoints(
+        IReadOnlyCollection<TargetedCurvePointCandidate> discarded) => discarded
+        .GroupBy(static candidate => candidate.Collection)
+        .OrderBy(static group => group.Min(static candidate => candidate.Order))
+        .Select(static group => new CollisionRemoval(group.Key.RemoveRangeWithUndo(
+            group.OrderBy(static candidate => candidate.Order)
+                .Select(static candidate => candidate.Value)
+                .ToArray())))
+        .ToArray();
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedDirectMidiNotes(
+        IReadOnlyList<TargetedDirectMidiNoteBaseline> baselines)
+    {
+        List<TargetedDirectMidiNoteCandidate> discarded = [];
+        long order = 0;
+        foreach (TargetedDirectMidiNoteBaseline baseline in baselines)
+        {
+            Dictionary<DirectMidiNoteStartKey, TargetedDirectMidiNoteCandidate> firstByKey = [];
+            Dictionary<DirectMidiNoteStartKey, List<TargetedDirectMidiNoteCandidate>> duplicatesByKey = [];
+            foreach (DirectMidiNote note in baseline.Segment.Notes.QueryEditedStartKeys(baseline.Keys))
+            {
+                DirectMidiNoteStartKey key = new(note.StartTick, note.Key);
+                TargetedDirectMidiNoteCandidate candidate = new(baseline.Segment.Notes, note, order++);
+                if (firstByKey.TryAdd(key, candidate)) continue;
+                if (!duplicatesByKey.TryGetValue(key, out List<TargetedDirectMidiNoteCandidate>? values))
+                {
+                    values = [firstByKey[key]];
+                    duplicatesByKey.Add(key, values);
+                }
+                values.Add(candidate);
+            }
+
+            foreach ((DirectMidiNoteStartKey key, TargetedDirectMidiNoteCandidate first) in firstByKey)
+            {
+                baseline.Occupants.TryGetValue(key, out MidoraId[]? incumbents);
+                duplicatesByKey.TryGetValue(key, out List<TargetedDirectMidiNoteCandidate>? duplicateValues);
+                bool firstIsIncumbent = ContainsId(incumbents, first.Note.Id);
+                bool hasNewcomer = !firstIsIncumbent
+                    || duplicateValues?.Any(value => !ContainsId(incumbents, value.Note.Id)) == true;
+                if (!hasNewcomer) continue;
+                bool hasLiveIncumbent = incumbents?.Any(id =>
+                    baseline.Segment.Notes.IsUneditedSourceNotePresent(id)
+                    || first.Note.Id == id
+                    || duplicateValues?.Any(value => value.Note.Id == id) == true) == true;
+                if (hasLiveIncumbent)
+                {
+                    if (!firstIsIncumbent) discarded.Add(first);
+                    if (duplicateValues is not null)
+                        discarded.AddRange(duplicateValues.Skip(1).Where(value => !ContainsId(incumbents, value.Note.Id)));
+                }
+                else if (duplicateValues is not null)
+                {
+                    discarded.AddRange(duplicateValues.Skip(1));
+                }
+            }
+        }
+
+        return discarded
+            .GroupBy(static value => value.Collection)
+            .OrderBy(static group => group.Min(static value => value.Order))
+            .Select(static group => new CollisionRemoval(
+                group.Key.RemoveRangeForExactCollision(group
+                    .OrderBy(static value => value.Order)
+                    .Select(static value => value.Note)
+                    .ToArray())))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedLogicalNotes(
+        IReadOnlyList<TargetedLogicalNoteBaseline> baselines)
+    {
+        List<TargetedLogicalNoteCandidate> discarded = [];
+        long order = 0;
+        foreach (TargetedLogicalNoteBaseline baseline in baselines)
+        {
+            Dictionary<TargetedNoteKey, TargetedLogicalNoteCandidate> firstByKey = [];
+            Dictionary<TargetedNoteKey, List<TargetedLogicalNoteCandidate>> duplicatesByKey = [];
+            foreach (LogicalNote note in QueryTargetedLogicalNotes(baseline.Segment, baseline.Keys))
+            {
+                TargetedNoteKey key = new(note.StartTick, note.Note);
+                TargetedLogicalNoteCandidate candidate = new(baseline.Segment.Notes, note, order++);
+                if (firstByKey.TryAdd(key, candidate)) continue;
+                if (!duplicatesByKey.TryGetValue(key, out List<TargetedLogicalNoteCandidate>? values))
+                {
+                    values = [firstByKey[key]];
+                    duplicatesByKey.Add(key, values);
+                }
+                values.Add(candidate);
+            }
+            foreach ((TargetedNoteKey key, TargetedLogicalNoteCandidate first) in firstByKey)
+            {
+                baseline.Occupants.TryGetValue(key, out MidoraId[]? incumbents);
+                duplicatesByKey.TryGetValue(key, out List<TargetedLogicalNoteCandidate>? duplicateValues);
+                bool firstIsIncumbent = ContainsId(incumbents, first.Note.Id);
+                bool hasLiveIncumbent = firstIsIncumbent
+                    || duplicateValues?.Skip(1).Any(value => ContainsId(incumbents, value.Note.Id)) == true;
+                if (hasLiveIncumbent)
+                {
+                    if (!firstIsIncumbent) discarded.Add(first);
+                    if (duplicateValues is not null)
+                        discarded.AddRange(duplicateValues.Skip(1).Where(value => !ContainsId(incumbents, value.Note.Id)));
+                }
+                else if (duplicateValues is not null)
+                {
+                    discarded.AddRange(duplicateValues.Skip(1));
+                }
+            }
+        }
+        return discarded
+            .GroupBy(static value => value.Collection)
+            .OrderBy(static group => group.Min(static value => value.Order))
+            .Select(static group => new CollisionRemoval(
+                group.Key.RemoveRangeForExactCollision(group
+                    .OrderBy(static value => value.Order)
+                    .Select(static value => value.Note)
+                    .ToArray())))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CollisionRemoval> ResolveTargetedTemplateNotes(
+        IReadOnlyList<TargetedTemplateNoteBaseline> baselines)
+    {
+        List<TargetedTemplateNoteCandidate> discarded = [];
+        long order = 0;
+        foreach (TargetedTemplateNoteBaseline baseline in baselines)
+        {
+            Dictionary<TargetedNoteKey, TargetedTemplateNoteCandidate> firstByKey = [];
+            Dictionary<TargetedNoteKey, List<TargetedTemplateNoteCandidate>> duplicatesByKey = [];
+            foreach (TemplateEvent note in QueryTargetedTemplateNotes(baseline.SubVoice, baseline.Keys))
+            {
+                TargetedNoteKey key = new(note.Tick, note.Number);
+                TargetedTemplateNoteCandidate candidate = new(baseline.SubVoice.Events, note, order++);
+                if (firstByKey.TryAdd(key, candidate)) continue;
+                if (!duplicatesByKey.TryGetValue(key, out List<TargetedTemplateNoteCandidate>? values))
+                {
+                    values = [firstByKey[key]];
+                    duplicatesByKey.Add(key, values);
+                }
+                values.Add(candidate);
+            }
+            foreach ((TargetedNoteKey key, TargetedTemplateNoteCandidate first) in firstByKey)
+            {
+                baseline.Occupants.TryGetValue(key, out MidoraId[]? incumbents);
+                duplicatesByKey.TryGetValue(key, out List<TargetedTemplateNoteCandidate>? duplicateValues);
+                bool firstIsIncumbent = ContainsId(incumbents, first.Note.Id);
+                bool hasLiveIncumbent = firstIsIncumbent
+                    || duplicateValues?.Skip(1).Any(value => ContainsId(incumbents, value.Note.Id)) == true;
+                if (hasLiveIncumbent)
+                {
+                    if (!firstIsIncumbent) discarded.Add(first);
+                    if (duplicateValues is not null)
+                        discarded.AddRange(duplicateValues.Skip(1).Where(value => !ContainsId(incumbents, value.Note.Id)));
+                }
+                else if (duplicateValues is not null)
+                {
+                    discarded.AddRange(duplicateValues.Skip(1));
+                }
+            }
+        }
+        return discarded
+            .GroupBy(static value => value.Collection)
+            .OrderBy(static group => group.Min(static value => value.Order))
+            .Select(static group => new CollisionRemoval(
+                group.Key.RemoveRangeForExactCollision(group
+                    .OrderBy(static value => value.Order)
+                    .Select(static value => value.Note)
+                    .ToArray())))
+            .ToArray();
+    }
+
+    private static IEnumerable<LogicalNote> QueryTargetedLogicalNotes(
+        Segment segment,
+        IReadOnlySet<TargetedNoteKey> keys)
+    {
+        if (keys.Count == 0) yield break;
+        LogicalNoteQuerySnapshot snapshot = segment.Notes.CreateQuerySnapshot();
+        HashSet<TimelineStartLaneKey> queryKeys = keys
+            .Select(static value => new TimelineStartLaneKey(value.Tick, value.Key))
+            .ToHashSet();
+        HashSet<MidoraId> matchingIds = snapshot.QueryStartKeys(queryKeys)
+            .Select(static value => value.Id)
+            .ToHashSet();
+        foreach (LogicalNote note in segment.Notes.ResolveByIdsInCollectionOrder(matchingIds))
+        {
+            yield return note;
+        }
+    }
+
+    private static IEnumerable<TemplateEvent> QueryTargetedTemplateNotes(
+        SubVoice voice,
+        IReadOnlySet<TargetedNoteKey> keys)
+    {
+        if (keys.Count == 0) yield break;
+        TemplateEventQuerySnapshot snapshot = voice.Events.CreateQuerySnapshot();
+        HashSet<TimelineStartLaneKey> queryKeys = keys
+            .Select(static value => new TimelineStartLaneKey(value.Tick, value.Key))
+            .ToHashSet();
+        HashSet<MidoraId> matchingIds = snapshot.QueryNoteStartKeys(queryKeys)
+            .Select(static value => value.Id)
+            .ToHashSet();
+        foreach (TemplateEvent note in voice.Events.ResolveByIdsInCollectionOrder(matchingIds))
+        {
+            yield return note;
+        }
+    }
+
+    private static IEnumerable<CurvePoint> QueryTargetedCurvePoints(
+        CurvePointCollection points,
+        IReadOnlySet<long> ticks)
+    {
+        if (ticks.Count == 0) yield break;
+        HashSet<MidoraId> matchingIds = points.CreateQuerySnapshot()
+            .QueryTicks(ticks)
+            .Select(static value => value.Id)
+            .ToHashSet();
+        foreach (CurvePoint point in points.ResolveByIdsInCollectionOrder(matchingIds))
+        {
+            yield return point;
+        }
+    }
+
+    private static IEnumerable<TemplateEvent> QueryTargetedTemplateEvents(
+        SubVoice voice,
+        IReadOnlySet<TargetedPointKey> keys)
+    {
+        if (keys.Count == 0) yield break;
+        HashSet<long> ticks = keys.Select(static value => value.Tick).ToHashSet();
+        HashSet<MidoraId> matchingIds = voice.Events.CreateQuerySnapshot()
+            .QueryEventTicks(ticks)
+            .Where(value => TemplateEventExactCollision.GetNonNoteDetails(
+                    value.Kind,
+                    value.Number,
+                    value.HasBankMsb,
+                    value.HasBankLsb)
+                .Any(detail => keys.Contains(new(value.Tick, detail))))
+            .Select(static value => value.Id)
+            .ToHashSet();
+        foreach (TemplateEvent value in voice.Events.ResolveByIdsInCollectionOrder(matchingIds))
+        {
+            yield return value;
+        }
     }
 
     public static IPreparedProjectEdit CombineScopes(
@@ -190,9 +752,8 @@ internal static class ExactTimelineCollisionPolicy
         long order = 0;
         foreach (Segment segment in scopes.LogicalNoteSegments.OrderBy(static value => value.Id))
         {
-            for (int index = 0; index < segment.Notes.Count; index++)
+            foreach (LogicalNote note in segment.Notes)
             {
-                LogicalNote note = segment.Notes[index];
                 yield return CollisionCandidate.ForList(
                     note.Id,
                     [new(CollisionScope.LogicalNote, segment.Id, note.StartTick, note.Note)],
@@ -206,9 +767,8 @@ internal static class ExactTimelineCollisionPolicy
         foreach (LogicalParameterLane lane in scopes.LogicalParameterLanes
             .OrderBy(static value => value.Id))
         {
-            for (int index = 0; index < lane.Points.Count; index++)
+            foreach (CurvePoint point in lane.Points)
             {
-                CurvePoint point = lane.Points[index];
                 yield return CollisionCandidate.ForList(
                     point.Id,
                     [new(CollisionScope.LogicalParameterPoint, lane.Id, point.Tick, 0)],
@@ -221,9 +781,8 @@ internal static class ExactTimelineCollisionPolicy
 
         foreach (SubVoice voice in scopes.SubVoices.OrderBy(static value => value.Id))
         {
-            for (int index = 0; index < voice.Events.Count; index++)
+            foreach (TemplateEvent value in voice.Events)
             {
-                TemplateEvent value = voice.Events[index];
                 CollisionKey[] keys = value.Kind == TemplateEventKind.Note
                     ? [new(CollisionScope.TemplateNote, voice.Id, value.Tick, value.Number)]
                     : TemplateEventExactCollision.GetNonNoteDetails(
@@ -254,12 +813,11 @@ internal static class ExactTimelineCollisionPolicy
                 .GroupBy(static target => target.Segment)
                 .OrderBy(static group => group.Key.Id))
         {
-            HashSet<(long Tick, int Key)> keys = group
-                .Select(static target => (target.Tick, target.Key))
+            HashSet<TargetedNoteKey> keys = group
+                .Select(static target => new TargetedNoteKey(target.Tick, target.Key))
                 .ToHashSet();
-            foreach (LogicalNote note in group.Key.Notes)
+            foreach (LogicalNote note in QueryTargetedLogicalNotes(group.Key, keys))
             {
-                if (!keys.Contains((note.StartTick, note.Note))) continue;
                 yield return CollisionCandidate.ForList(
                     note.Id,
                     [new(CollisionScope.LogicalNote, group.Key.Id, note.StartTick, note.Note)],
@@ -277,16 +835,11 @@ internal static class ExactTimelineCollisionPolicy
                 .GroupBy(static target => target.SubVoice)
                 .OrderBy(static group => group.Key.Id))
         {
-            HashSet<(long Tick, int Key)> keys = group
-                .Select(static target => (target.Tick, target.Key))
+            HashSet<TargetedNoteKey> keys = group
+                .Select(static target => new TargetedNoteKey(target.Tick, target.Key))
                 .ToHashSet();
-            foreach (TemplateEvent value in group.Key.Events)
+            foreach (TemplateEvent value in QueryTargetedTemplateNotes(group.Key, keys))
             {
-                if (value.Kind != TemplateEventKind.Note
-                    || !keys.Contains((value.Tick, value.Number)))
-                {
-                    continue;
-                }
                 yield return CollisionCandidate.ForCollection(
                     value.Id,
                     [new(CollisionScope.TemplateNote, group.Key.Id, value.Tick, value.Number)],
@@ -297,11 +850,63 @@ internal static class ExactTimelineCollisionPolicy
             }
         }
 
+        HashSet<LogicalParameterLane> fullLogicalParameterLanes = scopes.LogicalParameterLanes.ToHashSet();
+        foreach (IGrouping<LogicalParameterLane, LogicalParameterPointCollisionTarget> group in
+            scopes.LogicalParameterPointTargets
+                .Where(target => !fullLogicalParameterLanes.Contains(target.Lane))
+                .GroupBy(static target => target.Lane)
+                .OrderBy(static group => group.Key.Id))
+        {
+            HashSet<long> ticks = group.Select(static target => target.Tick).ToHashSet();
+            foreach (CurvePoint point in QueryTargetedCurvePoints(group.Key.Points, ticks))
+            {
+                yield return CollisionCandidate.ForList(
+                    point.Id,
+                    [new(CollisionScope.LogicalParameterPoint, group.Key.Id, point.Tick, 0)],
+                    order++,
+                    group.Key.Points,
+                    point,
+                    "Logical Parameter point");
+            }
+        }
+
+        foreach (IGrouping<SubVoice, TemplateEventPointCollisionTarget> group in
+            scopes.TemplateEventPointTargets
+                .Where(target => !fullSubVoices.Contains(target.SubVoice))
+                .GroupBy(static target => target.SubVoice)
+                .OrderBy(static group => group.Key.Id))
+        {
+            HashSet<TargetedPointKey> keys = group
+                .Select(static target => new TargetedPointKey(target.Tick, target.Detail))
+                .ToHashSet();
+            foreach (TemplateEvent value in QueryTargetedTemplateEvents(group.Key, keys))
+            {
+                CollisionKey[] collisionKeys = TemplateEventExactCollision.GetNonNoteDetails(
+                        value.Kind,
+                        value.Number,
+                        value.HasBankMsb,
+                        value.HasBankLsb)
+                    .Select(detail => new CollisionKey(
+                        CollisionScope.TemplateEventPoint,
+                        group.Key.Id,
+                        value.Tick,
+                        detail))
+                    .Where(key => keys.Contains(new(key.Tick, key.Detail)))
+                    .ToArray();
+                yield return CollisionCandidate.ForCollection(
+                    value.Id,
+                    collisionKeys,
+                    order++,
+                    group.Key.Events,
+                    value,
+                    "Template Event");
+            }
+        }
+
         foreach (ValueCurve curve in scopes.ValueCurves.OrderBy(static value => value.Id))
         {
-            for (int index = 0; index < curve.Points.Count; index++)
+            foreach (CurvePoint point in curve.Points)
             {
-                CurvePoint point = curve.Points[index];
                 yield return CollisionCandidate.ForList(
                     point.Id,
                     [new(CollisionScope.ValueCurvePoint, curve.Id, point.Tick, 0)],
@@ -312,11 +917,30 @@ internal static class ExactTimelineCollisionPolicy
             }
         }
 
+        HashSet<ValueCurve> fullValueCurves = scopes.ValueCurves.ToHashSet();
+        foreach (IGrouping<ValueCurve, ValueCurvePointCollisionTarget> group in
+            scopes.ValueCurvePointTargets
+                .Where(target => !fullValueCurves.Contains(target.Curve))
+                .GroupBy(static target => target.Curve)
+                .OrderBy(static group => group.Key.Id))
+        {
+            HashSet<long> ticks = group.Select(static target => target.Tick).ToHashSet();
+            foreach (CurvePoint point in QueryTargetedCurvePoints(group.Key.Points, ticks))
+            {
+                yield return CollisionCandidate.ForList(
+                    point.Id,
+                    [new(CollisionScope.ValueCurvePoint, group.Key.Id, point.Tick, 0)],
+                    order++,
+                    group.Key.Points,
+                    point,
+                    "Value Curve point");
+            }
+        }
+
         foreach (MidiSegment segment in scopes.DirectMidiSegments.OrderBy(static value => value.Id))
         {
-            for (int index = 0; index < segment.Notes.Count; index++)
+            foreach (DirectMidiNote note in segment.Notes)
             {
-                DirectMidiNote note = segment.Notes[index];
                 yield return CollisionCandidate.ForList(
                     note.Id,
                     [new(CollisionScope.DirectMidiNote, segment.Id, note.StartTick, note.Key)],
@@ -325,9 +949,8 @@ internal static class ExactTimelineCollisionPolicy
                     note,
                     "Direct MIDI Note");
             }
-            for (int index = 0; index < segment.ChannelEvents.Count; index++)
+            foreach (DirectMidiChannelEvent value in segment.ChannelEvents)
             {
-                DirectMidiChannelEvent value = segment.ChannelEvents[index];
                 int selector = DirectMidiEventUsesData1Selector(value.Kind)
                     ? value.Data1 + 1
                     : 0;
@@ -397,16 +1020,22 @@ internal static class ExactTimelineCollisionPolicy
             or DirectMidiChannelEventKind.NoteOn
             or DirectMidiChannelEventKind.NoteOff;
 
+    private static bool ContainsId(MidoraId[]? values, MidoraId id) =>
+        values is not null && Array.IndexOf(values, id) >= 0;
+
     private sealed class CollisionResolvingPreparedEdit(
         IPreparedProjectEdit source,
         CollisionBaseline baseline,
-        CollisionScopeSet scopes) : IPreparedProjectEdit
+        CollisionScopeSet scopes) : IPreparedTimelineSelectionEdit, IDisposable
     {
         private IReadOnlyList<CollisionRemoval>? _lastRemovals;
         private bool _applyStarted;
 
         public bool HasChanges => source.HasChanges;
         public ProjectChangeSet Changes => source.Changes;
+        public bool HasPreparedSelection => source is IPreparedTimelineSelectionEdit { HasPreparedSelection: true };
+        public PreparedTimelineSelection PreparedSelection =>
+            GetPreparedSelection(source);
 
         public void Apply(MidoraProject project)
         {
@@ -431,17 +1060,91 @@ internal static class ExactTimelineCollisionPolicy
             _lastRemovals = null;
             _applyStarted = false;
         }
+
+        public void Dispose()
+        {
+            if (source is IDisposable disposable) disposable.Dispose();
+        }
+    }
+
+    private sealed class TargetedCollisionPreparedEdit(
+        IPreparedProjectEdit source,
+        IReadOnlyList<TargetedLogicalNoteBaseline> logicalBaselines,
+        IReadOnlyList<TargetedTemplateNoteBaseline> templateBaselines,
+        IReadOnlyList<TargetedDirectMidiNoteBaseline> directBaselines,
+        IReadOnlyList<TargetedLogicalParameterPointBaseline> logicalParameterBaselines,
+        IReadOnlyList<TargetedTemplateEventPointBaseline> templateEventBaselines,
+        IReadOnlyList<TargetedDirectMidiEventBaseline> directEventBaselines,
+        IReadOnlyList<TargetedValueCurvePointBaseline> valueCurveBaselines)
+        : IPreparedTimelineSelectionEdit, IDisposable
+    {
+        private IReadOnlyList<CollisionRemoval>? _lastRemovals;
+        private bool _applyStarted;
+
+        public bool HasChanges => source.HasChanges;
+        public ProjectChangeSet Changes => source.Changes;
+        public bool HasPreparedSelection => source is IPreparedTimelineSelectionEdit { HasPreparedSelection: true };
+        public PreparedTimelineSelection PreparedSelection =>
+            GetPreparedSelection(source);
+
+        public void Apply(MidoraProject project)
+        {
+            _applyStarted = true;
+            _lastRemovals = [];
+            source.Apply(project);
+            _lastRemovals = ResolveTargetedLogicalNotes(logicalBaselines)
+                .Concat(ResolveTargetedTemplateNotes(templateBaselines))
+                .Concat(ResolveTargetedDirectMidiNotes(directBaselines))
+                .Concat(ResolveTargetedLogicalParameterPoints(logicalParameterBaselines))
+                .Concat(ResolveTargetedTemplateEventPoints(templateEventBaselines))
+                .Concat(ResolveTargetedDirectMidiEvents(directEventBaselines))
+                .Concat(ResolveTargetedValueCurvePoints(valueCurveBaselines))
+                .ToArray();
+        }
+
+        public void Undo(MidoraProject project)
+        {
+            if (!_applyStarted || _lastRemovals is null)
+            {
+                throw new InvalidOperationException(
+                    "An exact-collision edit cannot be undone before Apply.");
+            }
+            foreach (CollisionRemoval removal in _lastRemovals.Reverse())
+                removal.Restore();
+            source.Undo(project);
+            _lastRemovals = null;
+            _applyStarted = false;
+        }
+
+        public void Dispose()
+        {
+            if (source is IDisposable disposable) disposable.Dispose();
+        }
     }
 
     private sealed record CollisionScopedPreparedEdit(
         IPreparedProjectEdit Source,
-        CollisionScopeSet Scopes) : IPreparedProjectEdit
+        CollisionScopeSet Scopes) : IPreparedTimelineSelectionEdit, IDisposable
     {
         public bool HasChanges => Source.HasChanges;
         public ProjectChangeSet Changes => Source.Changes;
+        public bool HasPreparedSelection => Source is IPreparedTimelineSelectionEdit { HasPreparedSelection: true };
+        public PreparedTimelineSelection PreparedSelection =>
+            GetPreparedSelection(Source);
         public void Apply(MidoraProject project) => Source.Apply(project);
         public void Undo(MidoraProject project) => Source.Undo(project);
+        public void Dispose()
+        {
+            if (Source is IDisposable disposable) disposable.Dispose();
+        }
     }
+
+    private static PreparedTimelineSelection GetPreparedSelection(
+        IPreparedProjectEdit source) =>
+        source is IPreparedTimelineSelectionEdit selectionEdit
+            ? selectionEdit.PreparedSelection
+            : throw new InvalidOperationException(
+                "A collision-scoped Timeline selection edit did not expose its frozen selection result.");
 
     private sealed record CollisionScopeSet(
         IReadOnlyCollection<Segment> LogicalNoteSegments,
@@ -452,7 +1155,10 @@ internal static class ExactTimelineCollisionPolicy
         IReadOnlyCollection<LogicalNoteCollisionTarget> LogicalNoteTargets,
         IReadOnlyCollection<TemplateNoteCollisionTarget> TemplateNoteTargets,
         IReadOnlyCollection<DirectMidiNoteCollisionTarget> DirectMidiNoteTargets,
-        IReadOnlyCollection<DirectMidiEventCollisionTarget> DirectMidiEventTargets)
+        IReadOnlyCollection<DirectMidiEventCollisionTarget> DirectMidiEventTargets,
+        IReadOnlyCollection<LogicalParameterPointCollisionTarget> LogicalParameterPointTargets,
+        IReadOnlyCollection<TemplateEventPointCollisionTarget> TemplateEventPointTargets,
+        IReadOnlyCollection<ValueCurvePointCollisionTarget> ValueCurvePointTargets)
     {
         public bool IsEmpty => LogicalNoteSegments.Count == 0
             && LogicalParameterLanes.Count == 0
@@ -462,7 +1168,24 @@ internal static class ExactTimelineCollisionPolicy
             && LogicalNoteTargets.Count == 0
             && TemplateNoteTargets.Count == 0
             && DirectMidiNoteTargets.Count == 0
-            && DirectMidiEventTargets.Count == 0;
+            && DirectMidiEventTargets.Count == 0
+            && LogicalParameterPointTargets.Count == 0
+            && TemplateEventPointTargets.Count == 0
+            && ValueCurvePointTargets.Count == 0;
+
+        public bool HasOnlyTargets =>
+            LogicalNoteTargets.Count
+                + TemplateNoteTargets.Count
+                + DirectMidiNoteTargets.Count
+                + DirectMidiEventTargets.Count
+                + LogicalParameterPointTargets.Count
+                + TemplateEventPointTargets.Count
+                + ValueCurvePointTargets.Count != 0
+            && LogicalNoteSegments.Count == 0
+            && LogicalParameterLanes.Count == 0
+            && SubVoices.Count == 0
+            && ValueCurves.Count == 0
+            && DirectMidiSegments.Count == 0;
 
         public static CollisionScopeSet Merge(CollisionScopeSet left, CollisionScopeSet right) =>
             new(
@@ -474,7 +1197,10 @@ internal static class ExactTimelineCollisionPolicy
                 left.LogicalNoteTargets.Concat(right.LogicalNoteTargets).Distinct().ToArray(),
                 left.TemplateNoteTargets.Concat(right.TemplateNoteTargets).Distinct().ToArray(),
                 left.DirectMidiNoteTargets.Concat(right.DirectMidiNoteTargets).Distinct().ToArray(),
-                left.DirectMidiEventTargets.Concat(right.DirectMidiEventTargets).Distinct().ToArray());
+                left.DirectMidiEventTargets.Concat(right.DirectMidiEventTargets).Distinct().ToArray(),
+                left.LogicalParameterPointTargets.Concat(right.LogicalParameterPointTargets).Distinct().ToArray(),
+                left.TemplateEventPointTargets.Concat(right.TemplateEventPointTargets).Distinct().ToArray(),
+                left.ValueCurvePointTargets.Concat(right.ValueCurvePointTargets).Distinct().ToArray());
     }
 
     private sealed record CollisionBaseline(
@@ -568,6 +1294,74 @@ internal static class ExactTimelineCollisionPolicy
     }
 
     private sealed record CollisionRemoval(Action Restore);
+
+    private sealed record TargetedDirectMidiNoteBaseline(
+        MidiSegment Segment,
+        IReadOnlySet<DirectMidiNoteStartKey> Keys,
+        IReadOnlyDictionary<DirectMidiNoteStartKey, MidoraId[]> Occupants);
+
+    private sealed record TargetedLogicalNoteBaseline(
+        Segment Segment,
+        IReadOnlySet<TargetedNoteKey> Keys,
+        IReadOnlyDictionary<TargetedNoteKey, MidoraId[]> Occupants);
+
+    private sealed record TargetedTemplateNoteBaseline(
+        SubVoice SubVoice,
+        IReadOnlySet<TargetedNoteKey> Keys,
+        IReadOnlyDictionary<TargetedNoteKey, MidoraId[]> Occupants);
+
+    private sealed record TargetedLogicalParameterPointBaseline(
+        LogicalParameterLane Lane,
+        IReadOnlySet<long> Ticks,
+        IReadOnlyDictionary<long, MidoraId[]> Occupants);
+
+    private sealed record TargetedTemplateEventPointBaseline(
+        SubVoice SubVoice,
+        IReadOnlySet<TargetedPointKey> Keys,
+        IReadOnlyDictionary<TargetedPointKey, MidoraId[]> Occupants);
+
+    private sealed record TargetedDirectMidiEventBaseline(
+        MidiSegment Segment,
+        IReadOnlySet<DirectMidiEventStartKey> Keys,
+        IReadOnlyDictionary<DirectMidiEventStartKey, MidoraId[]> Occupants);
+
+    private sealed record TargetedValueCurvePointBaseline(
+        ValueCurve Curve,
+        IReadOnlySet<long> Ticks,
+        IReadOnlyDictionary<long, MidoraId[]> Occupants);
+
+    private readonly record struct TargetedDirectMidiNoteCandidate(
+        DirectMidiNoteCollection Collection,
+        DirectMidiNote Note,
+        long Order);
+
+    private readonly record struct TargetedLogicalNoteCandidate(
+        LogicalNoteCollection Collection,
+        LogicalNote Note,
+        long Order);
+
+    private readonly record struct TargetedTemplateNoteCandidate(
+        TemplateEventCollection Collection,
+        TemplateEvent Note,
+        long Order);
+
+    private readonly record struct TargetedCurvePointCandidate(
+        CurvePointCollection Collection,
+        CurvePoint Value,
+        long Order);
+
+    private readonly record struct TargetedTemplatePointCandidate(
+        TargetedTemplateEventPointBaseline Baseline,
+        TemplateEvent Value,
+        long Order);
+
+    private readonly record struct TargetedDirectMidiEventCandidate(
+        DirectMidiChannelEventCollection Collection,
+        DirectMidiChannelEvent Value,
+        long Order);
+
+    private readonly record struct TargetedNoteKey(long Tick, int Key);
+    private readonly record struct TargetedPointKey(long Tick, int Detail);
 
     private readonly record struct CollisionKey(
         CollisionScope Scope,

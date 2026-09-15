@@ -57,7 +57,7 @@ public static partial class ProjectDomainEditCommands
         int? value) =>
         Command(commandName, project =>
         {
-            ValidateMidiStateValue(target, value);
+            MidiStateValueRules.Validate(target, value);
             MidiInitialState state = selectState(project);
             int? oldValue = GetMidiStateValue(state, target);
             return Prepared(
@@ -66,29 +66,6 @@ public static partial class ProjectDomainEditCommands
                 _ => SetMidiStateValue(state, target, value),
                 _ => SetMidiStateValue(state, target, oldValue));
         });
-
-    private static void ValidateMidiStateValue(MidiValueTarget target, int? value)
-    {
-        (int minimum, int maximum) = target.Kind switch
-        {
-            MidiValueKind.ControlChange when target.Number is >= 0 and <= 119
-                && target.Number is not 91 and not 93 => (0, 127),
-            MidiValueKind.BankMsb or MidiValueKind.BankLsb or MidiValueKind.Program
-                when target.Number == 0 => (0, 127),
-            MidiValueKind.PitchBend when target.Number == 0 => (-8192, 8191),
-            MidiValueKind.RegisteredParameter or MidiValueKind.NonRegisteredParameter
-                when target.Number is >= 0 and <= 16_383 => (0, 16_383),
-            MidiValueKind.PitchBendRangeSemitones when target.Number == 0 => (0, 127),
-            MidiValueKind.PitchBendRangeCents when target.Number == 0 => (0, 99),
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(target),
-                "The MIDI State target is unsupported or invalid.")
-        };
-        if (value is not null && (value < minimum || value > maximum))
-        {
-            throw new ArgumentOutOfRangeException(nameof(value));
-        }
-    }
 
     private static int? GetMidiStateValue(MidiInitialState state, MidiValueTarget target) =>
         target.Kind switch

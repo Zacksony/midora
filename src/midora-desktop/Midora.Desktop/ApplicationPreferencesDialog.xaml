@@ -17,7 +17,7 @@
         <TextBlock Margin="12,0" VerticalAlignment="Center" FontWeight="SemiBold" Text="Application Preferences"/>
         <Button Width="46" Height="38" HorizontalAlignment="Right" Style="{StaticResource Button.Caption.Close}" ToolTip="Close" Click="OnCancelClick"><ui:FluentIcon Style="{StaticResource Icon.WindowControl}" Data="{StaticResource WindowControl.Close}"/></Button>
       </Grid>
-      <TabControl Grid.Row="1" Margin="12,10,12,0">
+      <TabControl x:Name="PreferencesTabs" Grid.Row="1" Margin="12,10,12,0">
         <TabItem Header="Audio">
           <ScrollViewer Padding="10" VerticalScrollBarVisibility="Auto">
             <StackPanel>
@@ -44,9 +44,7 @@
               <Border Height="1" Margin="0,18" Background="{StaticResource Brush.Border}"/>
               <TextBlock Style="{StaticResource Text.Section}" Text="Audio Cache"/>
               <TextBlock Margin="0,5,0,14" Style="{StaticResource Text.Caption}" Text="Session and transient recovery data remain runtime state." TextWrapping="Wrap"/>
-              <TextBlock Style="{StaticResource Text.Overline}" Text="LOCAL CACHE ROOT"/>
-              <Grid Margin="0,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="CacheRootBox" IsReadOnly="True"/><Button Grid.Column="1" Width="82" Margin="7,0,0,0" Content="Browse…" Click="OnBrowseCacheClick"/></Grid>
-              <TextBlock Margin="0,12,0,0" Style="{StaticResource Text.Overline}" Text="MAXIMUM REUSABLE CACHE (GiB)"/>
+              <TextBlock Style="{StaticResource Text.Overline}" Text="MAXIMUM REUSABLE CACHE (GiB)"/>
               <TextBox x:Name="CacheQuotaBox" Width="190" Margin="0,5,0,0" HorizontalAlignment="Left"/>
               <TextBlock Margin="0,5,0,0" Style="{StaticResource Text.Caption}" Text="0 disables reusable audio-cache retention."/>
             </StackPanel>
@@ -63,12 +61,14 @@
                   <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <CheckBox VerticalAlignment="Center" IsChecked="{Binding Enabled}"/>
                   <StackPanel Grid.Column="2" VerticalAlignment="Center"><TextBlock FontWeight="SemiBold" Text="{Binding FileName}" TextTrimming="CharacterEllipsis"/><TextBlock Style="{StaticResource Text.Caption}" Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}"/></StackPanel>
-                  <StackPanel Grid.Column="4" Width="228"><CheckBox Content="Target mapping" IsChecked="{Binding HasTarget}" IsEnabled="{Binding TargetOptional}"/>
+                  <StackPanel Grid.Column="4" Width="272"><CheckBox Content="Target mapping" IsChecked="{Binding HasTarget}" IsEnabled="{Binding TargetOptional}"/>
                     <Grid Margin="0,5,0,0" IsEnabled="{Binding HasTarget}"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="7"/><ColumnDefinition Width="*"/><ColumnDefinition Width="7"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                       <StackPanel><TextBlock Style="{StaticResource Text.Overline}" Text="BANK MSB"/><TextBox Margin="0,3,0,0" Text="{Binding BankMsbText, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                       <StackPanel Grid.Column="2"><TextBlock Style="{StaticResource Text.Overline}" Text="BANK LSB"/><TextBox Margin="0,3,0,0" Text="{Binding BankLsbText, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                       <StackPanel Grid.Column="4"><TextBlock Style="{StaticResource Text.Overline}" Text="PROGRAM"/><TextBox Margin="0,3,0,0" Text="{Binding ProgramText, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                     </Grid>
+                    <TextBlock Margin="0,5,0,0" Style="{StaticResource Text.Caption}"
+                               Text="{Binding ResolvedTargetText}" TextWrapping="Wrap"/>
                   </StackPanel>
                 </Grid>
               </DataTemplate></ListBox.ItemTemplate>
@@ -80,7 +80,7 @@
         </TabItem>
       </TabControl>
       <Border x:Name="ValidationBorder" Grid.Row="2" Margin="18,8" Padding="9" Background="{StaticResource Brush.Red.Subtle}" BorderBrush="{StaticResource Brush.Red}" BorderThickness="1" CornerRadius="3" Visibility="Collapsed"><TextBlock x:Name="ValidationText" Foreground="{StaticResource Brush.Red.Hover}" TextWrapping="Wrap"/></Border>
-      <Border Grid.Row="3" Padding="10" Background="{StaticResource Brush.Surface.1}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0"><Grid><Button Width="132" HorizontalAlignment="Left" Content="Restore Defaults" Click="OnRestoreDefaultsClick"/><StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Margin="0,0,7,0" Style="{StaticResource Button.Dialog.Cancel}" Content="Cancel" Click="OnCancelClick"/><Button Style="{StaticResource Button.Dialog.Confirm}" Content="Apply" Click="OnApplyClick"/></StackPanel></Grid></Border>
+      <Border Grid.Row="3" Padding="10" Background="{StaticResource Brush.Surface.1}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0"><Grid><Button Width="132" HorizontalAlignment="Left" Content="Restore Defaults" Click="OnRestoreDefaultsClick"/><StackPanel HorizontalAlignment="Right" Orientation="Horizontal"><Button Margin="0,0,7,0" Style="{StaticResource Button.Dialog.Cancel}" Content="Cancel" IsCancel="True" Click="OnCancelClick"/><Button Style="{StaticResource Button.Dialog.Confirm}" Content="Apply" IsDefault="True" Click="OnApplyClick"/></StackPanel></Grid></Border>
     </Grid>
   </Border>
 </Window>

@@ -1,0 +1,73 @@
+<UserControl x:Class="Midora.Desktop.ConductorWorkspaceView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:Midora.Desktop"
+    xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+    Focusable="False" Tag="ConductorWorkspace">
+  <Grid Background="{DynamicResource Brush.Surface.0}">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="{Binding ConductorListWidth, Mode=TwoWay}" MinWidth="260" MaxWidth="720"/><ColumnDefinition Width="5"/><ColumnDefinition Width="*" MinWidth="240"/></Grid.ColumnDefinitions>
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Border Padding="8,0" Background="{DynamicResource Brush.Surface.1}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+        <TextBlock VerticalAlignment="Center" Text="CONDUCTOR EVENTS" Style="{DynamicResource Text.Overline}"/>
+      </Border>
+      <local:ConductorEventList x:Name="EventList" Grid.Row="1" Source="{Binding ConductorListSource}" FirstRow="{Binding ConductorListFirstRow, Mode=TwoWay}" Selection="{Binding SelectionSnapshot}">
+        <local:ConductorEventList.ContextMenu>
+          <ContextMenu>
+            <MenuItem Header="Properties…" InputGestureText="Ctrl+P" Click="OnPropertiesClick"/>
+            <MenuItem Header="Locate" Click="OnLocateClick"/>
+            <Separator/>
+            <MenuItem Header="Copy" InputGestureText="Ctrl+C" Click="OnCopyClick"/>
+            <MenuItem Header="Cut" InputGestureText="Ctrl+X" Click="OnCutClick"/>
+            <MenuItem Header="Paste" InputGestureText="Ctrl+V" Click="OnPasteClick"/>
+            <Separator/>
+            <MenuItem Header="Delete" InputGestureText="Delete" Click="OnDeleteClick"/>
+          </ContextMenu>
+        </local:ConductorEventList.ContextMenu>
+      </local:ConductorEventList>
+    </Grid>
+    <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+    <Grid Grid.Column="2">
+      <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="{Binding ConductorTempoHeight, Mode=TwoWay}" MinHeight="140"/><RowDefinition Height="5"/><RowDefinition Height="{Binding ConductorMetaHeight, Mode=TwoWay}" MinHeight="200"/><RowDefinition Height="22"/></Grid.RowDefinitions>
+      <Border Padding="8,0" Background="{DynamicResource Brush.Surface.1}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+        <Grid>
+          <StackPanel VerticalAlignment="Center" Orientation="Horizontal"><TextBlock Text="TEMPO" Style="{DynamicResource Text.Overline}" VerticalAlignment="Center"/><TextBlock Margin="10,0,0,0" Text="BPM · discrete states" Style="{DynamicResource Text.Caption}" VerticalAlignment="Center"/></StackPanel>
+          <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock Text="{Binding PointerPositionText, ElementName=TempoTimeline}" Style="{DynamicResource Text.Mono}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+            <Button Content="Fit" Height="23" Padding="8,0" ToolTip="Fit the BPM axis to visible Tempo states" Click="OnFitClick"/>
+            <Button x:Name="ResetTempoViewButton" Content="Reset" Height="23" Margin="4,0,0,0" Padding="8,0" ToolTip="Reset the BPM axis to 0–240; keep horizontal position and zoom" Click="OnResetTempoViewClick"/>
+            <Button Content="Axis…" Height="23" Margin="4,0,0,0" Padding="8,0" ToolTip="Set the displayed BPM range" Click="OnAxisClick"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+      <Grid Grid.Row="1" ClipToBounds="True">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/></Grid.ColumnDefinitions>
+        <ui:TimelineSurface x:Name="TempoTimeline" Tag="ConductorTempo" Focusable="True" SurfaceMode="EventLanes"
+            LaneHeaderWidthOverride="{x:Static ui:TimelineSurface.ConductorEditorLaneHeaderWidth}"
+            Snapshot="{Binding ConductorTempoSnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}"
+            StartTick="{Binding StartTick, Mode=TwoWay}" TickSpan="{Binding TickSpan, Mode=TwoWay}" FirstLane="0" LaneHeight="160"
+            ToolMode="{Binding ToolMode}" GridVisible="{Binding GridVisible}" GridStepTicks="{Binding GridStepTicks}"
+            OperationStepTicks="{Binding OperationStepTicks}" OperationUsesBars="{Binding EditorSettings.EffectiveOperationUsesBars}"
+            DisplayGridUsesBars="True" TimeSignatureMap="{Binding EditorSettings.TimeSignatureMap}"
+            ValueAxisMinimum="{Binding TempoAxisMinimum}" ValueAxisMaximum="{Binding TempoAxisMaximum}" ValueAxisIntegral="False"
+            EditCursorTick="{Binding EditCursorTick}" PlaybackCursorTick="{Binding PlaybackCursorTick}"
+            CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType=Window}}"
+            IsTimeRangeSelectionEnabled="False"/>
+        <ui:TimelinePlaybackCursorOverlay x:Name="TempoPlaybackCursor" StartTick="{Binding StartTick}" TickSpan="{Binding TickSpan}" SurfaceMode="EventLanes" LaneHeaderWidthOverride="{Binding LaneHeaderWidthOverride, ElementName=TempoTimeline}" PlaybackCursorTick="{Binding PlaybackCursorTick}"/>
+        <ScrollBar Grid.Column="1" Width="12" Orientation="Vertical" IsEnabled="{Binding CanScrollValues, ElementName=TempoTimeline}" Maximum="{Binding ValueScrollMaximum, ElementName=TempoTimeline}" Value="{Binding ValueScrollOffset, ElementName=TempoTimeline, Mode=TwoWay}" ViewportSize="{Binding ValueScrollViewportSize, ElementName=TempoTimeline}"/>
+      </Grid>
+      <GridSplitter Grid.Row="2" Height="5" HorizontalAlignment="Stretch" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+      <ui:TimelineSurface x:Name="MetaTimeline" Grid.Row="3" Margin="0,0,12,0" Tag="ConductorMeta" Focusable="True" SurfaceMode="Conductor"
+          LaneHeaderWidthOverride="{x:Static ui:TimelineSurface.ConductorEditorLaneHeaderWidth}"
+          Snapshot="{Binding Snapshot}" SelectionSnapshot="{Binding SelectionSnapshot}"
+          StartTick="{Binding StartTick, Mode=TwoWay}" TickSpan="{Binding TickSpan, Mode=TwoWay}" FirstLane="0" LaneHeight="44"
+          ToolMode="{Binding ToolMode}" GridVisible="{Binding GridVisible}" GridStepTicks="{Binding GridStepTicks}"
+          OperationStepTicks="{Binding OperationStepTicks}" OperationUsesBars="{Binding EditorSettings.EffectiveOperationUsesBars}"
+          DisplayGridUsesBars="True" TimeSignatureMap="{Binding EditorSettings.TimeSignatureMap}"
+          EditCursorTick="{Binding EditCursorTick}" PlaybackCursorTick="{Binding PlaybackCursorTick}"
+          CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType=Window}}"/>
+      <ui:TimelinePlaybackCursorOverlay x:Name="MetaPlaybackCursor" Grid.Row="3" Margin="0,0,12,0" StartTick="{Binding StartTick}" TickSpan="{Binding TickSpan}" SurfaceMode="Conductor" LaneHeaderWidthOverride="{Binding LaneHeaderWidthOverride, ElementName=MetaTimeline}" PlaybackCursorTick="{Binding PlaybackCursorTick}"/>
+      <ui:TimelineOverviewSurface x:Name="Overview" Grid.Row="4" Snapshot="{Binding ConductorTempoSnapshot}" StartTick="{Binding StartTick, Mode=TwoWay}" TickSpan="{Binding TickSpan}" ExtentEndTick="{Binding TimelineExtentEndTick}" PlaybackCursorTick="{Binding PlaybackCursorTick}" EditCursorTick="{Binding EditCursorTick}"/>
+    </Grid>
+  </Grid>
+</UserControl>

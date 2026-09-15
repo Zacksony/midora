@@ -67,6 +67,9 @@ public sealed class ProjectLogicalParameterEditCommandsTests
         using ProjectCompilationSession compilation = new(fixture.Project);
         ProjectDocumentSession document = PersistedDocument(compilation);
         CanonicalCompiledResult before = compilation.LastAttempt;
+        CompilerRunTelemetry telemetryBefore = compilation.LastCompilationTelemetry;
+        long sourceRevisionBefore = compilation.SourceRevision;
+        long compiledRevisionBefore = compilation.CompiledRevision;
         int compilationEvents = 0;
         compilation.CompilationChanged += (_, _) => compilationEvents++;
 
@@ -79,14 +82,18 @@ public sealed class ProjectLogicalParameterEditCommandsTests
 
         Assert.True(edit.Changed);
         Assert.Equal(before.Fingerprint, edit.CompilationResult.Fingerprint);
-        Assert.Equal(0, compilation.LastCompilationTelemetry.RecompiledTrackCount);
+        Assert.Equal(telemetryBefore, compilation.LastCompilationTelemetry);
+        Assert.Equal(sourceRevisionBefore, compilation.SourceRevision);
+        Assert.Equal(compiledRevisionBefore, compilation.CompiledRevision);
         Assert.Equal(1, compilationEvents);
         Assert.True(document.IsModified);
 
         CanonicalCompiledResult undone = document.Undo();
 
         Assert.Equal(before.Fingerprint, undone.Fingerprint);
-        Assert.Equal(0, compilation.LastCompilationTelemetry.RecompiledTrackCount);
+        Assert.Equal(telemetryBefore, compilation.LastCompilationTelemetry);
+        Assert.Equal(sourceRevisionBefore, compilation.SourceRevision);
+        Assert.Equal(compiledRevisionBefore, compilation.CompiledRevision);
         Assert.Equal(2, compilationEvents);
         Assert.False(document.IsModified);
         AssertCurrentCompilationMatchesFull(compilation);

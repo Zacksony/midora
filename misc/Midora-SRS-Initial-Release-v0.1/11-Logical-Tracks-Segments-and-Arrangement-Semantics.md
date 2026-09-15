@@ -203,6 +203,7 @@ Segment 包含 Logical Note
 Segment 包含 Logical Parameter Lane
 Segment 保存完整内容与当前有效裁剪窗口
 Segment 末尾形成 Reset 边界
+Segment 有效起点是 Pre-Roll 后实例 origin 的硬左边界
 Segment 不直接绑定 Event Instrument；它通过所在 Logical Track 的绑定被解释
 ```
 Segment 不是 Pattern。
@@ -322,6 +323,18 @@ Segment 内原 Note 数据不被修改
 自动续接 Note
 自动在新 Segment Start 处生成 Note On
 ```
+
+如果 Logical Note anchor 位于保留区，但其 Event Instrument `Pre-Roll Ticks` 使 Instance Origin 落在 Segment 有效起点之前：
+
+```text
+当前 Segment 编译产生 Error
+不得 Clamp 到 Segment Start
+不得丢弃前缀后继续生成
+不得自动向左扩张或移动 Segment
+不得跨前一个 Segment 的硬边界执行
+```
+
+这是源数据仍可保存、但该 Definition/Segment 使用组合不可正式消费的语义错误。用户必须显式向左扩张 Segment 的有效窗口、向右移动 Logical Note，或降低 Event Instrument 的 Pre-Roll Ticks。
 ### 11.8.6 多 Note 混合裁剪
 如果裁剪区同时影响多个 Logical Note：
 ```text
@@ -493,6 +506,7 @@ Logical Parameter Lane 可能变为断裂 / 不适用
 ### 11.11.1 定义
 Logical Note 是 Segment 内触发 Event Instrument Instance 的高层 Note 对象。
 Logical Note 不等同于 SubVoice 内部模板 Note。
+Logical Note start 是 Logical Gate anchor；当 Event Instrument `Pre-Roll Ticks > 0` 时，它不等于模板/实例 origin。
 Logical Note 至少包含：
 ```text
 稳定 ID
@@ -568,6 +582,8 @@ UI 必须明确显示其处于非活动裁剪区
 当前不参与编译
 UI 必须清楚显示超出部分非活动
 ```
+
+Logical Note 的 Pre-Roll 前缀不是隐藏裁剪内容。只有当 `anchor - Pre-Roll Ticks` 仍位于同一 Segment 当前有效窗口内时，该 Note 才可参与正式编译；Segment 左边界不提供隐式前滚空间。
 ---
 ## 11.12 Logical Parameter 系统入口
 ### 11.12.1 Logical Parameter 编曲控制要求
@@ -889,9 +905,9 @@ Clamp 到目标 MIDI 参数合法范围
 用户可手动排序 Mapping
 前一条输出作为后一条的 c
 ```
-如果后一条 Mapping 使用 C#：
+如果后一条 Mapping 使用 Mapping Function Expression：
 ```text
-C# 中的 c 是前一条 Mapping 的输出结果
+其 value 与 context.CurrentValue 是前一条 Mapping 的输出结果；context.TargetOriginalValue 仍是本次目标的原始有效值
 ```
 ### 11.16.9 同一参数映射多个目标
 同一个 Logical Parameter 映射到多个目标时：
@@ -900,30 +916,29 @@ C# 中的 c 是前一条 Mapping 的输出结果
 Mapping 有显式顺序
 不同目标之间顺序通常只用于确定性输出
 ```
-### 11.16.10 C# 自定义映射
-C# 自定义映射形式：
+### 11.16.10 Mapping Function Expression 映射
+Logical Parameter 的受限表达式映射概念形式为：
 ```text
-y = f(c, x, context)
+y = f(value, logicalParameterValue, context)
 ```
-Context 至少应包含以下系统级字段入口：
+ABI v3 中 `value` / `context.CurrentValue` 是当前累计链值，`context.TargetOriginalValue` 是目标原始有效值，`context.LogicalParameterValue` 是当前 Logical Parameter 有效值；可访问的 Context 只能来自第 9.6～9.7 节的精确数值/枚举白名单，包括：
 ```text
-projectTick
-segmentLocalTick
-templateTick
-logicalParameterId / name
-targetSubVoiceId / name
-targetEventType
-targetParameterKey
-triggerNote? / triggerVelocity?
+ProjectTick
+SegmentLocalTick
+TemplateTick
+TargetOriginalValue
+LogicalParameterValue
+CurrentEventKind
+CurrentParameter
+TriggerNote / TriggerVelocity（当场景允许每音符 Context 时）
 ```
-具体函数签名、Context 类型、可访问字段、Mapping Function 复用方式由 第 9 章《曲线、Logical Parameter 与映射》 / 第 12 章《编译系统与 Canonical Compiled Result》 细化。
-Logical Parameter Mapping 可以复用 Event Instrument 内 Mapping Function，也可以单独保存源码；最终方案由第 9 章《曲线、Logical Parameter 与映射》规定。
-C# 编译错误：
+具体签名、白名单、依赖推导和 Mapping Function 复用方式由第 9 章规定。Logical Parameter Mapping 引用 Event Instrument 内的 Mapping Function；不得另存一份自由 C# 方法体或使用不同执行器。
+表达式无法通过 ABI v3 验证或绑定：
 ```text
 Event Instrument 定义错误
 被实际使用时编译失败
 ```
-C# 运行时异常：
+表达式求值失败或产生非法结果：
 ```text
 立即中止当前播放 / 渲染 / 导出流程
 保留位置
@@ -984,11 +999,13 @@ Logical Parameter 在没有活动 Note / 实例时：
 之后若有新实例，读取该状态
 ```
 ### 11.17.6 Note On 时读取当前参数状态
-如果 Note 起点前已有参数有效值，而 Note 起点处没有新参数点：
+如果 Instance Origin 前已有参数有效值，而该实际起点处没有新参数点：
 ```text
-Note 起点实例应读取该参数当前有效值
+实例应从 Instance Origin 读取该参数当前有效值
 用于初始输出 / 后续状态
 ```
+
+对于 Pre-Roll 实例，后续每个模板/派生事件按其实际 absolute tick 读取参数状态；Logical Note anchor 之后才生效的值不得倒灌到前缀。
 如果需要在同一 tick 的 Note On 前设置 Mod / Exp / Pitch Bend 等目标状态：
 ```text
 编译器应在该 Note On 前插入对应参数映射输出事件
@@ -1202,6 +1219,8 @@ Segment 起点 Reset 边界语义
 解析活动实例上下文
 ```
 具体算法由第 13 章《播放与预览》规定。
+
+该入口继续服从范围冷启动：若某实例的 Pre-Roll origin 早于预览起点，则不补发其范围前 Note On，也不为重建 sample 相位执行隐藏音频预滚。
 ---
 ## 11.23 诊断入口
 ### 11.23.1 Logical Track Usage / Definition 错误
@@ -1218,6 +1237,8 @@ Mute / Solo 不隐藏项目数据错误
 仍诊断
 因为数据保存在项目中
 ```
+
+Logical Note anchor 虽在有效窗口内、但 `anchor - Pre-Roll Ticks` 早于该 Segment 有效起点时，不属于“隐藏内容不参与”的普通裁剪情况；它必须产生可定位到 Logical Note、Segment 与 Event Instrument Definition 的编译 Error。
 ### 11.23.4 断裂参数 Lane
 断裂参数 Lane：
 ```text
@@ -1244,13 +1265,13 @@ Logical Parameter Mapping 目标事件参数非法：
 Event Instrument 定义无效
 被实际使用时编译失败
 ```
-### 11.23.7 C# 错误
-C# 自定义逻辑参数映射编译错误：
+### 11.23.7 Mapping Function Expression 错误
+Logical Parameter Mapping 引用的表达式无法通过 ABI v3 验证或绑定：
 ```text
 Event Instrument 定义错误
 被实际使用时编译失败
 ```
-C# 运行时异常：
+表达式求值失败或产生 NaN / Infinity / 非法结果：
 ```text
 立即中止当前播放 / 渲染 / 导出流程
 保留位置
@@ -1264,6 +1285,7 @@ C# 运行时异常：
 ```text
 Segment 有效窗口裁剪
 Logical Note 触发 Event Instrument Instance
+Pre-Roll 后 Instance Origin 计算与 Segment 左边界验证
 Logical Parameter 有效状态解析
 Logical Parameter 与 SubVoice 原始事件合成
 同 tick 排序
@@ -1315,7 +1337,7 @@ Mute / Solo 的运行时归属
 ```text
 Logical Segment 包含 Logical Note 与 Logical Parameter Lane，并通过 Track 绑定的 Event Instrument 展开。
 MIDI Segment 包含 Direct MIDI Note 与 Direct MIDI Event，不绑定 Event Instrument，也不经过 Mapping / Lifecycle 展开。
-跨类型 Track 不允许直接移动 Segment；复制或粘贴必须经过显式、可诊断的内容转换，初版不提供该转换。
+跨类型 Track 的 Segment 移动、复制或粘贴必须经过第 20.6.14 节的统一显式转换；完整保留共同 Note 字段与隐藏音符，丢失非共同数据前必须一次汇总确认。
 ```
 
 MIDI Segment 的 Root 生命周期、跨 Pure MIDI Track 合并、直接事件排序、SMF 导入/导出及缓存归属以第 23 章为准；本章不得被解释为允许消费者把 Pure MIDI Track 强制转换成 Logical Track。

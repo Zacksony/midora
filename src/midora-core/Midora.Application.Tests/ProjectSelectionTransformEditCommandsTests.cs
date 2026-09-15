@@ -458,35 +458,42 @@ public sealed class ProjectSelectionTransformEditCommandsTests
         document.Execute(ProjectDomainEditCommands.FlipMidiSegmentsHorizontal(
             [first.Id],
             SegmentSelectionTransformScope.ExposedContentOnly));
-        Assert.Equal((10L, 130L), (hidden.StartTick, exposed.StartTick));
-        Assert.Equal((40L, 129L), (hiddenEvent.Tick, exposedEvent.Tick));
-        Assert.Equal((45L, 119L), (hiddenOpaque.Tick, exposedOpaque.Tick));
-        Assert.Equal(100, first.ProjectStartTick);
+        Assert.Equal((10L, 130L), (Note(hidden.Id).StartTick, Note(exposed.Id).StartTick));
+        Assert.Equal((40L, 129L), (Event(hiddenEvent.Id).Tick, Event(exposedEvent.Id).Tick));
+        Assert.Equal((45L, 119L), (Opaque(hiddenOpaque.Id).Tick, Opaque(exposedOpaque.Id).Tick));
+        Assert.Equal(100, Current(first.Id).ProjectStartTick);
         document.Undo();
 
         document.Execute(ProjectDomainEditCommands.FlipMidiSegmentsHorizontal(
             [first.Id, second.Id],
             SegmentSelectionTransformScope.ExposedContentAndSegments));
-        Assert.Equal((250L, 100L), (first.ProjectStartTick, second.ProjectStartTick));
+        Assert.Equal((250L, 100L), (Current(first.Id).ProjectStartTick, Current(second.Id).ProjectStartTick));
         document.Undo();
-        Assert.Equal((100L, 300L), (first.ProjectStartTick, second.ProjectStartTick));
-        Assert.Equal((60L, 70L, 80L), (exposed.StartTick, exposedEvent.Tick, exposedOpaque.Tick));
+        Assert.Equal((100L, 300L), (Current(first.Id).ProjectStartTick, Current(second.Id).ProjectStartTick));
+        Assert.Equal((60L, 70L, 80L), (Note(exposed.Id).StartTick, Event(exposedEvent.Id).Tick, Opaque(exposedOpaque.Id).Tick));
 
         document.Execute(ProjectDomainEditCommands.ScaleMidiSegments(
             [first.Id],
             factor: 2,
             SegmentSelectionTransformScope.ExposedContentOnly));
         Assert.Equal((10L, 70L, 90L, 110L), (
-            hidden.StartTick,
-            exposed.StartTick,
-            exposedEvent.Tick,
-            exposedOpaque.Tick));
+            Note(hidden.Id).StartTick,
+            Note(exposed.Id).StartTick,
+            Event(exposedEvent.Id).Tick,
+            Opaque(exposedOpaque.Id).Tick));
         document.Undo();
 
         document.Execute(ProjectDomainEditCommands.TransposeMidiSegments([first.Id], semitones: 60));
-        Assert.Same(hidden, Assert.Single(first.Notes));
+        Assert.Equal(hidden.Id, Assert.Single(Current(first.Id).Notes).Id);
         document.Undo();
-        Assert.Equal([hidden, exposed], first.Notes);
+        Assert.Equal([hidden.Id, exposed.Id], Current(first.Id).Notes.Select(static value => value.Id));
+        Assert.Equal(Enumerable.Range(0, first.Notes.Count).Select(first.Notes.CreateObjectSource().GetByOrdinal),
+            Enumerable.Range(0, Current(first.Id).Notes.Count).Select(Current(first.Id).Notes.CreateObjectSource().GetByOrdinal));
+
+        MidiSegment Current(MidoraId id) => project.PureMidiTracks.SelectMany(static value => value.Segments).Single(value => value.Id == id);
+        DirectMidiNote Note(MidoraId id) => Current(first.Id).Notes.Single(value => value.Id == id);
+        DirectMidiChannelEvent Event(MidoraId id) => Current(first.Id).ChannelEvents.Single(value => value.Id == id);
+        OpaqueMidiEvent Opaque(MidoraId id) => Current(first.Id).OpaqueEvents.Single(value => value.Id == id);
     }
 
     [Fact]

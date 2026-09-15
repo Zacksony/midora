@@ -1,0 +1,124 @@
+<Window x:Class="Midora.Desktop.NoteSplitHelpDialog"
+        FontFamily="{StaticResource Font.UI}"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+        Title="Note Split Help"
+        Width="790" Height="650" MinWidth="650" MinHeight="480"
+        Background="{StaticResource Brush.Surface.0}" WindowStyle="None"
+        ResizeMode="CanResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False" UseLayoutRounding="True" SnapsToDevicePixels="True">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="36" CornerRadius="0" GlassFrameThickness="0"
+                        ResizeBorderThickness="6" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+  <Window.Resources>
+    <Style x:Key="SplitHelp.Title" TargetType="TextBlock" BasedOn="{StaticResource Text.Section}">
+      <Setter Property="Margin" Value="0,0,0,8"/>
+    </Style>
+    <Style x:Key="SplitHelp.Body" TargetType="TextBlock" BasedOn="{StaticResource Text.Muted}">
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="LineHeight" Value="19"/>
+    </Style>
+    <Style x:Key="SplitHelp.Code" TargetType="TextBlock" BasedOn="{StaticResource Text.Mono}">
+      <Setter Property="Foreground" Value="#DCDCAA"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </Window.Resources>
+  <Border BorderBrush="{StaticResource Brush.Border.Strong}" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/><RowDefinition Height="58"/></Grid.RowDefinitions>
+      <Grid Background="{StaticResource Brush.Black}" MouseLeftButtonDown="OnTitleMouseLeftButtonDown">
+        <TextBlock Margin="11,0,44,0" VerticalAlignment="Center" FontWeight="SemiBold" Text="Note Split Help"/>
+        <Button Width="46" Height="36" HorizontalAlignment="Right" Style="{StaticResource Button.Caption.Close}"
+                Click="OnCloseClick"><ui:FluentIcon Style="{StaticResource Icon.WindowControl}" Data="{StaticResource WindowControl.Close}"/></Button>
+      </Grid>
+      <ScrollViewer Grid.Row="1" Padding="18,15" HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,13">
+            <StackPanel>
+              <TextBlock Style="{StaticResource SplitHelp.Title}" Text="How the three modes work"/>
+              <Grid Margin="0,0,0,7">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock FontWeight="SemiBold" Text="Fixed Piece Length"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                           Text="Places equally spaced knives using the specified Tick length."/>
+              </Grid>
+              <Grid Margin="0,0,0,7">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock FontWeight="SemiBold" Text="Maximum Piece Count"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                           Text="Divides the selected time span into at most the requested number of balanced pieces."/>
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock FontWeight="SemiBold" Text="Expression"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                           Text="Evaluates one bounded expression for each knife. The result is the next piece length in Ticks."/>
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}" Margin="0,0,0,13">
+            <StackPanel>
+              <TextBlock Style="{StaticResource SplitHelp.Title}" Text="Expression variables"/>
+              <Grid Margin="0,0,0,7">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="65"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Style="{StaticResource SplitHelp.Code}" Text="i"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                           Text="Zero-based knife index: 0 for the first knife, 1 for the second, and so on."/>
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="65"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <TextBlock Style="{StaticResource SplitHelp.Code}" Text="tr"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                           Text="Previous knife position relative to the selection's left edge. It is 0 before the first knife."/>
+              </Grid>
+              <TextBlock Margin="0,9,0,0" Style="{StaticResource SplitHelp.Body}"
+                         Text="The expression must start with =. System.Math functions are available directly or through Math., with the same safe syntax, limits, colors, bracket matching, and completion as Batch Edit."/>
+            </StackPanel>
+          </Border>
+
+          <TextBlock Style="{StaticResource SplitHelp.Title}" Text="Examples"/>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,8">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="205"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource SplitHelp.Code}" Text="=192"/>
+              <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                         Text="Place a knife every 192 Ticks."/>
+            </Grid>
+          </Border>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,8">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="205"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource SplitHelp.Code}" Text="=96 + i * 12"/>
+              <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                         Text="Make every successive piece 12 Ticks longer."/>
+            </Grid>
+          </Border>
+          <Border Style="{StaticResource Card}" Margin="0,0,0,13">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="205"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource SplitHelp.Code}" Text="=Max(24, 192 - tr / 8)"/>
+              <TextBlock Grid.Column="1" Style="{StaticResource SplitHelp.Body}"
+                         Text="Gradually shorten pieces while keeping a 24-Tick minimum."/>
+            </Grid>
+          </Border>
+
+          <Border Padding="11,9" Background="{StaticResource Brush.Info.Subtle}"
+                  BorderBrush="#28517A" BorderThickness="1" CornerRadius="3">
+            <TextBlock Style="{StaticResource SplitHelp.Body}"
+                       Text="Each returned length is rounded away from zero and clamped to at least 1 Tick. Splitting stops at the right edge or at Maximum Cuts. Empty gaps still count because knives belong to the selected time span, not to individual notes."/>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+      <Border Grid.Row="2" Padding="12,10" Background="{StaticResource Brush.Surface.1}"
+              BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0">
+        <Button HorizontalAlignment="Right" IsDefault="True" IsCancel="True" Style="{StaticResource Button.Dialog.Confirm}"
+                Content="Close" Click="OnCloseClick"/>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

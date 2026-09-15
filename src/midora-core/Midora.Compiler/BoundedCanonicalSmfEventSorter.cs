@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using Microsoft.Win32.SafeHandles;
 using Midora.Domain;
 using Midora.Midi;
+using Midora.Common;
 
 namespace Midora.Compiler;
 
@@ -16,6 +17,7 @@ internal sealed class BoundedCanonicalSmfEventSorter : IDisposable
     private readonly int _maximumMergeFanIn;
     private readonly List<CanonicalSmfTrackChannelEvent> _buffer;
     private readonly List<RunDescriptor> _runs = [];
+    private MidoraOwnedTemporaryDirectoryLease? _runDirectoryLease;
     private FileStream? _runFile;
     private string? _runPath;
     private bool _reading;
@@ -86,13 +88,8 @@ internal sealed class BoundedCanonicalSmfEventSorter : IDisposable
         _disposed = true;
         _runFile?.Dispose();
         _runFile = null;
-        if (_runPath is not null)
-        {
-            try { File.Delete(_runPath); } catch (IOException) { }
-            try { Directory.Delete(Path.GetDirectoryName(_runPath)!); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
+        _runDirectoryLease?.Dispose();
+        _runDirectoryLease = null;
     }
 
     private void FlushRun()
@@ -189,13 +186,10 @@ internal sealed class BoundedCanonicalSmfEventSorter : IDisposable
     private void EnsureRunFile()
     {
         if (_runFile is not null) return;
-        string directory = Path.Combine(
-            Path.GetTempPath(),
-            "Midora",
-            "CanonicalRuns",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        _runPath = Path.Combine(directory, "smf-channel.runs");
+        _runDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.CompilerRunsDirectory,
+            "smf-sort");
+        _runPath = Path.Combine(_runDirectoryLease.DirectoryPath, "smf-channel.runs");
         _runFile = OpenRunFile(_runPath);
     }
 
@@ -266,7 +260,16 @@ internal sealed class BoundedCanonicalSmfEventSorter : IDisposable
         MidiMessage.FromPackedValue(BinaryPrimitives.ReadUInt32LittleEndian(source[32..])),
         (CanonicalEventRole)source[38],
         BinaryPrimitives.ReadInt64LittleEndian(source[16..]),
-        MidoraId.FromSequence(BinaryPrimitives.ReadInt64LittleEndian(source[24..])));
+        ReadOptionalSourceId(source[24..]));
+
+    private static MidoraId ReadOptionalSourceId(ReadOnlySpan<byte> source)
+    {
+        // Root lifecycle/default events have a required ExportTrackId, but no
+        // direct source object. Preserve that absence across spill/merge just
+        // as the resident path does; negative/corrupt IDs must still fail.
+        long value = BinaryPrimitives.ReadInt64LittleEndian(source);
+        return value == 0 ? default : MidoraId.FromSequence(value);
+    }
 
     private readonly record struct RunDescriptor(long Offset, int RecordCount);
 
@@ -325,8 +328,17 @@ internal sealed class BoundedCanonicalSmfEventSorter : IDisposable
         {
             int value = x.Tick.CompareTo(y.Tick);
             if (value != 0) return value;
+            value = x.Role.CompareTo(y.Role);
+            if (value != 0) return value;
             value = x.EventOrder.CompareTo(y.EventOrder);
             if (value != 0) return value;
+            if (x.Role == CanonicalEventRole.DirectMidi
+                && y.Role == CanonicalEventRole.DirectMidi)
+            {
+                value = CanonicalMidiOrdering.DirectEndpointOrder(x.Message).CompareTo(
+                    CanonicalMidiOrdering.DirectEndpointOrder(y.Message));
+                if (value != 0) return value;
+            }
             value = KindOrder(x.Role).CompareTo(KindOrder(y.Role));
             if (value != 0) return value;
             return x.SourceObjectId.CompareTo(y.SourceObjectId);

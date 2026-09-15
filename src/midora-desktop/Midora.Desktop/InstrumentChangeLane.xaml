@@ -1,0 +1,17 @@
+<UserControl x:Class="Midora.Desktop.InstrumentChangeLane"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:local="clr-namespace:Midora.Desktop"
+ xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+ Tag="InstrumentChanges" Focusable="True" IsTabStop="True" InputMethod.IsInputMethodEnabled="False" Loaded="OnLoaded" Unloaded="OnUnloaded">
+ <Grid Background="{DynamicResource Brush.Surface.0}">
+  <Grid ClipToBounds="True">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/></Grid.ColumnDefinitions>
+   <ui:TimelineSurface x:Name="Backdrop" SurfaceMode="Conductor" CanEdit="False" IsHitTestVisible="False" IsTimeRangeSelectionEnabled="False"
+     LaneHeaderWidthOverride="64" DisplayGridUsesBars="True" FirstLane="0"/>
+   <local:InstrumentChangeLaneVisual x:Name="Points"/>
+   <local:InstrumentChangeGestureVisual x:Name="GestureOverlay" IsHitTestVisible="False"/>
+   <Border Grid.Column="1" Background="{DynamicResource Brush.Surface.1}"/>
+  </Grid>
+ </Grid>
+</UserControl>

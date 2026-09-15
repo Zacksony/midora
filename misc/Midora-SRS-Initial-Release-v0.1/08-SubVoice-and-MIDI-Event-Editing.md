@@ -1185,10 +1185,10 @@ Program Change 是离散事件，不允许曲线化。
 规则：
 ```text
 Program Change 可在不同 tick 放置多个离散事件
-Program Change UI 显示 Program 1–128
+Program Change UI 显示 Program 0–127
 内部 Program value 使用 0–127
-初版不显示 GM 名称
-初版不显示 SF2 preset / instrument 名称
+名称由程序级 Instrument Catalog resolver 提供，缺失时数值回退
+不得为展示名称隐式扫描 SoundFont 或读取 sample
 ```
 Program value 允许映射。
 映射规则：
@@ -1238,6 +1238,18 @@ Program Change 与 Program Change 冲突
 Bank Select 与 Program Change 彼此不冲突
 ```
 ---
+### 8.55.4 显式 Instrument Change 编辑关联
+
+用户可在 MIDI Segment/SubVoice 的 `Inst.` 显式创建乐器变化点。它只有一个稳定包装 ID 和同 owner 的成员 ID：Direct MIDI 为 CC0/CC32/Program 三条；SubVoice 为同时具有 MSB/LSB 的完整 Bank 与 Program 两条。Tick 和 MIDI 值仍只在 raw 成员中；包装不是新的音乐事件或 Mapping owner，Compiler 不重新解释它。
+
+完整关联要求成员同 Tick、target 正确且每条成员只属于一个包装。raw 值编辑保留包装；正式原子事务最终态的部分删除/错位/目标改变/碰撞替换使包装解组，但不得删除幸存 raw 或补成员。整组移动按最终态校验，不因中间状态误解组；父对象复制必须重映射身份，Split 将完整关联交给实际成员所在 owner。一次 Undo/Redo 同时还原音乐成员、关联和稳定 ID。
+
+新 Direct MIDI 组按 CC0→CC32→Program 插入本 Track 同 Tick NoteOn 之前；原同 Tick 消息之间保序，不改共享 Root 中较早 Track 的正式顺序。SubVoice 沿用 Bank→Program→Note 类别顺序。导入 MIDI 不发现或自动创建包装，原始 Bank/PC、部分 Bank 和可选 Mapping 入口仍保留。
+
+关联是持久 source 编辑组织数据，严格保存到 §16.35 的 Format 4；不是可损坏丢弃的 presentation。Initial State 的统一选择器另按三个独立 override/inherit 位工作，不生成 Tick 0 点、不改变模板长度；显式选择完整 preset 才同时覆盖三个字段。
+
+完整包装支持 Copy/Cut/Paste/Delete、水平 Move/Ctrl 复制拖动、水平 Flip、Scale、Quantize 和多选 Properties。所有成员在同一个有界、可取消事务中处理，不能按中间态拆组；结果选择为实际幸存成员，Undo 恢复原成员选择，混合选择中未处理对象保持。Properties 的 Tick、MSB、LSB、Program 使用显式 Mixed 统一赋值/还原；不提供纵移、移调、Note Split/Join 或普通单 Point Value 的 Batch 表达式。Move/复制拖动共同夹止于内容 Tick 0；Flip/Scale 产生同 target 同 Tick 碰撞时拒绝，其他适用编辑仍服从事件后来者覆盖规则。新复制包装才建立新的插入顺序，已有包装不因值编辑或移动而重建身份/正式顺序。
+
 ## 8.56 Pitch Bend 与 Pitch Bend Range
 ### 8.56.1 Pitch Bend
 Pitch Bend 支持曲线编辑，并在编译 / 导出时离散化为 Pitch Bend 事件。
@@ -1502,7 +1514,7 @@ Initial State 不混入普通时间线事件 Lane
 ```text
 Initial State 只支持固定值
 Initial State 不支持图形映射
-Initial State 不支持 C# 映射
+Initial State 不支持 Mapping Function Expression
 ```
 理由：
 ```text
@@ -1710,7 +1722,7 @@ Per-Note Instance Isolation 关闭时，启用映射依赖每音符上下文
 ### 8.63.2 警告
 以下情况不阻止整曲编译，但应在诊断中显示为警告：
 ```text
-未被引用但 C# 编译错误的 Mapping Function
+未被引用但无法通过 ABI v3 验证或绑定的 Mapping Function
 打开项目时发现 Mapping Function 引用断裂
 ```
 具体是否在打开时弹窗、诊断面板合并显示、是否支持跳转，由 第 15 章《音频文件渲染》 / 第 17～20 章的 UI 与交互规格 细化。

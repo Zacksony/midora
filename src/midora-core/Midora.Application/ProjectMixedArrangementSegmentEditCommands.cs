@@ -121,6 +121,8 @@ public static partial class ProjectDomainEditCommands
                     endDelta,
                     minimumLengthTicks));
             }
+            if (factories.Count == 1)
+                return factories[0](project).Prepare(project);
             return new SequentialProjectEditCommand(
                 "Adjust Arrangement Segment edges",
                 factories).Prepare(project);
@@ -150,6 +152,8 @@ public static partial class ProjectDomainEditCommands
                     selection.MidiIds));
             }
             if (finalFactory is not null) factories.Add(finalFactory);
+            if (factories.Count == 1)
+                return factories[0](project).Prepare(project);
             return new SequentialProjectEditCommand(name, factories).Prepare(project);
         });
 
@@ -262,24 +266,41 @@ public static partial class ProjectDomainEditCommands
                 "Arrangement Segment IDs must be distinct and valid.",
                 nameof(segmentIds));
         }
-        SegmentTransformEntry[] logical = project.Tracks
-            .SelectMany(track => track.Segments.Select((segment, index) =>
-                new SegmentTransformEntry(track, segment, index)))
-            .Where(value => requested.Remove(value.Segment.Id))
-            .ToArray();
-        MidiSegmentSelection[] midi = project.PureMidiTracks
-            .SelectMany(track => track.Segments.Select((segment, index) =>
-                new MidiSegmentSelection(
-                    track,
-                    segment,
-                    index,
-                    segment.ProjectStartTick)))
-            .Where(value => requested.Remove(value.Segment.Id))
-            .ToArray();
-        if (requested.Count != 0)
+        List<SegmentTransformEntry> logicalValues = [];
+        List<MidiSegmentSelection> midiValues = [];
+        foreach (MidoraId id in requested)
         {
+            if (ProjectSegmentIndex.FindLogical(project, id) is LogicalSegmentIndexEntry logicalEntry)
+            {
+                logicalValues.Add(new(logicalEntry.Track, logicalEntry.Segment, logicalEntry.Index));
+                continue;
+            }
+            if (ProjectSegmentIndex.FindMidi(project, id) is MidiSegmentIndexEntry midiEntry)
+            {
+                midiValues.Add(new(
+                    midiEntry.Track,
+                    midiEntry.Segment,
+                    midiEntry.Index,
+                    midiEntry.Segment.ProjectStartTick));
+                continue;
+            }
             throw new ArgumentOutOfRangeException(nameof(segmentIds));
         }
+
+        Dictionary<LogicalTrack, int> logicalTrackOrder = project.Tracks
+            .Select((track, index) => (track, index))
+            .ToDictionary(static value => value.track, static value => value.index);
+        Dictionary<PureMidiTrack, int> midiTrackOrder = project.PureMidiTracks
+            .Select((track, index) => (track, index))
+            .ToDictionary(static value => value.track, static value => value.index);
+        SegmentTransformEntry[] logical = logicalValues
+            .OrderBy(value => logicalTrackOrder[value.Track])
+            .ThenBy(value => value.Index)
+            .ToArray();
+        MidiSegmentSelection[] midi = midiValues
+            .OrderBy(value => midiTrackOrder[value.Track])
+            .ThenBy(value => value.Index)
+            .ToArray();
         long minimum = logical.Select(value => value.Segment.ProjectStartTick)
             .Concat(midi.Select(value => value.Segment.ProjectStartTick))
             .Min();

@@ -8,6 +8,52 @@ namespace Midora.Playback.Tests;
 public sealed class PlaybackTests
 {
     [Fact]
+    public void PresetWithoutSoundFontReleasesEditLockAndDoesNotMoveMainCursor()
+    {
+        using var project = CreateProject();
+        using var session = new ProjectCompilationSession(project);
+        using var controller = new PlaybackController(session, new FakeBackend());
+        controller.Seek(240);
+        Guid owner = Guid.NewGuid();
+        Assert.ThrowsAny<Exception>(() => controller.StartInstrumentPresetPreview(owner, new(0, 0, 0), false));
+        controller.StopInstrumentPresetPreview(owner);
+        Assert.False(session.EditsLocked); Assert.Equal(240, controller.CurrentTick);
+        Assert.NotEqual(PlaybackState.Playing, controller.State);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PresetPreviewUsesExplicitOwnershipAndKeepsMainCursor(bool held)
+    {
+        string soundFont = CreateTemporarySoundFont();
+        try
+        {
+            using var project = CreateProject();
+            using var session = new ProjectCompilationSession(project, soundFont);
+            var backend = new FakeBackend();
+            using var controller = new PlaybackController(session, backend);
+            Guid owner = Guid.NewGuid(); controller.Seek(240);
+            controller.StartInstrumentPresetPreview(owner, new(0, 0, 7), held);
+            Assert.Equal(PlaybackTaskKind.InstrumentPresetPreview, controller.ActiveTaskKind);
+            Assert.Equal(PlaybackState.Playing, controller.State);
+            Assert.Equal(240, controller.CurrentTick); Assert.True(session.EditsLocked);
+            controller.StopInstrumentPresetPreview(Guid.NewGuid());
+            Assert.Equal(PlaybackState.Playing, controller.State);
+            if (held)
+            {
+                controller.ReleaseInstrumentPresetPreviewKey(owner);
+                Assert.False(controller.IsHeldPreviewGateOpen);
+            }
+            controller.StopInstrumentPresetPreview(owner);
+            Assert.False(session.EditsLocked); Assert.Equal(240, controller.CurrentTick);
+            controller.Start();
+            controller.StopInstrumentPresetPreview(owner);
+            Assert.Equal(PlaybackTaskKind.MainTimeline, controller.ActiveTaskKind);
+        }
+        finally { File.Delete(soundFont); }
+    }
+
+    [Fact]
     public void EffectiveSoundFontSetIdentityChangesWhenFileMetadataChangesAtTheSamePath()
     {
         string soundFont = CreateTemporarySoundFont();
@@ -391,6 +437,86 @@ public sealed class PlaybackTests
             Assert.Equal(2, backend.PrepareCount);
             Assert.Equal(0, session.PlaybackRangeCompilationCount);
             Assert.NotNull(backend.LastStartedPlan);
+            controller.Stop();
+        }
+        finally
+        {
+            File.Delete(soundFont);
+        }
+    }
+
+    [Fact]
+    public void FirstPlaybackIncludesLogicalTrackCreatedAfterPlaybackControllerConstruction()
+    {
+        string soundFont = CreateTemporarySoundFont();
+        try
+        {
+            MidoraProject project = new(480);
+            using ProjectCompilationSession session = new(project, soundFont);
+            FakeBackend backend = new();
+            using PlaybackController controller = new(session, backend);
+            MidoraId trackId = default;
+
+            session.ApplyEdit(
+                editedProject =>
+                {
+                    EventInstrument instrument = new(editedProject)
+                    {
+                        Name = "New Instrument",
+                        TemplateLengthTicks = 480,
+                        OverlapPolicy = OverlapPolicy.Warn
+                    };
+                    SubVoice voice = new(editedProject);
+                    voice.Events.Add(TemplateEvent.Note(
+                        editedProject,
+                        0,
+                        480,
+                        60,
+                        100));
+                    instrument.SubVoices.Add(voice);
+                    editedProject.EventInstruments.Add(instrument);
+                    LogicalTrack track = new(editedProject) { Name = "New Track" };
+                    ProjectGraphConstruction.AddIndependentLogicalTrack(
+                        editedProject,
+                        track,
+                        instrument.Id);
+                    Segment segment = new(editedProject) { LengthTicks = 960 };
+                    segment.Notes.Add(new LogicalNote(editedProject)
+                    {
+                        StartTick = 0,
+                        LengthTicks = 480,
+                        Note = 60,
+                        Velocity = 100
+                    });
+                    track.Segments.Add(segment);
+                    trackId = track.Id;
+                },
+                ProjectChangeSet.Everything);
+
+            controller.Start();
+
+            MidiRenderPlan plan = Assert.IsType<MidiRenderPlan>(backend.LastStartedPlan);
+            int sourceIndex = Array.IndexOf(plan.SourceIds.ToArray(), trackId.Value);
+            Assert.True(sourceIndex >= 0);
+            Assert.DoesNotContain(sourceIndex, plan.InitiallyDisabledSourceIndices.ToArray());
+            bool containsNoteOn = false;
+            foreach (MidiPortRenderPlan port in plan.Ports)
+            {
+                foreach (ScheduledMidiMessage midiEvent in port.Events)
+                {
+                    if (midiEvent.SourceIndex == sourceIndex
+                        && midiEvent.Message.MessageType == MidiMessageType.NoteOn)
+                    {
+                        containsNoteOn = true;
+                        break;
+                    }
+                }
+
+                if (containsNoteOn)
+                    break;
+            }
+
+            Assert.True(containsNoteOn);
             controller.Stop();
         }
         finally
@@ -1098,12 +1224,13 @@ public sealed class PlaybackTests
             FakeBackend backend = new();
             using PlaybackController controller = new(session, backend);
 
-            InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+            CompilationRejectedException failure = Assert.Throws<CompilationRejectedException>(() =>
                 controller.StartSegmentPreview(
                     project.Tracks[0].Id,
                     project.Tracks[0].Segments[0].Id));
 
             Assert.Contains("MIDORA1306", failure.Message, StringComparison.Ordinal);
+            Assert.Contains(failure.Diagnostics, diagnostic => diagnostic.Code == "MIDORA1306");
             Assert.Equal(PlaybackState.Error, controller.State);
             Assert.Equal(PlaybackTaskKind.None, controller.ActiveTaskKind);
             Assert.False(session.EditsLocked);
@@ -2180,6 +2307,34 @@ public sealed class PlaybackTests
             $"midora-playback-{Guid.NewGuid():N}.sf2");
         File.WriteAllBytes(path, []);
         return path;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TimelineNavigationSeeksWhilePlayingOrBufferingAndCanStillStop(bool buffering)
+    {
+        string soundFont = CreateTemporarySoundFont();
+        try
+        {
+            using ProjectCompilationSession session = new(CreateProject(), soundFont);
+            using RecoveryBackend backend = new();
+            using PlaybackController controller = new(session, backend);
+            controller.Start();
+            backend.PositionFrames = 4800;
+            backend.IsBuffering = buffering;
+            controller.Update();
+            Assert.Equal(buffering ? PlaybackState.Buffering : PlaybackState.Playing, controller.State);
+            controller.Seek(240);
+            Assert.Equal(PlaybackState.Playing, controller.State);
+            Assert.Equal(240, controller.CurrentTick);
+            Assert.Equal(1, backend.StopCount);
+            Assert.Equal(PlaybackTaskKind.MainTimeline, controller.ActiveTaskKind);
+            controller.Stop();
+            Assert.Equal(PlaybackState.Stopped, controller.State);
+            Assert.False(session.EditsLocked);
+        }
+        finally { File.Delete(soundFont); }
     }
 
     private sealed class ManualTimeProvider : TimeProvider

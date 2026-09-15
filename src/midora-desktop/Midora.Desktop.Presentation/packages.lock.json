@@ -2,10 +2,14 @@
   "version": 1,
   "dependencies": {
     "net10.0-windows7.0": {
+      "midora.common": {
+        "type": "Project"
+      },
       "midora.domain": {
         "type": "Project",
         "dependencies": {
-          "Midora.Mapping.Contract.V2": "[1.0.0, )"
+          "Midora.Common": "[1.0.0-dev, )",
+          "Midora.Mapping.Contract.V2": "[1.0.0-dev, )"
         }
       },
       "midora.mapping.contract.v2": {

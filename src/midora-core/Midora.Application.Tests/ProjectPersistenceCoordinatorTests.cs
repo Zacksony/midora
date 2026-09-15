@@ -259,7 +259,7 @@ public sealed class ProjectPersistenceCoordinatorTests
     }
 
     [Fact]
-    public void ConstructorRejectsOriginPathAndFileInformationMismatch()
+    public void ConstructorRejectsOriginPathMismatchButAllowsMigratedVersionMetadata()
     {
         MidoraProjectPackageV1 packages = new("1.0.0");
         using ProjectCompilationSession compilation = new(new MidoraProject(192));
@@ -270,11 +270,12 @@ public sealed class ProjectPersistenceCoordinatorTests
                 packages,
                 Path.GetFullPath("project.midora"),
                 new("1.0.0", "1.0.0")));
-        Assert.Throws<ArgumentException>(() =>
-            new ProjectPersistenceCoordinator(
-                unsaved,
-                packages,
-                fileInformation: new("1.0.0", "1.0.0")));
+        ProjectPersistenceCoordinator migrated = new(
+            unsaved,
+            packages,
+            fileInformation: new("1.0.0", "1.0.0"));
+        Assert.Null(migrated.CurrentProjectPath);
+        Assert.Equal(new("1.0.0", "1.0.0"), migrated.FileInformation);
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider

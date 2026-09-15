@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using Midora.Domain;
 
@@ -19,32 +20,26 @@ internal static class PureMidiContentPackPersistenceV1
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
 
         PureMidiContentPack? reusable = FindReusablePack(track);
+        string sha256;
         if (reusable is not null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            using FileStream destination = new(
+            sha256 = CopyReusablePackAndHash(
+                reusable,
                 filePath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                128 * 1024,
-                FileOptions.SequentialScan);
-            reusable.CopyTo(destination);
-            destination.Flush(flushToDisk: true);
+                cancellationToken);
         }
         else
         {
             WriteMergedPack(track, filePath, cancellationToken);
+            using FileStream hashInput = new(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                256 * 1024,
+                FileOptions.SequentialScan);
+            sha256 = Convert.ToHexStringLower(SHA256.HashData(hashInput));
         }
-
-        using FileStream hashInput = new(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            256 * 1024,
-            FileOptions.SequentialScan);
-        string sha256 = Convert.ToHexStringLower(SHA256.HashData(hashInput));
         return new()
         {
             Path = packagePath,
@@ -52,6 +47,47 @@ internal static class PureMidiContentPackPersistenceV1
             SchemaVersion = PersistenceContractV1.SchemaVersion,
             Sha256 = sha256
         };
+    }
+
+    private static string CopyReusablePackAndHash(
+        PureMidiContentPack reusable,
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(256 * 1024);
+        try
+        {
+            using IncrementalHash hash = IncrementalHash.CreateHash(
+                HashAlgorithmName.SHA256);
+            using FileStream source = new(
+                reusable.Path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete,
+                256 * 1024,
+                FileOptions.SequentialScan);
+            using FileStream destination = new(
+                filePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                256 * 1024,
+                FileOptions.SequentialScan);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int read = source.Read(buffer, 0, buffer.Length);
+                if (read == 0) break;
+                destination.Write(buffer, 0, read);
+                hash.AppendData(buffer.AsSpan(0, read));
+            }
+            destination.Flush(flushToDisk: true);
+            return Convert.ToHexStringLower(hash.GetHashAndReset());
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static PureMidiContentPack? FindReusablePack(PureMidiTrack track)
@@ -83,51 +119,22 @@ internal static class PureMidiContentPackPersistenceV1
         string filePath,
         CancellationToken cancellationToken)
     {
-        using PureMidiContentPackWriter writer = new(filePath);
-        long recordIndex = 0;
+        using PureMidiContentPackWriter writer = new(filePath, cancellationToken);
         foreach (MidiSegment segment in track.Segments)
         {
-            foreach (DirectMidiNote value in segment.Notes)
+            foreach (DirectMidiNoteValue value in segment.Notes.EnumerateValues(cancellationToken))
             {
-                CheckCancellation();
-                writer.AddNote(segment.Id, new(
-                    value.Id,
-                    value.StartTick,
-                    value.LengthTicks,
-                    value.Key,
-                    value.NoteOnVelocity,
-                    value.NoteOffVelocity,
-                    value.NoteOnOrder,
-                    value.NoteOffOrder));
+                writer.AddNote(segment.Id, value);
             }
-            foreach (DirectMidiChannelEvent value in segment.ChannelEvents)
+            foreach (DirectMidiChannelEventValue value in segment.ChannelEvents.EnumerateValues(cancellationToken))
             {
-                CheckCancellation();
-                writer.AddChannelEvent(segment.Id, new(
-                    value.Id,
-                    value.Tick,
-                    value.Kind,
-                    value.Data1,
-                    value.Data2,
-                    value.Order));
+                writer.AddChannelEvent(segment.Id, value);
             }
-            foreach (OpaqueMidiEvent value in segment.OpaqueEvents)
+            foreach (OpaqueMidiEventValue value in segment.OpaqueEvents.EnumerateValues(cancellationToken))
             {
-                CheckCancellation();
-                writer.AddOpaqueEvent(segment.Id, new(
-                    value.Id,
-                    value.Tick,
-                    value.Kind,
-                    value.MetaType,
-                    value.Payload,
-                    value.Order));
+                writer.AddOpaqueEvent(segment.Id, value);
             }
         }
         using PureMidiContentPack completed = writer.Complete();
-
-        void CheckCancellation()
-        {
-            if ((recordIndex++ & 0xfff) == 0) cancellationToken.ThrowIfCancellationRequested();
-        }
     }
 }

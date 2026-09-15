@@ -1,0 +1,20 @@
+edition = "2024";
+package midora.persistence.instrument_changes.v1;
+option csharp_namespace = "Midora.Persistence.Wire.InstrumentChanges.V1";
+option features.field_presence = EXPLICIT;
+
+message InstrumentChangesV1 {
+  uint32 schema_version = 1;
+  repeated InstrumentChangeV1 changes = 2;
+  reserved 3 to max;
+}
+
+message InstrumentChangeV1 {
+  int64 id = 1;
+  int64 owner_id = 2;
+  bool direct_midi = 3;
+  int64 bank_event_id = 4;
+  int64 bank_lsb_event_id = 5;
+  int64 program_event_id = 6;
+  reserved 7 to max;
+}

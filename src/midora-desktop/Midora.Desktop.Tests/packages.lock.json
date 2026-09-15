@@ -144,6 +144,7 @@
         "dependencies": {
           "Midora.Audio": "[1.0.0-dev, )",
           "Midora.AudioRender": "[1.0.0-dev, )",
+          "Midora.Common": "[1.0.0-dev, )",
           "Midora.MidiExport": "[1.0.0-dev, )",
           "Midora.Persistence": "[1.0.0-dev, )",
           "Midora.Playback": "[1.0.0-dev, )"
@@ -153,6 +154,7 @@
         "type": "Project",
         "dependencies": {
           "Midora.AudioDevice": "[1.0.0-dev, )",
+          "Midora.Common": "[1.0.0-dev, )",
           "Midora.Midi": "[1.0.0-dev, )"
         }
       },
@@ -161,6 +163,7 @@
         "dependencies": {
           "Midora.Audio": "[1.0.0-dev, )",
           "Midora.AudioDevice": "[1.0.0-dev, )",
+          "Midora.Common": "[1.0.0-dev, )",
           "Midora.NativeInterops.Bass": "[1.0.0-dev, )",
           "Midora.NativeInterops.BassMidi": "[1.0.0-dev, )"
         }
@@ -200,6 +203,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.CodeAnalysis.CSharp": "[5.3.0, )",
+          "Midora.Common": "[1.0.0-dev, )",
           "Midora.Domain": "[1.0.0-dev, )",
           "Midora.Mapping.Contract.V2": "[1.0.0-dev, )",
           "Midora.Midi": "[1.0.0-dev, )"
@@ -214,6 +218,7 @@
       "midora.domain": {
         "type": "Project",
         "dependencies": {
+          "Midora.Common": "[1.0.0-dev, )",
           "Midora.Mapping.Contract.V2": "[1.0.0-dev, )"
         }
       },
@@ -251,6 +256,7 @@
         "type": "Project",
         "dependencies": {
           "Google.Protobuf": "[3.35.1, )",
+          "Midora.Common": "[1.0.0-dev, )",
           "Midora.Domain": "[1.0.0-dev, )"
         }
       },

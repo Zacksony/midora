@@ -3,7 +3,7 @@ using Midora.Domain;
 
 namespace Midora.Persistence;
 
-internal static class ConductorTrackCodecV1
+internal static partial class ConductorTrackCodecV1
 {
     private static readonly HashSet<int> TimeSignatureDenominators = [1, 2, 4, 8, 16, 32, 64];
 
@@ -20,67 +20,9 @@ internal static class ConductorTrackCodecV1
 
     public static byte[] Serialize(MidoraProject project)
     {
-        ArgumentNullException.ThrowIfNull(project);
-        ConductorTrack conductor = project.Conductor;
-        ArgumentNullException.ThrowIfNull(conductor);
-        ValidateCompatibility(project.TicksPerQuarterNote, conductor.TimeSignatures);
-        ConductorTrackJsonV1 value = new()
-        {
-            SchemaVersion = PersistenceContractV1.SchemaVersion,
-            Tempos = conductor.Tempos
-                .OrderBy(item => item.Tick)
-                .ThenBy(item => item.Id)
-                .Select(item => new TempoChangeJsonV1
-                {
-                    Id = new StableIdJsonV1(item.Id.Value),
-                    Tick = item.Tick,
-                    BeatsPerMinute = item.BeatsPerMinute
-                })
-                .ToArray(),
-            TimeSignatures = conductor.TimeSignatures
-                .OrderBy(item => item.Tick)
-                .ThenBy(item => item.Id)
-                .Select(item => new TimeSignatureChangeJsonV1
-                {
-                    Id = new StableIdJsonV1(item.Id.Value),
-                    Tick = item.Tick,
-                    Numerator = item.Numerator,
-                    Denominator = item.Denominator
-                })
-                .ToArray(),
-            KeySignatures = conductor.KeySignatures
-                .OrderBy(item => item.Tick)
-                .ThenBy(item => item.Id)
-                .Select(item => new KeySignatureChangeJsonV1
-                {
-                    Id = new StableIdJsonV1(item.Id.Value),
-                    Tick = item.Tick,
-                    SharpsFlats = item.SharpsFlats,
-                    IsMinor = item.IsMinor
-                })
-                .ToArray(),
-            Markers = conductor.Markers
-                .OrderBy(item => item.Tick)
-                .ThenBy(item => item.Id)
-                .Select(item => new ProjectMarkerJsonV1
-                {
-                    Id = new StableIdJsonV1(item.Id.Value),
-                    Tick = item.Tick,
-                    Name = item.Name
-                })
-                .ToArray(),
-            EndMarker = conductor.EndMarker is null
-                ? null
-                : new ProjectEndMarkerJsonV1
-                {
-                    Id = new StableIdJsonV1(conductor.EndMarker.Id.Value),
-                    Tick = conductor.EndMarker.Tick
-                }
-        };
-        Validate(value);
-        return StrictJsonV1.SerializeWithFinalLf(
-            value,
-            MidoraJsonSerializerContextV1.Default.ConductorTrackJsonV1);
+        using var stream = new MemoryStream();
+        Serialize(project, stream);
+        return stream.ToArray();
     }
 
     public static void Restore(MidoraProject project, ConductorTrackJsonV1 value)

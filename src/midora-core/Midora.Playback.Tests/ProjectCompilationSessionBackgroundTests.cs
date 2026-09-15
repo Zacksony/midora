@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Midora.Compiler;
 using Midora.Domain;
 using Midora.Mapping.Contract.V2;
@@ -7,6 +8,43 @@ namespace Midora.Playback.Tests;
 
 public sealed class ProjectCompilationSessionBackgroundTests
 {
+    [Theory]
+    [InlineData(ProjectCompilationExecutionMode.Synchronous)]
+    [InlineData(ProjectCompilationExecutionMode.Background)]
+    public void PresentationOnlyEditPreservesCanonicalAndSampleDomainCaches(
+        ProjectCompilationExecutionMode executionMode)
+    {
+        (MidoraProject project, LogicalTrack track, LogicalNote _, LogicalNote _) =
+            CreateNoteProject(2);
+        EventInstrument instrument = Assert.Single(project.EventInstruments);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: executionMode,
+            backgroundDebounce: TimeSpan.Zero);
+        CanonicalCompiledResult compiled = session.CompileForPlayback(0, 960);
+        var plan = session.GetOrCreateRealtimeRenderPlan(
+            compiled,
+            48_000,
+            new HashSet<MidoraId> { track.Id });
+        long sourceRevision = session.SourceRevision;
+        ProjectChangeSet changes = new();
+        changes.PresentationEventInstrumentIds.Add(instrument.Id);
+
+        _ = session.ApplyEdit(
+            _ => instrument.Color = new MidoraColor(0x33, 0x66, 0x99),
+            changes);
+
+        CanonicalCompiledResult replay = session.CompileForPlayback(0, 960);
+        var replayPlan = session.GetOrCreateRealtimeRenderPlan(
+            replay,
+            48_000,
+            new HashSet<MidoraId> { track.Id });
+        Assert.Same(compiled, replay);
+        Assert.Same(plan, replayPlan);
+        Assert.Equal(sourceRevision, session.SourceRevision);
+        Assert.True(session.IsCompilationCurrent);
+    }
+
     [Fact]
     public async Task BackgroundSnapshotIncludesAndSynchronizesPureMidiBranch()
     {
@@ -186,6 +224,39 @@ public sealed class ProjectCompilationSessionBackgroundTests
     }
 
     [Fact]
+    public async Task EventInstrumentUsageChangeSynchronizesAndRecompiles()
+    {
+        (MidoraProject project, LogicalTrack _, LogicalNote _, LogicalNote _) =
+            CreateNoteProject(2);
+        EventInstrument replacement = new(project)
+        {
+            Name = "Replacement",
+            TemplateLengthTicks = 120,
+            RequiresChannelIsolation = true,
+            OverlapPolicy = OverlapPolicy.LetOverlap
+        };
+        SubVoice replacementVoice = new(project);
+        replacementVoice.Events.Add(TemplateEvent.Note(project, 0, 120, 72, 100));
+        replacement.SubVoices.Add(replacementVoice);
+        project.EventInstruments.Add(replacement);
+        EventInstrumentUsage usage = Assert.Single(project.EventInstrumentUsages);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        ProjectChangeSet changes = new();
+        changes.EventInstrumentUsageIds.Add(usage.Id);
+
+        _ = session.ApplyEdit(_ => usage.EventInstrumentId = replacement.Id, changes);
+        CanonicalCompiledResult current = await session.EnsureCurrentCompilationAsync();
+        CanonicalCompiledResult full = new MidoraCompiler().CompileFull(project);
+
+        Assert.Equal(1, session.SourceRevision);
+        Assert.Equal(full.Fingerprint, current.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), current.Events.ToArray());
+    }
+
+    [Fact]
     public async Task WaitingConsumerCanCancelWithoutCancelingSharedCompilation()
     {
         MidoraProject project = new(480);
@@ -239,6 +310,361 @@ public sealed class ProjectCompilationSessionBackgroundTests
         Assert.Equal(session.SourceRevision, session.CompiledRevision);
         Assert.Equal(full.Fingerprint, current.Fingerprint);
         Assert.Equal(full.Events.ToArray(), current.Events.ToArray());
+    }
+
+    [Fact]
+    public async Task EditCancellationBoundsWaitForSnapshotSynchronization()
+    {
+        (MidoraProject project, LogicalTrack track, LogicalNote first, LogicalNote second) =
+            CreateNoteProject(2_000);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        using ManualResetEventSlim synchronizationEntered = new();
+        int hookInvocation = 0;
+        session.CompilationSnapshotSynchronizationStartingForTests = cancellationToken =>
+        {
+            if (Interlocked.Increment(ref hookInvocation) == 1)
+            {
+                synchronizationEntered.Set();
+                cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        };
+        ProjectChangeSet changes = new();
+        changes.TrackIds.Add(track.Id);
+
+        try
+        {
+            _ = session.ApplyEdit(_ => first.Note = 61, changes);
+            Assert.True(synchronizationEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            Task secondEdit = Task.Run(() => session.ApplyEdit(_ => second.Note = 62, changes));
+            await secondEdit.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.Equal(2, session.SourceRevision);
+            Assert.False(session.IsCompilationCurrent);
+        }
+        finally
+        {
+            session.CompilationSnapshotSynchronizationStartingForTests = null;
+        }
+
+        CanonicalCompiledResult current = await session.EnsureCurrentCompilationAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        CanonicalCompiledResult full = new MidoraCompiler().CompileFull(project);
+        Assert.Equal(full.Fingerprint, current.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), current.Events.ToArray());
+    }
+
+    [Fact]
+    public async Task EditDoesNotWaitForCapturedRevisionMaterialization()
+    {
+        (MidoraProject project, LogicalTrack track, LogicalNote first, LogicalNote second) =
+            CreateNoteProject(2_000);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        using ManualResetEventSlim materializationEntered = new();
+        int hookInvocation = 0;
+        session.CompilationSnapshotMaterializationStartingForTests = cancellationToken =>
+        {
+            if (Interlocked.Increment(ref hookInvocation) == 1)
+            {
+                materializationEntered.Set();
+                cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        };
+        ProjectChangeSet changes = new();
+        changes.TrackIds.Add(track.Id);
+
+        try
+        {
+            _ = session.ApplyEdit(_ => first.Note = 61, changes);
+            Assert.True(materializationEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            _ = session.ApplyEdit(_ => second.Note = 62, changes);
+            stopwatch.Stop();
+
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(1),
+                $"The edit waited {stopwatch.Elapsed.TotalMilliseconds:F1} ms for gate-external materialization.");
+            Assert.Equal(2, session.SourceRevision);
+        }
+        finally
+        {
+            session.CompilationSnapshotMaterializationStartingForTests = null;
+        }
+
+        CanonicalCompiledResult current = await session.EnsureCurrentCompilationAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        CanonicalCompiledResult full = new MidoraCompiler().CompileFull(project);
+        Assert.Equal(full.Fingerprint, current.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), current.Events.ToArray());
+    }
+
+    [Fact]
+    public async Task SupersededMixedGraphCaptureConvergesToTheLatestFullCompilation()
+    {
+        (MidoraProject project, LogicalTrack logicalTrack, LogicalNote first, LogicalNote second) =
+            CreateNoteProject(256);
+        EventInstrument instrument = Assert.Single(project.EventInstruments);
+        SubVoice voice = Assert.Single(instrument.SubVoices);
+        TemplateEvent controller = TemplateEvent.ControlChange(project, 0, 1, 40);
+        voice.Events.Add(controller);
+        ValueCurve curve = new(project) { Target = MidiValueTarget.ControlChange(11) };
+        CurvePoint curvePoint = new(project, 0, 32, CurveInterpolation.Step);
+        curve.Points.Add(curvePoint);
+        voice.Curves.Add(curve);
+
+        MidiChannelRoot root = new(project)
+        {
+            Name = "Root",
+            RoutingMode = MidiChannelRootRoutingMode.Auto,
+            ChannelMode = MidiChannelMode.Melodic
+        };
+        PureMidiTrack pureTrack = new(project)
+        {
+            Name = "Pure",
+            MidiChannelRootId = root.Id
+        };
+        MidiSegment midiSegment = new(project) { LengthTicks = 480 };
+        DirectMidiNote directNote = new(project)
+        {
+            StartTick = 0,
+            LengthTicks = 120,
+            Key = 64,
+            NoteOnVelocity = 75,
+            NoteOffVelocity = 20,
+            NoteOnOrder = 10,
+            NoteOffOrder = 20
+        };
+        midiSegment.Notes.Add(directNote);
+        midiSegment.ChannelEvents.Add(new DirectMidiChannelEvent(project)
+        {
+            Tick = 0,
+            Kind = DirectMidiChannelEventKind.ControlChange,
+            Data1 = 11,
+            Data2 = 70,
+            Order = 5
+        });
+        pureTrack.Segments.Add(midiSegment);
+        project.MidiChannelRoots.Add(root);
+        project.PureMidiTracks.Add(pureTrack);
+        project.ArrangementTracks.Add(new(ArrangementTrackKind.PureMidiTrack, pureTrack.Id));
+
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        using ManualResetEventSlim materializationEntered = new();
+        int hookInvocation = 0;
+        session.CompilationSnapshotMaterializationStartingForTests = cancellationToken =>
+        {
+            if (Interlocked.Increment(ref hookInvocation) == 1)
+            {
+                materializationEntered.Set();
+                cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        };
+        ProjectChangeSet changes = new();
+        changes.TrackIds.Add(logicalTrack.Id);
+        changes.EventInstrumentIds.Add(instrument.Id);
+        changes.PureMidiTrackIds.Add(pureTrack.Id);
+
+        try
+        {
+            _ = session.ApplyEdit(_ =>
+            {
+                first.Velocity = 81;
+                controller.Value = 41;
+                curve.Points[0] = curvePoint with { Value = 33 };
+                directNote.NoteOnVelocity = 76;
+            }, changes);
+            Assert.True(materializationEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            _ = session.ApplyEdit(_ =>
+            {
+                second.Note = 67;
+                controller.Value = 99;
+                curve.Points[0] = curvePoint with { Value = 88 };
+                directNote.Key = 72;
+            }, changes);
+        }
+        finally
+        {
+            session.CompilationSnapshotMaterializationStartingForTests = null;
+        }
+
+        CanonicalCompiledResult current = await session.EnsureCurrentCompilationAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        CanonicalCompiledResult full = new MidoraCompiler().CompileFull(project);
+
+        Assert.Equal(session.SourceRevision, session.CompiledRevision);
+        Assert.Equal(full.Fingerprint, current.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), current.Events.ToArray());
+        Assert.Equal(full.SmfTracks.ToArray(), current.SmfTracks.ToArray());
+        Assert.Equal(full.OpaqueMidiEvents.ToArray(), current.OpaqueMidiEvents.ToArray());
+    }
+
+    [Fact]
+    public async Task PartialMirrorCommitFaultForcesFreshEverythingRecovery()
+    {
+        (MidoraProject project, LogicalTrack track, LogicalNote first, LogicalNote _) =
+            CreateNoteProject(4);
+        EventInstrument instrument = Assert.Single(project.EventInstruments);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        int injected = 0;
+        session.CompilationSnapshotCommitFaultForTests = () =>
+        {
+            if (Interlocked.Increment(ref injected) == 1)
+                throw new InjectedCompilationFaultException();
+        };
+        ProjectChangeSet mixedChanges = new();
+        mixedChanges.EventInstrumentIds.Add(instrument.Id);
+        mixedChanges.TrackIds.Add(track.Id);
+
+        _ = session.ApplyEdit(_ =>
+        {
+            instrument.Name = "Changed before partial commit";
+            first.Note = 72;
+        }, mixedChanges);
+        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => session.EnsureCurrentCompilationAsync());
+        Assert.IsType<InjectedCompilationFaultException>(failure.InnerException);
+        Assert.Equal(ProjectCompilationState.Failed, session.CompilationState);
+
+        session.CompilationSnapshotCommitFaultForTests = null;
+        // A retry without another source edit must not reuse the partially
+        // mutated mirror. RecompileAsync consumes the preserved Everything
+        // recovery request and constructs a fresh compiler Project root.
+        CanonicalCompiledResult recovered = await session.RecompileAsync(new ProjectChangeSet())
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        using MidoraCompiler verifier = new();
+        CanonicalCompiledResult full = verifier.CompileFull(project);
+
+        Assert.True(recovered.IsConsumable);
+        Assert.Equal(session.SourceRevision, session.CompiledRevision);
+        Assert.Equal(full.Fingerprint, recovered.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), recovered.Events.ToArray());
+        Assert.Equal(full.SmfTracks.ToArray(), recovered.SmfTracks.ToArray());
+        Assert.Equal(full.OpaqueMidiEvents.ToArray(), recovered.OpaqueMidiEvents.ToArray());
+        Assert.Equal(0, session.LastCompilationTelemetry.ReusedTrackCount);
+    }
+
+    [Fact]
+    public async Task CancellationAfterMaterializationForcesFreshEverythingRecovery()
+    {
+        (MidoraProject project, LogicalTrack track, LogicalNote first, LogicalNote second) =
+            CreateNoteProject(64);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        using ManualResetEventSlim compileEntered = new();
+        int invocation = 0;
+        session.CompilationStartingForTests = cancellationToken =>
+        {
+            if (Interlocked.Increment(ref invocation) != 1) return;
+            compileEntered.Set();
+            cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+            cancellationToken.ThrowIfCancellationRequested();
+        };
+        ProjectChangeSet changes = new();
+        changes.TrackIds.Add(track.Id);
+
+        _ = session.ApplyEdit(_ => first.Note = 71, changes);
+        Assert.True(compileEntered.Wait(TimeSpan.FromSeconds(5)));
+        _ = session.ApplyEdit(_ => second.Note = 73, changes);
+        session.CompilationStartingForTests = null;
+
+        CanonicalCompiledResult recovered = await session.EnsureCurrentCompilationAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        using MidoraCompiler verifier = new();
+        CanonicalCompiledResult full = verifier.CompileFull(project);
+
+        Assert.Equal(session.SourceRevision, session.CompiledRevision);
+        Assert.Equal(full.Fingerprint, recovered.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), recovered.Events.ToArray());
+        Assert.Equal(0, session.LastCompilationTelemetry.ReusedTrackCount);
+    }
+
+    [Fact]
+    public async Task CompilerStageFaultCanBeRetriedWithoutAnotherSourceEdit()
+    {
+        (MidoraProject project, LogicalTrack track, LogicalNote first, LogicalNote _) =
+            CreateNoteProject(8);
+        using ProjectCompilationSession session = new(
+            project,
+            executionMode: ProjectCompilationExecutionMode.Background,
+            backgroundDebounce: TimeSpan.Zero);
+        int injected = 0;
+        session.CompilationStartingForTests = _ =>
+        {
+            if (Interlocked.Increment(ref injected) == 1)
+                throw new InjectedCompilationFaultException();
+        };
+        ProjectChangeSet changes = new();
+        changes.TrackIds.Add(track.Id);
+
+        _ = session.ApplyEdit(_ => first.Velocity = 77, changes);
+        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => session.EnsureCurrentCompilationAsync());
+        Assert.IsType<InjectedCompilationFaultException>(failure.InnerException);
+
+        session.CompilationStartingForTests = null;
+        CanonicalCompiledResult recovered = await session.RecompileAsync(new ProjectChangeSet())
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        using MidoraCompiler verifier = new();
+        CanonicalCompiledResult full = verifier.CompileFull(project);
+
+        Assert.Equal(full.Fingerprint, recovered.Fingerprint);
+        Assert.Equal(full.Events.ToArray(), recovered.Events.ToArray());
+        Assert.Equal(0, session.LastCompilationTelemetry.ReusedTrackCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DiagnosticCapacityFailureKeepsLastCompleteResultAndReportsOnlyItsOwnCause(bool capacity)
+    {
+        var (project, track, first, _) = CreateNoteProject(8);
+        using (project)
+        using (ProjectCompilationSession session = new(project,
+            executionMode: ProjectCompilationExecutionMode.Background, backgroundDebounce: TimeSpan.Zero))
+        {
+            CanonicalCompiledResult previous = session.LastAttempt;
+            Exception injected = capacity ? new DiagnosticCapacityExceededException()
+                : new OverflowException("An unrelated numeric operation overflowed.");
+            session.CompilationStartingForTests = _ => throw injected;
+            ProjectChangeSet changes = new();
+            changes.TrackIds.Add(track.Id);
+            _ = session.ApplyEdit(_ => first.Velocity = 77, changes);
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.EnsureCurrentCompilationAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Same(injected, failure.InnerException);
+            Assert.Same(previous, session.LastAttempt);
+            Assert.False(session.IsCompilationCurrent);
+            Assert.Equal(capacity ? injected.Message : null, session.DiagnosticCapacityFailureMessage);
+            Assert.Equal(capacity ? injected.Message : "The current Project revision could not be compiled.", failure.Message);
+            session.CompilationStartingForTests = null;
+            CanonicalCompiledResult recovered = await session.RecompileAsync(new ProjectChangeSet())
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Null(session.DiagnosticCapacityFailureMessage);
+            Assert.True(session.IsCompilationCurrent);
+            using MidoraCompiler verifier = new();
+            CanonicalCompiledResult full = verifier.CompileFull(project);
+            Assert.Equal(full.Fingerprint, recovered.Fingerprint);
+            Assert.True(full.Events.SequenceEqual(recovered.Events));
+        }
     }
 
     [Fact]
@@ -333,4 +759,6 @@ public sealed class ProjectCompilationSessionBackgroundTests
         track.Segments.Add(segment);
         return (project, track, segment.Notes[0], segment.Notes[1]);
     }
+
+    private sealed class InjectedCompilationFaultException : Exception;
 }

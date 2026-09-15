@@ -40,7 +40,7 @@ public sealed class ExactTimelineCollisionPolicyTests
 
         Assert.Same(incumbent, Assert.Single(segment.Notes));
         document.Undo();
-        Assert.Equal([incumbent, mover], segment.Notes);
+        Assert.Equal([incumbent, mover], segment.Notes.ToArray());
         Assert.Equal(20, mover.StartTick);
         document.Redo();
         Assert.Same(incumbent, Assert.Single(segment.Notes));
@@ -409,6 +409,73 @@ public sealed class ExactTimelineCollisionPolicyTests
     }
 
     [Fact]
+    public void DirectMidiEventLineUpsertCreatesPointsInOneBatchAndSupportsUndoRedo()
+    {
+        (MidoraProject project, MidiSegment segment) = CreateDirectMidiFixture();
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = PersistedDocument(compilation);
+
+        document.Execute(ProjectDomainEditCommands.UpsertDirectMidiEventPoints(
+            segment.Id,
+            DirectMidiChannelEventKind.ControlChange,
+            laneData1: 11,
+            [new(10, 11, 40), new(20, 11, 80)]));
+
+        DirectMidiChannelEvent[] created = segment.ChannelEvents
+            .OrderBy(value => value.Tick)
+            .ToArray();
+        Assert.Equal(2, created.Length);
+        Assert.Equal((10L, 11, 40), (created[0].Tick, created[0].Data1, created[0].Data2));
+        Assert.Equal((20L, 11, 80), (created[1].Tick, created[1].Data1, created[1].Data2));
+
+        document.Undo();
+        Assert.Empty(segment.ChannelEvents);
+
+        document.Redo();
+        Assert.Equal(created, segment.ChannelEvents.OrderBy(value => value.Tick));
+    }
+
+    [Fact]
+    public void DirectMidiEventLineUpsertUpdatesExistingAndCreatesMissingAtomically()
+    {
+        (MidoraProject project, MidiSegment segment) = CreateDirectMidiFixture();
+        DirectMidiChannelEvent existing = new(project)
+        {
+            Tick = 10,
+            Kind = DirectMidiChannelEventKind.ControlChange,
+            Data1 = 11,
+            Data2 = 24
+        };
+        segment.ChannelEvents.Add(existing);
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = PersistedDocument(compilation);
+
+        document.Execute(ProjectDomainEditCommands.UpsertDirectMidiEventPoints(
+            segment.Id,
+            DirectMidiChannelEventKind.ControlChange,
+            laneData1: 11,
+            [new(10, 11, 64), new(20, 11, 96)]));
+
+        DirectMidiChannelEvent[] edited = segment.ChannelEvents
+            .OrderBy(value => value.Tick)
+            .ToArray();
+        Assert.Equal(2, edited.Length);
+        Assert.Same(existing, edited[0]);
+        Assert.Equal(64, existing.Data2);
+        Assert.Equal((20L, 11, 96), (edited[1].Tick, edited[1].Data1, edited[1].Data2));
+
+        document.Undo();
+        Assert.Same(existing, Assert.Single(segment.ChannelEvents));
+        Assert.Equal(24, existing.Data2);
+
+        document.Redo();
+        edited = segment.ChannelEvents.OrderBy(value => value.Tick).ToArray();
+        Assert.Equal(2, edited.Length);
+        Assert.Same(existing, edited[0]);
+        Assert.Equal(64, existing.Data2);
+    }
+
+    [Fact]
     public void DirectMidiNoteMoveKeepsIncumbentAndUndoRestoresMover()
     {
         (MidoraProject project, MidiSegment segment) = CreateDirectMidiFixture();
@@ -460,11 +527,21 @@ public sealed class ExactTimelineCollisionPolicyTests
 
         wrapped.Apply(project);
 
-        Assert.Equal(source.NoteCount + 1, segment.Notes.Count);
-        Assert.Equal(2, source.NoteQueries.Count);
+        MidiSegment current = project.PureMidiTracks.SelectMany(static value => value.Segments).Single(value => value.Id == segment.Id);
+        Assert.Equal(source.NoteCount + 1, current.Notes.Count);
+        DirectMidiNoteValue created = current.Notes.CreateObjectSource().GetByOrdinal(source.NoteCount);
+        Assert.Equal((400L, 20L, 72, 100), (created.StartTick, created.LengthTicks, created.Key, created.NoteOnVelocity));
+        Assert.Single(source.NoteQueries);
         Assert.All(source.NoteQueries, query => Assert.Equal((400L, 401L, 72, 72), query));
+        var querySnapshot = current.Notes.CreateQuerySnapshot();
+        using (TimelineValueReadScope.EnterCacheOnly())
+            Assert.Throws<TimelineValueReadPendingException>(() => querySnapshot.MaximumEndTick);
+        Assert.Equal(420, querySnapshot.MaximumEndTick);
+        using (TimelineValueReadScope.EnterCacheOnly())
+            Assert.Equal(420, querySnapshot.MaximumEndTick);
 
         wrapped.Undo(project);
+        Assert.Same(segment, project.PureMidiTracks.SelectMany(static value => value.Segments).Single(value => value.Id == segment.Id));
         Assert.Equal(source.NoteCount, segment.Notes.Count);
     }
 
@@ -482,7 +559,8 @@ public sealed class ExactTimelineCollisionPolicyTests
 
         prepared.Apply(project);
 
-        Assert.True(segment.Notes.TryGetById(source.Note.Id, out DirectMidiNote? edited));
+        MidiSegment current = project.PureMidiTracks[0].Segments[0];
+        Assert.True(current.Notes.TryGetById(source.Note.Id, out DirectMidiNote? edited));
         Assert.NotNull(edited);
         Assert.Equal(30, edited!.StartTick);
         Assert.Equal(62, edited.Key);
@@ -492,8 +570,13 @@ public sealed class ExactTimelineCollisionPolicyTests
 
         prepared.Undo(project);
 
-        Assert.Equal(10, edited.StartTick);
-        Assert.Equal(60, edited.Key);
+        Assert.Same(segment, project.PureMidiTracks[0].Segments[0]);
+        var restored = Assert.Single(segment.Notes.ResolveValuesByIds(new HashSet<MidoraId> { source.Note.Id }));
+        Assert.Equal(10, restored.StartTick);
+        Assert.Equal(60, restored.Key);
+        Assert.Equal(source.Note.Id, restored.Id);
+        Assert.Equal(30, edited.StartTick); // Published roots remain immutable across Undo.
+        Assert.Equal(1, source.BatchIdQueryCount);
         Assert.Equal(0, source.GetNoteCallCount);
         Assert.Equal(0, source.FindNoteIndexCallCount);
     }

@@ -17,6 +17,19 @@ public static partial class ProjectDomainEditCommands
             ArgumentNullException.ThrowIfNull(program);
             ValidateNoteBatchProgram(program);
             SegmentLocation location = FindSegment(project, segmentId);
+            if (noteIds.Count >= BoundedNoteThreshold || location.Segment.Notes.Count >= BoundedNoteThreshold)
+                return PrepareBoundedLogicalNotes(project, location, noteIds, values =>
+                {
+                    long origin = values.Min(v => v.Value.StartTick);
+                    Stopwatch timer = Stopwatch.StartNew();
+                    return value =>
+                    {
+                        var result = EvaluateLogicalNote(new(value.StartTick, value.LengthTicks, value.Note, value.Velocity), origin, program, timer);
+                        var changed = result.Replacement;
+                        return result.Discard ? null : value with { StartTick = changed.StartTick, LengthTicks = changed.LengthTicks,
+                            Note = changed.Note, Velocity = changed.Velocity };
+                    };
+                }, expandWindow: true);
             SelectedLogicalNote[] selected = SelectLogicalNotes(location.Segment, noteIds);
             LogicalNoteValue[] old = selected.Select(value => Snapshot(value.Note)).ToArray();
             long relativeOrigin = old.Min(value => value.StartTick);
@@ -32,7 +45,7 @@ public static partial class ProjectDomainEditCommands
                 location.Track.Segments.IndexOf(location.Segment));
             SegmentWindowTransform window = PlanLogicalNoteBatchWindow(entry, results);
             ValidateSegmentTransformWindows(project, [window]);
-            return ResolveExactLogicalNoteCollisions(
+            return ResolveTargetedExactLogicalNoteCollisions(
                 PrepareBatchLogicalNotes(
                     location.Track.Id,
                     location.Segment,
@@ -40,7 +53,12 @@ public static partial class ProjectDomainEditCommands
                     old,
                     results,
                     window),
-                location.Segment);
+                results
+                    .Where(static value => !value.Discard)
+                    .Select(value => new LogicalNoteCollisionTarget(
+                        location.Segment,
+                        value.Replacement.StartTick,
+                        value.Replacement.Note)));
         });
 
     public static IProjectEditCommand BatchEditTemplateNotes(
@@ -54,13 +72,27 @@ public static partial class ProjectDomainEditCommands
             ValidateNoteBatchProgram(program);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (noteIds.Count >= BoundedNoteThreshold || voice.Events.Count >= BoundedNoteThreshold)
+                return PrepareBoundedTemplateNotes(project, instrument, voice, noteIds, values =>
+                {
+                    long origin = values.Min(v => v.Value.Tick);
+                    Stopwatch timer = Stopwatch.StartNew();
+                    return value =>
+                    {
+                        var result = EvaluateTemplateNote(new(value.Kind, value.Tick, value.LengthTicks,
+                            value.Number, value.Value, value.SecondaryValue, value.HasBankMsb, value.HasBankLsb, value.FollowPitchDelta), origin, program, timer);
+                        var changed = result.Replacement;
+                        return result.Discard ? null : value with { Tick = changed.Tick, LengthTicks = changed.LengthTicks,
+                            Number = changed.Number, Value = changed.Value };
+                    };
+                });
             HashSet<MidoraId> requested = ValidateBatchIds(noteIds, nameof(noteIds), "Template Note");
             TemplateEventTransformEntry[] selected = voice.Events
-                .Select((value, index) => new TemplateEventTransformEntry(
-                    value,
-                    index,
-                    CaptureTemplateEvent(value)))
-                .Where(value => requested.Contains(value.Event.Id))
+                .ResolveByIdsWithIndicesInCollectionOrder(requested)
+                .Select(static value => new TemplateEventTransformEntry(
+                    value.Value,
+                    value.Index,
+                    CaptureTemplateEvent(value.Value)))
                 .ToArray();
             if (selected.Length != requested.Count
                 || selected.Any(value => value.Event.Kind != TemplateEventKind.Note))
@@ -76,14 +108,19 @@ public static partial class ProjectDomainEditCommands
                 relativeOrigin,
                 program,
                 clock)).ToArray();
-            return ResolveExactSubVoiceEventCollisions(
+            return ResolveTargetedExactTemplateNoteCollisions(
                 PrepareBatchTemplateNotes(
                     eventInstrumentId,
                     instrument,
                     voice,
                     selected,
                     results),
-                voice);
+                results
+                    .Where(static value => !value.Discard)
+                    .Select(value => new TemplateNoteCollisionTarget(
+                        voice,
+                        value.Replacement.Tick,
+                        value.Replacement.Number)));
         });
 
     public static IProjectEditCommand BatchEditSegmentExposedNotes(
@@ -103,16 +140,24 @@ public static partial class ProjectDomainEditCommands
             {
                 throw new ArgumentException("Every selected ID must identify a Segment.", nameof(segmentIds));
             }
+            if (RequiresBoundedLogicalSegmentContent(segments))
+                return PrepareBoundedLogicalSegmentTransform(project, segments, null,
+                    SegmentSelectionTransformScope.ExposedContentOnly, program: program);
             List<(SegmentTransformEntry Segment, SelectedLogicalNote Note)> exposed = [];
             foreach (SegmentTransformEntry segment in segments)
             {
                 long left = segment.Segment.ContentOffsetTick;
                 long right = segment.Segment.ContentEndTick;
+                MidoraId[] exposedIds = segment.Segment.Notes
+                    .CreateQuerySnapshot()
+                    .QueryValues(left, right)
+                    .Select(static value => value.Id)
+                    .ToArray();
                 exposed.AddRange(segment.Segment.Notes
-                    .Select((note, index) => new SelectedLogicalNote(note, index))
-                    .Where(value => value.Note.StartTick < right
-                        && checked(value.Note.StartTick + value.Note.LengthTicks) > left)
-                    .Select(value => (segment, value)));
+                    .ResolveByIdsWithIndicesInCollectionOrder(exposedIds)
+                    .Select(value => (
+                        segment,
+                        new SelectedLogicalNote(value.Value, value.Index))));
             }
             if (exposed.Count == 0)
             {
@@ -138,13 +183,18 @@ public static partial class ProjectDomainEditCommands
                     results,
                     indicesBySegment[segment.Segment])).ToArray();
             ValidateSegmentTransformWindows(project, windows);
-            return ResolveExactLogicalNoteCollisions(
+            return ResolveTargetedExactLogicalNoteCollisions(
                 PrepareBatchLogicalNotesAcrossSegments(
                     segments,
                     exposed,
                     results,
                     windows),
-                segments.Select(value => value.Segment));
+                exposed.Select((value, index) => (value.Segment.Segment, Result: results[index]))
+                    .Where(static value => !value.Result.Discard)
+                    .Select(static value => new LogicalNoteCollisionTarget(
+                        value.Segment,
+                        value.Result.Replacement.StartTick,
+                        value.Result.Replacement.Note)));
         });
 
     public static IProjectEditCommand BatchEditLogicalParameterPoints(
@@ -152,12 +202,17 @@ public static partial class ProjectDomainEditCommands
         MidoraId laneId,
         IReadOnlyCollection<MidoraId> pointIds,
         BatchEditExpressionProgram program) =>
+        pointIds.Count >= BoundedPointThreshold
+        ? BoundedLogicalPoints("Batch edit logical parameter points", segmentId, laneId, pointIds, BoundedPointOperation.Batch, program: program)
+        :
         Command("Batch edit logical parameter points", project =>
         {
             ArgumentNullException.ThrowIfNull(program);
             ValidatePointBatchProgram(program);
             SegmentLocation location = FindSegment(project, segmentId);
             LogicalParameterLane lane = FindLogicalParameterLane(location.Segment, laneId);
+            if (lane.Points.Count >= BoundedPointThreshold)
+                return BoundedLogicalPoints("Batch edit logical parameter points", segmentId, laneId, pointIds, BoundedPointOperation.Batch, program: program).Prepare(project);
             LogicalParameterDefinition definition = FindBoundLogicalParameter(
                 project,
                 location.Track,
@@ -198,14 +253,17 @@ public static partial class ProjectDomainEditCommands
                 location.Track.Segments.IndexOf(location.Segment));
             SegmentWindowTransform window = PlanCurvePointBatchWindow(segmentEntry, results);
             ValidateSegmentTransformWindows(project, [window]);
-            return ResolveExactLogicalParameterPointCollisions(
+            return ResolveTargetedExactLogicalParameterPointCollisions(
                 PrepareBatchCurvePoints(
                     TrackChange(location.Track.Id),
                     lane.Points,
                     results,
                     "Logical Parameter point",
                     window),
-                lane);
+                lane,
+                results
+                    .Where(static value => value.Replacement is not null)
+                    .Select(static value => value.Replacement!.Tick));
         });
 
     public static IProjectEditCommand BatchEditSubVoiceEventPoints(
@@ -214,6 +272,10 @@ public static partial class ProjectDomainEditCommands
         IReadOnlyCollection<MidoraId> eventIds,
         MidiValueTarget target,
         BatchEditExpressionProgram program) =>
+        eventIds.Count >= BoundedPointThreshold
+        ? BoundedTemplatePoints("Batch edit SubVoice event points", eventInstrumentId, subVoiceId,
+            eventIds, BoundedPointOperation.Batch, target, program: program)
+        :
         Command("Batch edit SubVoice event points", project =>
         {
             ArgumentNullException.ThrowIfNull(program);
@@ -222,13 +284,15 @@ public static partial class ProjectDomainEditCommands
             ValidateDirectRange(program, BatchEditField.PointValue, minimum, maximum);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
+            if (voice.Events.Count >= BoundedPointThreshold)
+                return BoundedTemplatePoints("Batch edit SubVoice event points", eventInstrumentId, subVoiceId, eventIds, BoundedPointOperation.Batch, target, program: program).Prepare(project);
             HashSet<MidoraId> requested = ValidateBatchIds(eventIds, nameof(eventIds), "Template Event");
             TemplateEventTransformEntry[] selected = voice.Events
-                .Select((value, index) => new TemplateEventTransformEntry(
-                    value,
-                    index,
-                    CaptureTemplateEvent(value)))
-                .Where(value => requested.Contains(value.Event.Id))
+                .ResolveByIdsWithIndicesInCollectionOrder(requested)
+                .Select(static value => new TemplateEventTransformEntry(
+                    value.Value,
+                    value.Index,
+                    CaptureTemplateEvent(value.Value)))
                 .ToArray();
             if (selected.Length != requested.Count
                 || selected.Any(value => value.Event.Kind == TemplateEventKind.Note
@@ -267,14 +331,18 @@ public static partial class ProjectDomainEditCommands
                 }
                 return new BatchTemplateEventResult(value, replacement);
             }).ToArray();
-            return ResolveExactSubVoiceEventCollisions(
+            return ResolveTargetedExactTemplateEventPointCollisions(
                 PrepareBatchTemplateEventPoints(
                     eventInstrumentId,
                     instrument,
                     voice,
                     selected,
                     results),
-                voice);
+                results
+                    .Where(static value => value.Replacement is not null)
+                    .SelectMany(value => CreateTemplateEventPointCollisionTargets(
+                        voice,
+                        value.Replacement!)));
         });
 
     private static void ValidateNoteBatchProgram(BatchEditExpressionProgram program)
@@ -406,18 +474,25 @@ public static partial class ProjectDomainEditCommands
         bool changed = old.Where((value, index) =>
             results[index].Discard || value != results[index].Replacement).Any()
             || window.Old != window.Replacement;
+        LogicalNote[] discarded = selected
+            .Where((_, index) => results[index].Discard)
+            .Select(static value => value.Note)
+            .ToArray();
+        Action? restoreDiscarded = null;
         return Prepared(
             changed,
             TrackChange(trackId),
             _ =>
             {
-                for (int index = 0; index < selected.Length; index++)
+                using (segment.Notes.BeginBatchChange())
                 {
-                    if (results[index].Discard)
+                    for (int index = 0; index < selected.Length; index++)
                     {
-                        RemoveRequired(segment.Notes, selected[index].Note, "discarded Logical Note");
+                        if (!results[index].Discard)
+                            SetLogicalNote(selected[index].Note, results[index].Replacement);
                     }
-                    else SetLogicalNote(selected[index].Note, results[index].Replacement);
+                    if (discarded.Length != 0)
+                        restoreDiscarded = segment.Notes.RemoveRangeWithUndo(discarded);
                 }
                 SetWindow(segment, window.Replacement);
                 SortTransformedSegments([window]);
@@ -426,16 +501,16 @@ public static partial class ProjectDomainEditCommands
             {
                 SetWindow(segment, window.Old);
                 SortTransformedSegments([window]);
-                for (int index = 0; index < selected.Length; index++)
+                using (segment.Notes.BeginBatchChange())
                 {
-                    SetLogicalNote(selected[index].Note, old[index]);
-                }
-                foreach ((SelectedLogicalNote item, int index) in selected
-                    .Select((value, index) => (value, index))
-                    .Where(value => results[value.index].Discard)
-                    .OrderBy(value => value.value.Index))
-                {
-                    InsertAt(segment.Notes, item.Index, item.Note, "Logical Note");
+                    for (int index = 0; index < selected.Length; index++)
+                        SetLogicalNote(selected[index].Note, old[index]);
+                    if (discarded.Length != 0)
+                    {
+                        (restoreDiscarded ?? throw new InvalidOperationException(
+                            "Discarded Logical Notes do not have a pending removal to restore."))();
+                        restoreDiscarded = null;
+                    }
                 }
             });
     }
@@ -450,21 +525,32 @@ public static partial class ProjectDomainEditCommands
         bool changed = old.Where((value, index) =>
             results[index].Discard || value != results[index].Replacement).Any()
             || windows.Any(value => value.Old != value.Replacement);
+        var groups = selected
+            .Select((value, index) => (Index: index, Entry: value))
+            .GroupBy(static value => value.Entry.Segment.Segment)
+            .Select(static group => (Segment: group.Key, Values: group.ToArray()))
+            .ToArray();
+        Dictionary<Segment, Action> restoreDiscardedBySegment = [];
         return Prepared(
             changed,
             TrackChange(segments.Select(value => value.Track.Id).Distinct().ToArray()),
             _ =>
             {
-                for (int index = 0; index < selected.Count; index++)
+                foreach (var group in groups)
                 {
-                    if (results[index].Discard)
+                    using IDisposable batch = group.Segment.Notes.BeginBatchChange();
+                    foreach (var value in group.Values)
                     {
-                        RemoveRequired(
-                            selected[index].Segment.Segment.Notes,
-                            selected[index].Note.Note,
-                            "discarded Logical Note");
+                        if (!results[value.Index].Discard)
+                            SetLogicalNote(value.Entry.Note.Note, results[value.Index].Replacement);
                     }
-                    else SetLogicalNote(selected[index].Note.Note, results[index].Replacement);
+                    LogicalNote[] discarded = group.Values
+                        .Where(value => results[value.Index].Discard)
+                        .Select(static value => value.Entry.Note.Note)
+                        .ToArray();
+                    if (discarded.Length != 0)
+                        restoreDiscardedBySegment[group.Segment] =
+                            group.Segment.Notes.RemoveRangeWithUndo(discarded);
                 }
                 foreach (SegmentWindowTransform window in windows)
                 {
@@ -479,18 +565,15 @@ public static partial class ProjectDomainEditCommands
                     SetWindow(window.Entry.Segment, window.Old);
                 }
                 SortTransformedSegments(windows);
-                for (int index = 0; index < selected.Count; index++)
+                foreach (var group in groups)
                 {
-                    SetLogicalNote(selected[index].Note.Note, old[index]);
-                }
-                foreach (IGrouping<Segment, (int ResultIndex, SelectedLogicalNote Note)> group in selected
-                    .Select((value, index) => (ResultIndex: index, value.Segment.Segment, value.Note))
-                    .Where(value => results[value.ResultIndex].Discard)
-                    .GroupBy(value => value.Segment, value => (value.ResultIndex, value.Note)))
-                {
-                    foreach ((int _, SelectedLogicalNote note) in group.OrderBy(value => value.Note.Index))
+                    using IDisposable batch = group.Segment.Notes.BeginBatchChange();
+                    foreach (var value in group.Values)
+                        SetLogicalNote(value.Entry.Note.Note, old[value.Index]);
+                    if (restoreDiscardedBySegment.TryGetValue(group.Segment, out Action? restore))
                     {
-                        InsertAt(group.Key.Notes, note.Index, note.Note, "Logical Note");
+                        restore();
+                        restoreDiscardedBySegment.Remove(group.Segment);
                     }
                 }
             });
@@ -513,33 +596,40 @@ public static partial class ProjectDomainEditCommands
         bool changed = selected.Where((value, index) =>
             results[index].Discard || value.Old != results[index].Replacement).Any()
             || oldLength != newLength;
+        TemplateEvent[] discarded = selected
+            .Where((_, index) => results[index].Discard)
+            .Select(static value => value.Event)
+            .ToArray();
+        Action? restoreDiscarded = null;
         return Prepared(
             changed,
             EventInstrumentChange(eventInstrumentId),
             _ =>
             {
-                for (int index = 0; index < selected.Length; index++)
+                using (voice.Events.BeginBatchChange())
                 {
-                    if (results[index].Discard)
+                    for (int index = 0; index < selected.Length; index++)
                     {
-                        RemoveRequired(voice.Events, selected[index].Event, "discarded Template Note");
+                        if (!results[index].Discard)
+                            SetTemplateEvent(selected[index].Event, results[index].Replacement);
                     }
-                    else SetTemplateEvent(selected[index].Event, results[index].Replacement);
+                    if (discarded.Length != 0)
+                        restoreDiscarded = voice.Events.RemoveRangeWithUndo(discarded);
                 }
                 instrument.TemplateLengthTicks = newLength;
             },
             _ =>
             {
-                for (int index = 0; index < selected.Length; index++)
+                using (voice.Events.BeginBatchChange())
                 {
-                    SetTemplateEvent(selected[index].Event, selected[index].Old);
-                }
-                foreach ((TemplateEventTransformEntry item, int index) in selected
-                    .Select((value, index) => (value, index))
-                    .Where(value => results[value.index].Discard)
-                    .OrderBy(value => value.value.Index))
-                {
-                    voice.Events.Insert(item.Index, item.Event);
+                    for (int index = 0; index < selected.Length; index++)
+                        SetTemplateEvent(selected[index].Event, selected[index].Old);
+                    if (discarded.Length != 0)
+                    {
+                        (restoreDiscarded ?? throw new InvalidOperationException(
+                            "Discarded Template Notes do not have a pending removal to restore."))();
+                        restoreDiscarded = null;
+                    }
                 }
                 instrument.TemplateLengthTicks = oldLength;
             });
@@ -547,28 +637,34 @@ public static partial class ProjectDomainEditCommands
 
     private static IPreparedProjectEdit PrepareBatchCurvePoints(
         ProjectChangeSet changes,
-        List<CurvePoint> points,
+        CurvePointCollection points,
         BatchCurvePointResult[] results,
         string objectName,
-        SegmentWindowTransform window) =>
-        Prepared(
+        SegmentWindowTransform window)
+    {
+        CurvePoint[] retainedOld = results
+            .Where(static value => value.Replacement is not null)
+            .Select(static value => value.Selected.Point)
+            .ToArray();
+        CurvePoint[] retainedReplacement = results
+            .Where(static value => value.Replacement is not null)
+            .Select(static value => value.Replacement!)
+            .ToArray();
+        CurvePoint[] discarded = results
+            .Where(static value => value.Replacement is null)
+            .Select(static value => value.Selected.Point)
+            .ToArray();
+        Action? restoreDiscarded = null;
+        return Prepared(
             results.Any(value => value.Replacement is null
                 || value.Selected.Point != value.Replacement)
                 || window.Old != window.Replacement,
             changes,
             _ =>
             {
-                foreach (BatchCurvePointResult value in results)
-                {
-                    if (value.Replacement is null)
-                    {
-                        RemoveRequired(points, value.Selected.Point, objectName);
-                    }
-                    else
-                    {
-                        ReplaceRequired(points, value.Selected.Point, value.Replacement, objectName);
-                    }
-                }
+                points.ReplaceRange(retainedOld, retainedReplacement);
+                if (discarded.Length != 0)
+                    restoreDiscarded = points.RemoveRangeWithUndo(discarded);
                 SetWindow(window.Entry.Segment, window.Replacement);
                 SortTransformedSegments([window]);
             },
@@ -576,17 +672,15 @@ public static partial class ProjectDomainEditCommands
             {
                 SetWindow(window.Entry.Segment, window.Old);
                 SortTransformedSegments([window]);
-                foreach (BatchCurvePointResult value in results.Where(value => value.Replacement is not null))
+                points.ReplaceRange(retainedReplacement, retainedOld);
+                if (discarded.Length != 0)
                 {
-                    ReplaceRequired(points, value.Replacement!, value.Selected.Point, objectName);
-                }
-                foreach (BatchCurvePointResult value in results
-                    .Where(value => value.Replacement is null)
-                    .OrderBy(value => value.Selected.Index))
-                {
-                    InsertAt(points, value.Selected.Index, value.Selected.Point, objectName);
+                    (restoreDiscarded ?? throw new InvalidOperationException(
+                        $"Discarded {objectName} values do not have a pending removal to restore."))();
+                    restoreDiscarded = null;
                 }
             });
+    }
 
     private static SegmentWindowTransform PlanLogicalNoteBatchWindow(
         SegmentTransformEntry entry,
@@ -666,6 +760,11 @@ public static partial class ProjectDomainEditCommands
                 .Select(value => checked(value.Replacement!.Tick + 1))
                 .DefaultIfEmpty(oldLength)
                 .Max());
+        TemplateEvent[] discarded = selected
+            .Where((_, index) => results[index].Replacement is null)
+            .Select(static value => value.Event)
+            .ToArray();
+        Action? restoreDiscarded = null;
         return Prepared(
             selected.Where((value, index) =>
                 results[index].Replacement is null
@@ -674,28 +773,30 @@ public static partial class ProjectDomainEditCommands
             EventInstrumentChange(eventInstrumentId),
             _ =>
             {
-                for (int index = 0; index < selected.Length; index++)
+                using (voice.Events.BeginBatchChange())
                 {
-                    if (results[index].Replacement is null)
+                    for (int index = 0; index < selected.Length; index++)
                     {
-                        RemoveRequired(voice.Events, selected[index].Event, "discarded Template Event");
+                        if (results[index].Replacement is not null)
+                            SetTemplateEvent(selected[index].Event, results[index].Replacement!);
                     }
-                    else SetTemplateEvent(selected[index].Event, results[index].Replacement!);
+                    if (discarded.Length != 0)
+                        restoreDiscarded = voice.Events.RemoveRangeWithUndo(discarded);
                 }
                 instrument.TemplateLengthTicks = newLength;
             },
             _ =>
             {
-                for (int index = 0; index < selected.Length; index++)
+                using (voice.Events.BeginBatchChange())
                 {
-                    SetTemplateEvent(selected[index].Event, selected[index].Old);
-                }
-                foreach ((TemplateEventTransformEntry item, int index) in selected
-                    .Select((value, index) => (value, index))
-                    .Where(value => results[value.index].Replacement is null)
-                    .OrderBy(value => value.value.Index))
-                {
-                    voice.Events.Insert(item.Index, item.Event);
+                    for (int index = 0; index < selected.Length; index++)
+                        SetTemplateEvent(selected[index].Event, selected[index].Old);
+                    if (discarded.Length != 0)
+                    {
+                        (restoreDiscarded ?? throw new InvalidOperationException(
+                            "Discarded Template Events do not have a pending removal to restore."))();
+                        restoreDiscarded = null;
+                    }
                 }
                 instrument.TemplateLengthTicks = oldLength;
             });

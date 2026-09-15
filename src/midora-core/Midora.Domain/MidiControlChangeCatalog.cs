@@ -77,6 +77,22 @@ public static class MidiControlChangeCatalog
 
 public static class TemplateEventMidiTargets
 {
+    public static long EncodeDiscoveryKey(MidiValueTarget target) =>
+        ((long)(int)target.Kind << 32) | (uint)target.Number;
+
+    public static bool TryDecodeDiscoveryKey(long key, out MidiValueTarget target)
+    {
+        int kindValue = unchecked((int)(key >> 32));
+        int number = unchecked((int)(uint)key);
+        if (!Enum.IsDefined((MidiValueKind)kindValue) || number < 0)
+        {
+            target = default;
+            return false;
+        }
+        target = new((MidiValueKind)kindValue, number);
+        return true;
+    }
+
     public static TemplateEventMappingTarget ToMappingTarget(MidiValueTarget target) =>
         target.Kind switch
         {
@@ -189,7 +205,54 @@ public static class TemplateEventMidiTargets
         }
     }
 
+    public static IEnumerable<MidiValueTarget> Enumerate(TemplateEventSnapshotValue value)
+    {
+        switch (value.Kind)
+        {
+            case TemplateEventKind.ControlChange:
+                yield return MidiValueTarget.ControlChange(value.Number);
+                break;
+            case TemplateEventKind.Bank:
+                if (value.HasBankMsb) yield return MidiValueTarget.BankMsb;
+                if (value.HasBankLsb) yield return MidiValueTarget.BankLsb;
+                break;
+            case TemplateEventKind.Program:
+                yield return MidiValueTarget.Program;
+                break;
+            case TemplateEventKind.PitchBend:
+                yield return MidiValueTarget.PitchBend;
+                break;
+            case TemplateEventKind.RegisteredParameter:
+                yield return MidiValueTarget.Rpn(value.Number);
+                break;
+            case TemplateEventKind.NonRegisteredParameter:
+                yield return MidiValueTarget.Nrpn(value.Number);
+                break;
+            case TemplateEventKind.PitchBendRange:
+                yield return MidiValueTarget.PitchBendRangeSemitones;
+                yield return MidiValueTarget.PitchBendRangeCents;
+                break;
+        }
+    }
+
+    public static IEnumerable<long> EnumerateDiscoveryKeys(
+        TemplateEventSnapshotValue value) =>
+        value.Kind == TemplateEventKind.Note ? [long.MinValue] : Enumerate(value).Select(EncodeDiscoveryKey);
+
     public static int GetValue(TemplateEvent value, MidiValueTarget target)
+    {
+        if (!Enumerate(value).Contains(target))
+        {
+            throw new ArgumentException("The Template Event does not expose the requested MIDI target.", nameof(target));
+        }
+        return target.Kind switch
+        {
+            MidiValueKind.BankLsb or MidiValueKind.PitchBendRangeCents => value.SecondaryValue,
+            _ => value.Value
+        };
+    }
+
+    public static int GetValue(TemplateEventSnapshotValue value, MidiValueTarget target)
     {
         if (!Enumerate(value).Contains(target))
         {

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Text;
+using Midora.Common;
 
 namespace Midora.Audio.Bass;
 
@@ -12,6 +13,7 @@ internal sealed unsafe class BassMidiChildProcessSession : IAudioRenderSource, I
 {
     private const int MonitoringProtocolMagic = 0x4d43444d;
     private const int MonitoringProtocolVersion = 1;
+    private readonly MidoraOwnedTemporaryDirectoryLease _ownedTemporaryDirectoryLease;
     private readonly string _ownedTemporaryDirectory;
     private readonly SharedAudioFrameRingBuffer _ring;
     private readonly int _producerWorkFrameCount;
@@ -73,9 +75,6 @@ internal sealed unsafe class BassMidiChildProcessSession : IAudioRenderSource, I
         soundFontPath = Path.GetFullPath(soundFontPath);
         bassNativeDirectory = Path.GetFullPath(bassNativeDirectory);
 
-        _ownedTemporaryDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"midora-audio-ipc-{Guid.NewGuid():N}");
         _consumptionMode = consumptionMode;
 
         string mapName = $"Midora.Audio.{Guid.NewGuid():N}";
@@ -86,11 +85,14 @@ internal sealed unsafe class BassMidiChildProcessSession : IAudioRenderSource, I
             plan.SampleRate,
             ipcAudioBufferMilliseconds);
         _producerWorkFrameCount = Math.Min(rendererSettings.MaximumWorkFrameCount, capacityFrames);
+        _ownedTemporaryDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.AudioWorkerExchangeDirectory,
+            "midora-audio-ipc");
+        _ownedTemporaryDirectory = _ownedTemporaryDirectoryLease.DirectoryPath;
 
         SharedAudioFrameRingBuffer? createdRing = null;
         try
         {
-            Directory.CreateDirectory(_ownedTemporaryDirectory);
             _eventStreamProducer = MidiRenderEventStreamProducer.Create(
                 plan,
                 _ownedTemporaryDirectory);
@@ -381,21 +383,7 @@ internal sealed unsafe class BassMidiChildProcessSession : IAudioRenderSource, I
 
     private void CleanupOwnedTemporaryDirectory()
     {
-        try
-        {
-            string fullPath = Path.GetFullPath(_ownedTemporaryDirectory);
-            string expectedPrefix = Path.TrimEndingDirectorySeparator(
-                Path.GetFullPath(Path.GetTempPath())) + Path.DirectorySeparatorChar;
-            if (fullPath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileName(fullPath).StartsWith("midora-audio-ipc-", StringComparison.Ordinal))
-            {
-                Directory.Delete(fullPath, recursive: true);
-            }
-        }
-        catch
-        {
-            // The session result remains primary; startup cleanup can remove stale owned directories later.
-        }
+        _ownedTemporaryDirectoryLease.Dispose();
     }
 
     private void ReleaseControlPipe()

@@ -3,11 +3,55 @@ using Midora.Domain;
 namespace Midora.Desktop.Presentation.Interaction;
 
 public readonly record struct TimelineValueTracePoint(
-    double Tick,
+    long Tick,
     double NormalizedValue);
 
 public static class TimelineValueTraceSampler
 {
+    /// <summary>Stream samples in gesture order; the command reduces revisited ticks.</summary>
+    public static IEnumerable<TimelineValueTracePoint> EnumerateSamples(
+        IReadOnlyList<TimelineValueTracePoint> trace, long fixedStepTicks, bool useBars,
+        ProjectTimeSignatureMap? timeSignatureMap, long? rangeStartTick = null,
+        long? rangeEndTick = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(trace);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(fixedStepTicks);
+        if (rangeStartTick is < 0 || rangeEndTick is < 0 || rangeEndTick < rangeStartTick)
+            throw new ArgumentOutOfRangeException(nameof(rangeStartTick));
+        foreach (TimelineValueTracePoint point in trace) { Validate(point); _ = Quantize(point.Tick); }
+        if (trace.Count == 0) yield break;
+        cancellationToken.ThrowIfCancellationRequested();
+        long firstTick = Quantize(trace[0].Tick);
+        if (InRange(firstTick)) yield return new(firstTick, Math.Clamp(trace[0].NormalizedValue, 0, 1));
+        for (int index = 1; index < trace.Count; index++)
+        {
+            TimelineValueTracePoint from = trace[index - 1], to = trace[index];
+            long fromTick = Quantize(from.Tick), toTick = Quantize(to.Tick);
+            long tick = fromTick;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                double ratio = toTick == fromTick ? 1
+                    : Math.Clamp((tick - fromTick) / (double)(toTick - fromTick), 0, 1);
+                if (InRange(tick)) yield return new(tick, Math.Clamp(from.NormalizedValue
+                    + (to.NormalizedValue - from.NormalizedValue) * ratio, 0, 1));
+                if (tick == toTick) break;
+                long next;
+                next = toTick > fromTick
+                    ? ProjectTimelineGrid.TryGetNextGridTick(tick, fixedStepTicks, useBars, timeSignatureMap,
+                        out long after) ? after : toTick
+                    : TimelineGridQuantization.GetPreviousGridTick(tick, fixedStepTicks, useBars, timeSignatureMap);
+                if (toTick > fromTick) { if (next <= tick) break; tick = Math.Min(next, toTick); }
+                else { if (next >= tick) break; tick = Math.Max(next, toTick); }
+            }
+        }
+        long Quantize(long tick) => TimelineGridQuantization.SnapAbsolute(
+            tick,
+            fixedStepTicks, useBars, timeSignatureMap, movementDirection: 0);
+        bool InRange(long tick) => (!rangeStartTick.HasValue || tick >= rangeStartTick)
+            && (!rangeEndTick.HasValue || tick < rangeEndTick);
+    }
+
     public static void SampleInto(
         IReadOnlyList<TimelineValueTracePoint> trace,
         IDictionary<long, double> destination,
@@ -35,12 +79,13 @@ public static class TimelineValueTraceSampler
             throw new ArgumentOutOfRangeException(nameof(rangeEndTick));
         }
 
-        destination.Clear();
-        if (trace.Count == 0) return;
         foreach (TimelineValueTracePoint point in trace)
         {
             Validate(point);
+            _ = Quantize(point.Tick);
         }
+        destination.Clear();
+        if (trace.Count == 0) return;
 
         if (trace.Count == 1)
         {
@@ -65,7 +110,7 @@ public static class TimelineValueTraceSampler
             while (true)
             {
                 double ratio = Math.Clamp(
-                    (tick - (double)fromTick) / (toTick - (double)fromTick),
+                    (tick - fromTick) / (double)(toTick - fromTick),
                     0,
                     1);
                 AddSample(
@@ -75,24 +120,10 @@ public static class TimelineValueTraceSampler
                 if (tick == toTick) break;
 
                 long next;
-                try
-                {
-                    next = direction > 0
-                        ? TimelineGridQuantization.GetNextGridTick(
-                            tick,
-                            fixedStepTicks,
-                            useBars,
-                            timeSignatureMap)
-                        : TimelineGridQuantization.GetPreviousGridTick(
-                            tick,
-                            fixedStepTicks,
-                            useBars,
-                            timeSignatureMap);
-                }
-                catch (OverflowException)
-                {
-                    break;
-                }
+                next = direction > 0
+                    ? ProjectTimelineGrid.TryGetNextGridTick(tick, fixedStepTicks, useBars, timeSignatureMap,
+                        out long after) ? after : toTick
+                    : TimelineGridQuantization.GetPreviousGridTick(tick, fixedStepTicks, useBars, timeSignatureMap);
                 if (direction > 0)
                 {
                     if (next <= tick) break;
@@ -108,11 +139,10 @@ public static class TimelineValueTraceSampler
 
         return;
 
-        long Quantize(double tick)
+        long Quantize(long tick)
         {
-            long rounded = checked((long)Math.Round(tick, MidpointRounding.AwayFromZero));
             return TimelineGridQuantization.SnapAbsolute(
-                rounded,
+                tick,
                 fixedStepTicks,
                 useBars,
                 timeSignatureMap,
@@ -129,9 +159,7 @@ public static class TimelineValueTraceSampler
 
     private static void Validate(TimelineValueTracePoint point)
     {
-        if (!double.IsFinite(point.Tick)
-            || point.Tick < 0
-            || point.Tick > long.MaxValue
+        if (point.Tick < 0
             || !double.IsFinite(point.NormalizedValue))
         {
             throw new ArgumentOutOfRangeException(nameof(point));

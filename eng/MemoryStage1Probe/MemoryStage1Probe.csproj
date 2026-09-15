@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Test-only friend identity allows package transaction phase instrumentation,
+         and lets this identical harness target an unmodified baseline assembly. -->
+    <AssemblyName>Midora.Persistence.Tests</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <MemoryProbeReferenceDirectory Condition="'$(MemoryProbeReferenceDirectory)' == ''">$(MSBuildThisFileDirectory)..\..\src\midora-core\Midora.Application\bin\Release\net10.0</MemoryProbeReferenceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Midora.*.dll" Exclude="$(MemoryProbeReferenceDirectory)\*.Tests.dll" />
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Google.Protobuf.dll" />
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Microsoft.CodeAnalysis*.dll" />
+  </ItemGroup>
+  <Target Name="CheckProbeReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(MemoryProbeReferenceDirectory)\Midora.Application.dll')" Text="Build Midora.Application in Release first, or set MemoryProbeReferenceDirectory to a frozen baseline build." />
+    <Error Condition="!Exists('$(MemoryProbeReferenceDirectory)\Google.Protobuf.dll')" Text="Rebuild the reference project with CopyLocalLockFileAssemblies=true, then rebuild this probe." />
+  </Target>
+</Project>

@@ -125,7 +125,7 @@ Reset Defaults
 ```
 `Global Event Scope Defaults` 在初版只是持久化兼容所需的不可编辑空 marker，不属于用户可修改 Project 内容，也不提供独立设置入口。
 ### 17.2.2 Application Preferences
-保存于当前 Windows 用户本机，跨 Project 共享：
+保存于当前 portable ProgramRoot 的 `Data/Preferences`，由该程序副本下的 Project 共享：
 ```text
 Normal window bounds and maximized state
 Major splitters
@@ -140,24 +140,26 @@ Stop Cursor Behavior
 Render-Ahead Buffer
 Device Buffer Request
 Realtime Maximum Sample Voices per Unit Stream
-Audio Cache Root
 Maximum Reusable Audio Cache Bytes
 Ordered application SoundFont list: absolute local SF2/SFZ path + Enabled + optional target mapping
 Appearance Language (initial release only offers English)
 ```
-这些状态：
+Audio Cache Root 不是可编辑 Preference，固定为 `<ProgramRoot>/.tmp/AudioCache`。这些状态：
 - 不进入 Project Undo / Redo；
 - 不标记 Project Modified；
 - 不进入 `.midora`；
 - 不做账号、云端或设备同步。
 
-设备实际采样率、实际 buffer、callback period、当前设备枚举结果和 IPC 运行状态属于 Derived / Runtime Data，不作为 Application Preference 保存。音频缓存的 reusable 当前占用、transient 当前/峰值、session 目录、retention 状态与 Warning 同样是运行时派生状态；只保存配置 root 和 reusable byte quota。
+设备实际采样率、实际 buffer、callback period、当前设备枚举结果和 IPC 运行状态属于 Derived / Runtime Data，不作为 Application Preference 保存。音频缓存的 reusable 当前占用、transient 当前/峰值、session 目录、retention 状态与 Warning 同样是运行时派生状态；只保存 reusable byte quota，root 由 ProgramRoot 确定。
 
 SoundFont 列表对所有 Project 和从 MIDI 导入的新 Project 共用，不属于 Project 创建参数。列表支持新增 SF2/SFZ、删除、启用/禁用和排序；Enabled 只显示复选框，不重复显示 `Enabled` 文字。每项还提供完整 Target Bank MSB/LSB/Program 三元组：SF2 可关闭映射，SFZ 强制启用映射。顺序是正式 BASSMIDI 优先顺序。列表工具栏位于列表顶部；列表自身单个滚轮刻度使用小幅像素滚动，不得沿用下拉框或外层页面的大步进。Apply 的 Draft/持久化部分只保存路径与映射结构，不读取、复制或完整 hash 文件，不检查 SFZ 依赖；若 SoundFont、target、实时音频或音频缓存配置变化，持久化后必须显示 `Saving Settings` 模态任务并立即重建、加载和保留 Worker。加载失败必须明确报告且不得伪装成保存失败或静默恢复旧设置。列表不得进入 `.midora`、Project Modified 或 Undo/Redo。
 
 Application Preferences 必须分为 `Audio | SoundFonts | Appearance` 三个 Tab。Audio 包含 Playback、Realtime Audio 与 Audio Cache；SoundFonts 包含上述有序列表；Appearance 初版显示 Language 下拉框且唯一可选项为 `English`，为未来本地化预留稳定入口，但本轮不引入语言包或热切换。
-### 17.2.3 Project Session UI State
-只存在于当前 Project 会话：
+### 17.2.3 Project Presentation 与 Project Session UI State
+
+Format 3 的 Project presentation 只保存第 3.11 与第 16.33 节明确列出的 Onion/All-Tracks 容器。它使用独立 revision/save baseline，不标记 Project Modified、不进入 Undo/Redo、编译或 canonical；损坏时恢复默认 presentation 并独立警告。
+
+以下普通状态仍只存在于当前 Project 会话：
 ```text
 Workspace Tabs and order
 Active Workspace
@@ -191,6 +193,8 @@ Modal Mapping Function edit buffer
 ```
 Mapping Function 编辑缓冲只持续到当前模态对话框关闭；OK 成功前不属于 Project Content，Cancel、关闭、Project 切换或进程退出时直接丢弃，不设置跨对话框 Draft。
 ### 17.2.5 `.midora` 明确不保存
+
+除版本化 Project presentation 白名单外，以下内容明确不保存：
 ```text
 Window and panel layout
 Workspace Tabs
@@ -324,6 +328,10 @@ Diagnostics 是独立 Workspace，不在主窗口底部复制紧凑列表。它�
 
 主动切换到 Diagnostics Workspace 时，键盘焦点必须落在非编辑的 Workspace 表面，不得自动进入搜索框、筛选下拉框或其他命令控件。用户主动 Compile、Play 或 Preview 失败时可激活 Diagnostics，但不得抢键盘焦点或自动跳转来源；后台 Information、Warning 和普通非阻塞 Error 只更新状态栏计数。
 
+筛选后数量不超过 `Int32.MaxValue` 时保留连续虚拟列表；超过时每页 **4096** 行，提供 Previous、Next 和一基页码跳转，并显示当前全局行范围、筛选后总数及全源总数。搜索、严重程度、状态和来源范围筛选始终作用于完整诊断，而非当前页；状态栏保持 Whole Project 精确 Int64 统计，不随页码改变。列表与筛选只按需生成行，不得创建与逻辑诊断总数成比例的 WPF 控件。
+
+页码无效时保留当前页并显示就地错误；有效换页清除旧页行选择，恢复非编辑 Workspace 表面焦点。未改筛选或诊断修订时，普通 Tab 切换保留页码。更换诊断修订或筛选后从结果第一页开始；旧页/旧修订行不得映射为新来源。页码、筛选和行缓存只属于会话状态，不进入 Project Modified、Undo 或持久化。
+
 主窗口不设置 Tasks Tab 或 Task History 表。一次只存在一个前台任务；必要时由模态 Task overlay 展示当前任务。只有任务明确支持安全取消时才显示可响应的 Cancel。没有可靠总量时使用 indeterminate 动画；有可靠当前值与总量时才显示 determinate 进度。Save / Save Copy 进入不可取消事务后不得显示不可响应的 Cancel 控件。任务状态属于 Runtime Data，不保存、不进入 Undo/Redo。
 
 提交 Application Preferences 时，只有 SoundFont（包括 target）、实时音频或音频缓存配置实际变化才显示标题为 `Saving Settings` 的不可取消模态 Task overlay；其覆盖程序设置持久化、旧 Worker 释放、新 Worker 启动、Enabled SF2/SFZ 加载与设备探测的完整时段。纯 UI 或最近目录设置不得触发该 overlay。
@@ -376,6 +384,7 @@ Preference Storage Failed
 左侧状态单元固定按 `Issues → Compile State → SoundFont Resource → Project Save State → Playback State` 排列；Issues 左侧显示同一诊断状态圆点。最右侧只用于瞬时消息；非错误消息使用次要文本色，错误消息使用错误色。该区域不得显示 CPU RID 或 .NET 运行时版本。
 `Playing` 使用成功/绿色文本；`Buffering` 使用纯黄色文本并可附带有界进度百分比。颜色只表达运行状态，不改变 Transport 可用性。
 Issues 显示 Whole Project 当前诊断计数，不受 Diagnostics 当前搜索和筛选影响。计数文本是显式导航入口：鼠标悬停时提亮并显示 Hand 指针，单击后激活 Diagnostics Workspace；激活后的键盘焦点仍遵循 17.5.2 的非编辑表面规则。
+SoundFont Resource 文本使用同样的提亮/Hand 导航表现，单击直接打开 Application Preferences 的 SoundFonts 页。该入口与菜单共用正式设置流程；无 Project 时也可使用。正常播放、Buffering 和不可启动另一前台任务时禁用并说明原因，不得为了打开设置停止正常播放。需要结束的事件乐器试听沿用既有预览所有权流程；Cancel 不保存配置、不重建 Worker。
 Compile State：
 ```text
 Not Compiled
@@ -397,4 +406,8 @@ Rendering
 ```
 Buffering 是播放状态，不自动显示为 Error。
 Buffering 状态文本使用纯黄色。只有音频后端提供同一 recovery 区间内单调、可验证的已准备 frame 与目标 frame 时，才追加 `(<N>%)`；不得根据经过时间猜测百分比。`100%` 表示该 recovery 区间准备完成并即将恢复 Playing。Buffering 期间主播放/停止按钮继续执行 Stop，但图标显示动态加载指示；恢复 Playing、Stopped 或 Error 后立即恢复停止/播放图标。
+
+## 17.8 Instrument Catalogs 全局入口
+
+Application 菜单提供 `Instrument Catalogs...`，打开独立模态 Catalog Editor。该编辑器不依赖活动 Project；Catalog-only 保存不得显示 Project Modified、触发 Project Compile 或重建音频 Worker。Application Preferences 的 SoundFonts 页可提供指向同一编辑器/显式 `Scan Presets...` 流程的入口，但 Preferences Apply 本身不得隐式扫描 SF2。
 ---

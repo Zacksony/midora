@@ -8,7 +8,7 @@ namespace Midora.Application.Tests;
 public sealed class ProjectConductorAndSettingsEditCommandsTests
 {
     [Fact]
-    public void TempoUpdatePreservesIdentityAndRejectsInvalidOrConflictingValues()
+    public void TempoUpdatePreservesIdentityAndProtectsInitialStateWhileReplacingConflicts()
     {
         MidoraProject project = new(480);
         TempoChange initial = project.Conductor.Tempos[0];
@@ -35,8 +35,10 @@ public sealed class ProjectConductorAndSettingsEditCommandsTests
         Assert.Equal(nextStableId, project.NextStableId);
         Assert.Throws<InvalidOperationException>(() => document.Execute(
             ProjectDomainEditCommands.UpdateTempo(initial.Id, 960, 120m)));
-        Assert.Throws<InvalidOperationException>(() => document.Execute(
-            ProjectDomainEditCommands.UpdateTempo(later.Id, 0, 90m)));
+        document.Execute(ProjectDomainEditCommands.UpdateTempo(later.Id, 0, 90m));
+        Assert.Equal(initial.Id, Assert.Single(project.Conductor.Tempos).Id);
+        Assert.Equal(90m, project.Conductor.Tempos[0].BeatsPerMinute);
+        document.Undo();
         Assert.Throws<ArgumentOutOfRangeException>(() => document.Execute(
             ProjectDomainEditCommands.UpdateTempo(initial.Id, 0, 0m)));
         Assert.Throws<ArgumentOutOfRangeException>(() => document.Execute(
@@ -108,8 +110,10 @@ public sealed class ProjectConductorAndSettingsEditCommandsTests
             ProjectDomainEditCommands.UpdateTimeSignature(initial.Id, 0, 4, 3)));
         Assert.Throws<ArgumentOutOfRangeException>(() => document.Execute(
             ProjectDomainEditCommands.UpdateKeySignature(key.Id, 360, 8, false)));
-        Assert.Throws<InvalidOperationException>(() => document.Execute(
-            ProjectDomainEditCommands.UpdateKeySignature(key.Id, laterKey.Tick, 0, false)));
+        document.Execute(ProjectDomainEditCommands.UpdateKeySignature(key.Id, laterKey.Tick, 0, false));
+        Assert.Equal(key.Id, Assert.Single(project.Conductor.KeySignatures).Id);
+        Assert.Equal(0, project.Conductor.KeySignatures[0].SharpsFlats);
+        document.Undo();
 
         document.Undo();
         document.Undo();
@@ -179,8 +183,9 @@ public sealed class ProjectConductorAndSettingsEditCommandsTests
         ProjectDocumentSession document = PersistedDocument(compilation);
 
         document.Execute(ProjectDomainEditCommands.UpdateProjectEndMarker(1_920));
-        Assert.Same(marker, project.Conductor.EndMarker);
-        Assert.Equal(1_920, marker.Tick);
+        Assert.Equal(marker.Id, project.Conductor.EndMarker!.Id);
+        Assert.Equal(1_920, project.Conductor.EndMarker.Tick);
+        Assert.Equal(960, marker.Tick);
         AssertCurrentCompilationMatchesFull(compilation);
 
         document.Execute(ProjectDomainEditCommands.DeleteProjectEndMarker());
@@ -188,8 +193,8 @@ public sealed class ProjectConductorAndSettingsEditCommandsTests
         AssertCurrentCompilationMatchesFull(compilation);
 
         document.Undo();
-        Assert.Same(marker, project.Conductor.EndMarker);
-        Assert.Equal(1_920, marker.Tick);
+        Assert.Equal(marker.Id, project.Conductor.EndMarker!.Id);
+        Assert.Equal(1_920, project.Conductor.EndMarker.Tick);
         document.Undo();
         Assert.Same(marker, project.Conductor.EndMarker);
         Assert.Equal(960, marker.Tick);

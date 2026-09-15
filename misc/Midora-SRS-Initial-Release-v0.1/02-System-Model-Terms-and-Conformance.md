@@ -49,7 +49,7 @@ Project
 - **初版不支持**：不得以隐藏、实验或不完整形式作为正式功能暴露。
 - **由实现设计确定**：本规格不固定具体算法、数据结构或第三方 API，但实现结果仍必须满足所有外部语义和不变量。
 ## 2.4 用户编号与内部编码
-所有面向用户的编号从 1 开始显示：
+除明确使用 MIDI raw 值的 Program / Bank 外，面向用户的顺序编号从 1 开始显示：
 ```text
 Port 1–16
 Channel 1–16
@@ -57,9 +57,9 @@ Arrangement Track 1–N
 Event Instrument Definition 1–N
 Pure MIDI Track 1–N
 SubVoice 1–N
-Program 1–128
+Program 0–127
 ```
-MIDI 数据内部按 MIDI 1.0 标准使用 0-based 编码。UI 不得暴露 0-based Channel、Program 或 Port 编号。
+MIDI 数据内部按 MIDI 1.0 标准使用 0-based 编码。UI 不得暴露 0-based Channel 或 Port 编号。2026-09-14 已确认 R27：Program 数值入口统一为 0～127，可附 Catalog 名称；Bank MSB / LSB 同样为 0～127，显示名称不改变 raw 值。
 ## 2.5 稳定身份
 所有需要被引用、撤销、复制、诊断定位或跨保存恢复的 Project 对象必须拥有稳定 ID。名称、数组顺序、tick、显示序号或文件路径不得替代稳定身份。
 稳定 ID 的内存承载类型由实现设计确定，持久化兼容表示固定见 16.13.2。稳定 ID 必须：

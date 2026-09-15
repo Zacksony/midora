@@ -1,0 +1,171 @@
+<Window x:Class="Midora.Desktop.LogicalParameterEventBindingDialog"
+        FontFamily="{StaticResource Font.UI}"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+        Title="Add Event Binding" Width="720" Height="770" MinWidth="620" MinHeight="650"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize" WindowStyle="None"
+        ShowInTaskbar="False" Background="{StaticResource Brush.Surface.0}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="38" CornerRadius="0" GlassFrameThickness="0"
+                        ResizeBorderThickness="6" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+  <Border BorderBrush="{StaticResource Brush.Border.Strong}" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="38"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="58"/>
+      </Grid.RowDefinitions>
+
+      <Grid Background="{StaticResource Brush.Black}" MouseLeftButtonDown="OnTitleMouseDown">
+        <TextBlock Margin="12,0,50,0" VerticalAlignment="Center" FontWeight="SemiBold"
+                   Text="Add Event Binding"/>
+        <Button Width="46" Height="38" HorizontalAlignment="Right"
+                Style="{StaticResource Button.Caption.Close}" ToolTip="Close" Click="OnCancelClick">
+          <ui:FluentIcon Style="{StaticResource Icon.WindowControl}" Data="{StaticResource WindowControl.Close}"/>
+        </Button>
+      </Grid>
+
+      <Border Grid.Row="1" Padding="18,13" Background="{StaticResource Brush.Surface.1}"
+              BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1">
+        <StackPanel>
+          <TextBlock Style="{StaticResource Text.Title}" Text="Logical Parameter → MIDI Event"/>
+          <TextBlock Margin="0,4,0,0" Style="{StaticResource Text.Caption}" TextWrapping="Wrap"
+                     Text="Create one Integer Logical Parameter, bind it to the chosen event on every selected SubVoice, and add missing empty lanes without creating Tick 0 events."/>
+        </StackPanel>
+      </Border>
+
+      <ScrollViewer Grid.Row="2" Padding="18" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <TextBlock Style="{StaticResource Text.Overline}" Text="PARAMETER NAME"/>
+          <TextBox x:Name="NameBox" Margin="0,5,0,14" TextChanged="OnNameChanged"/>
+
+          <TextBlock Style="{StaticResource Text.Overline}" Text="TARGET EVENT KIND"/>
+          <ComboBox x:Name="KindBox" Margin="0,5,0,12" SelectionChanged="OnTargetChanged"/>
+
+          <StackPanel x:Name="ControllerRow" Margin="0,0,0,12">
+            <TextBlock Style="{StaticResource Text.Overline}" Text="CONTROLLER"/>
+            <ComboBox x:Name="ControllerBox" Margin="0,5,0,0" DisplayMemberPath="DisplayName"
+                      SelectionChanged="OnTargetChanged"/>
+          </StackPanel>
+          <StackPanel x:Name="RpnRow" Margin="0,0,0,12" Visibility="Collapsed">
+            <TextBlock Style="{StaticResource Text.Overline}" Text="RPN NUMBER"/>
+            <TextBox x:Name="RpnBox" Margin="0,5,0,0" Text="0" TextChanged="OnTargetChanged"/>
+          </StackPanel>
+          <StackPanel x:Name="NrpnRow" Margin="0,0,0,12" Visibility="Collapsed">
+            <TextBlock Style="{StaticResource Text.Overline}" Text="NRPN NUMBER"/>
+            <TextBox x:Name="NrpnBox" Margin="0,5,0,0" Text="0" TextChanged="OnTargetChanged"/>
+          </StackPanel>
+
+          <Grid Margin="0,0,0,14">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Style="{StaticResource Text.Overline}" Text="TARGET SUBVOICES"/>
+              <ComboBox x:Name="ScopeBox" Margin="0,5,0,0" DisplayMemberPath="Label"
+                        SelectionChanged="OnScopeChanged"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+              <TextBlock Style="{StaticResource Text.Overline}" Text="EXISTING TARGET MAPPINGS"/>
+              <ComboBox x:Name="ConflictBox" Margin="0,5,0,0" DisplayMemberPath="Label">
+                <ComboBox.ItemContainerStyle>
+                  <Style TargetType="ComboBoxItem"
+                         BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                    <Setter Property="IsEnabled" Value="{Binding IsEnabled}"/>
+                  </Style>
+                </ComboBox.ItemContainerStyle>
+              </ComboBox>
+            </StackPanel>
+          </Grid>
+
+          <Border x:Name="SubVoiceSelectionPanel" Margin="0,0,0,14" Padding="9" Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock x:Name="SubVoiceSelectionHint" Margin="0,0,0,7" Style="{StaticResource Text.Caption}"/>
+              <ItemsControl x:Name="SubVoiceList"
+                            MaxHeight="150"
+                            ScrollViewer.CanContentScroll="True"
+                            VirtualizingPanel.IsVirtualizing="True"
+                            VirtualizingPanel.VirtualizationMode="Recycling">
+                <ItemsControl.Template>
+                  <ControlTemplate TargetType="{x:Type ItemsControl}">
+                    <ScrollViewer x:Name="PART_ScrollViewer"
+                                  Background="Transparent"
+                                  CanContentScroll="True"
+                                  Focusable="False"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                      <ItemsPresenter x:Name="PART_ItemsPresenter"/>
+                    </ScrollViewer>
+                  </ControlTemplate>
+                </ItemsControl.Template>
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <VirtualizingStackPanel/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <CheckBox Margin="2" Content="{Binding Name}"
+                              IsChecked="{Binding IsSelected, Mode=TwoWay}"/>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <TextBlock Style="{StaticResource Text.Overline}" Text="OPERATION"/>
+          <ComboBox x:Name="OperationBox" Margin="0,5,0,8" SelectionChanged="OnOperationChanged"/>
+          <TextBlock x:Name="OperationHelpText" Margin="0,0,0,12" Style="{StaticResource Text.Caption}"
+                     TextWrapping="Wrap"/>
+
+          <Grid Margin="0,0,0,12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <StackPanel><TextBlock Style="{StaticResource Text.Overline}" Text="SOURCE MINIMUM"/><TextBox x:Name="SourceMinimumBox" Margin="0,5,0,0"/></StackPanel>
+            <StackPanel Grid.Column="2"><TextBlock Style="{StaticResource Text.Overline}" Text="SOURCE MAXIMUM"/><TextBox x:Name="SourceMaximumBox" Margin="0,5,0,0"/></StackPanel>
+          </Grid>
+
+          <Grid x:Name="FactorRangePanel" Margin="0,0,0,8" Visibility="Collapsed">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <StackPanel><TextBlock Style="{StaticResource Text.Overline}" Text="FACTOR MINIMUM"/><TextBox x:Name="FactorMinimumBox" Margin="0,5,0,0" Text="0"/></StackPanel>
+            <StackPanel Grid.Column="2"><TextBlock Style="{StaticResource Text.Overline}" Text="FACTOR MAXIMUM"/><TextBox x:Name="FactorMaximumBox" Margin="0,5,0,0" Text="2"/></StackPanel>
+          </Grid>
+
+          <Border Margin="0,7,0,0" Padding="10" Background="{StaticResource Brush.Surface.1}"
+                  BorderBrush="{StaticResource Brush.Border}" BorderThickness="1" CornerRadius="3">
+            <StackPanel>
+              <TextBlock x:Name="SummaryText" Style="{StaticResource Text.Caption}" TextWrapping="Wrap"/>
+              <TextBlock Margin="0,10,0,4" Style="{StaticResource Text.Overline}"
+                         Text="EXISTING EXACT-TARGET EXECUTION ORDER"/>
+              <ListBox x:Name="ExistingMappingOrderList" MaxHeight="132"
+                       ScrollViewer.CanContentScroll="True"
+                       VirtualizingPanel.IsVirtualizing="True"
+                       VirtualizingPanel.VirtualizationMode="Recycling">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Margin="2,1" Style="{StaticResource Text.Caption}"
+                               Text="{Binding}" TextWrapping="Wrap"/>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+          </Border>
+          <TextBlock x:Name="ValidationText" Margin="0,10,0,0"
+                     Foreground="{StaticResource Brush.Red.Hover}" TextWrapping="Wrap"/>
+        </StackPanel>
+      </ScrollViewer>
+
+      <Border Grid.Row="3" Padding="10" Background="{StaticResource Brush.Surface.1}"
+              BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0">
+        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+          <Button Margin="0,0,7,0" Style="{StaticResource Button.Dialog.Cancel}" Content="Cancel"
+                  IsCancel="True" Click="OnCancelClick"/>
+          <Button Style="{StaticResource Button.Dialog.Confirm}" Content="OK"
+                  IsDefault="True" Click="OnOkClick"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

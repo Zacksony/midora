@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\midora-common\Midora.Common\Midora.Common.csproj" />
     <ProjectReference Include="..\Midora.Mapping.Contract.V2\Midora.Mapping.Contract.V2.csproj" />
   </ItemGroup>
 </Project>

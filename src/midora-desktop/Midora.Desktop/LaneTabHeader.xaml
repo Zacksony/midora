@@ -1,0 +1,44 @@
+<UserControl x:Class="Midora.Desktop.LaneTabHeader"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+ x:Name="HeaderRoot" Loaded="OnLoaded" Unloaded="OnUnloaded" Height="32">
+ <UserControl.Resources>
+  <Style x:Key="LaneHeaderButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+   <Setter Property="Height" Value="24"/><Setter Property="MinWidth" Value="0"/><Setter Property="Padding" Value="6,0"/>
+   <Setter Property="Margin" Value="1,0"/>
+  </Style>
+ </UserControl.Resources>
+ <Border Background="{DynamicResource Brush.Surface.1}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+  <Grid>
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <ListBox x:Name="Tabs" BorderThickness="0" Background="Transparent" Padding="0" VerticalAlignment="Center"
+    ScrollViewer.HorizontalScrollBarVisibility="Hidden" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+    ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+    PreviewMouseWheel="OnTabWheel" PreviewMouseLeftButtonDown="OnTabDown" PreviewMouseMove="OnTabMove"
+    AllowDrop="True" DragEnter="OnTabDragOver" DragOver="OnTabDragOver" DragLeave="OnTabDragLeave"
+    Drop="OnTabDrop" SelectionChanged="OnTabSelected">
+    <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ListBox.ItemsPanel>
+    <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="7,0"/><Setter Property="Height" Value="26"/><Setter Property="VerticalContentAlignment" Value="Center"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="Border" Padding="{TemplateBinding Padding}" CornerRadius="3" BorderThickness="1" BorderBrush="{DynamicResource Brush.Border}" Background="{DynamicResource Brush.Surface.0}"><ContentPresenter VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource Brush.Red}"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Border" Property="Background" Value="{DynamicResource Brush.Surface.2}"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
+    <ListBox.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal" ToolTip="{Binding Description}"><TextBlock Text="{Binding Name}" VerticalAlignment="Center" MaxWidth="200" TextTrimming="CharacterEllipsis"/><Button Width="18" Height="20" Padding="0" Margin="5,0,0,0" Tag="{Binding}" Click="OnCloseTab" ToolTip="Hide Lane (keep its data)"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource LaneHeaderButton}"><Style.Triggers><DataTrigger Binding="{Binding Key.Type}" Value="0"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger><DataTrigger Binding="{Binding Key.Type}" Value="1"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Button.Style><ui:FluentIcon Width="10" Height="10" Data="{DynamicResource Fluent.Dismiss20Regular}"/></Button></StackPanel></DataTemplate></ListBox.ItemTemplate>
+   </ListBox>
+   <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0,3,0">
+    <TextBlock x:Name="Coordinates" VerticalAlignment="Center" Margin="0,0,6,0" Style="{DynamicResource Text.Mono}" Foreground="White"/>
+    <ToggleButton x:Name="Snap" Content="Snap" Height="24" ToolTip="Enable/Disable Snap (A)" Click="OnSnapClick"/>
+    <ComboBox x:Name="Subdivision" Width="86" Height="24" Margin="4,0" IsEditable="True" Tag="LaneOperation" LostKeyboardFocus="OnSubdivisionLostFocus"/>
+    <Button x:Name="AddButton" Style="{StaticResource LaneHeaderButton}" ToolTip="Add Lane" Click="OnAddLane"><ui:FluentIcon Width="14" Height="14" Data="{DynamicResource Fluent.Add20Regular}"/></Button>
+    <Button x:Name="DirectoryButton" Style="{StaticResource LaneHeaderButton}" ToolTip="Lane directory" Click="OnDirectory"><ui:FluentIcon Width="14" Height="14" Data="{DynamicResource Fluent.ChevronDown20Regular}"/></Button>
+   </StackPanel>
+   <Popup x:Name="DirectoryPopup" PlacementTarget="{Binding ElementName=DirectoryButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Closed="OnDirectoryClosed">
+    <Border Width="430" MaxHeight="480" Padding="8" Background="{DynamicResource Brush.Surface.1}" BorderBrush="{DynamicResource Brush.Border.Strong}" BorderThickness="1" CornerRadius="4">
+     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <TextBox x:Name="Search" ToolTip="Search existing lanes" TextChanged="OnSearch" Margin="0,0,0,6"/>
+      <ListBox x:Name="DirectoryList" Grid.Row="1" MaxHeight="400" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto" PreviewMouseWheel="OnDirectoryWheel" PreviewMouseLeftButtonUp="OnDirectoryClick" PreviewKeyDown="OnDirectoryKey">
+       <ListBox.ItemTemplate><DataTemplate><Grid Margin="2,3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/><StackPanel Grid.Column="1" Orientation="Horizontal"><TextBlock Text="{Binding Description}" Margin="12,0,8,0" Style="{DynamicResource Text.Caption}"/><TextBlock Text="{Binding Status}" Style="{DynamicResource Text.Caption}"/></StackPanel></Grid></DataTemplate></ListBox.ItemTemplate>
+      </ListBox>
+     </Grid>
+    </Border>
+   </Popup>
+  </Grid>
+ </Border>
+</UserControl>

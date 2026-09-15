@@ -38,7 +38,13 @@ public static partial class ProjectDomainEditCommands
     public static IProjectEditCommand DuplicateSubVoice(
         MidoraId eventInstrumentId,
         MidoraId subVoiceId,
-        string? name = null) =>
+        string? name = null) => new ProjectPresentationCloneCommand(
+            DuplicateSubVoiceCore(eventInstrumentId, subVoiceId, name), PresentationCloneKind.SubVoice, subVoiceId, eventInstrumentId);
+
+    private static IProjectEditCommand DuplicateSubVoiceCore(
+        MidoraId eventInstrumentId,
+        MidoraId subVoiceId,
+        string? name) =>
         Command("Duplicate SubVoice", project =>
         {
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
@@ -53,7 +59,6 @@ public static partial class ProjectDomainEditCommands
                 value =>
                 {
                     SubVoice copy = CloneSubVoice(value, source, normalizedName);
-                    RemoveLaterExactTimelineCollisions(copy);
                     instrument.SubVoices.Insert(index, copy);
                     return copy;
                 },
@@ -589,7 +594,7 @@ public static partial class ProjectDomainEditCommands
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             _ = FindLogicalParameter(instrument, parameterId);
             _ = FindSubVoice(instrument, subVoiceId);
-            ValidateMidiStateValue(target, value: null);
+            MidiStateValueRules.Validate(target, value: null);
             ValidateIntegerTargetSettings(rounding, overflow);
             LogicalParameterMapping[] peers = instrument.ParameterMappings
                 .Where(value => value.SubVoiceId == subVoiceId && value.Target == target)
@@ -740,9 +745,13 @@ public static partial class ProjectDomainEditCommands
                 : checked(replacement.Tick + 1);
             long oldTemplateLength = instrument.TemplateLengthTicks;
             long replacementTemplateLength = Math.Max(oldTemplateLength, requiredBoundary);
-            HashSet<TemplateEventMappingTarget> existingTargets = voice.Events
-                .SelectMany(TemplateEventMappingTarget.Enumerate)
-                .ToHashSet();
+            // Use the paged target directory, not a full event enumeration when
+            // creating one point in a large SubVoice. Existing targets without a
+            // Mapping must stay unmapped; creation must not revive deleted owners.
+            HashSet<TemplateEventMappingTarget> existingTargets = [];
+            foreach (long key in voice.Events.CreateQuerySnapshot().DiscoveryKeys)
+                if (TemplateEventMidiTargets.TryDecodeDiscoveryKey(key, out MidiValueTarget target))
+                    existingTargets.Add(TemplateEventMidiTargets.ToMappingTarget(target));
             TemplateEventMappingTarget[] optionalMappingTargetsToCreate =
                 EnumerateTemplateEventMappingTargets(replacement)
                     .Where(target => target.EventKind != TemplateEventKind.Note
@@ -789,7 +798,9 @@ public static partial class ProjectDomainEditCommands
                 ? ResolveTargetedExactTemplateNoteCollisions(
                     prepared,
                     [new(voice, replacement.Tick, replacement.Number)])
-                : ResolveExactSubVoiceEventCollisions(prepared, voice);
+                : ResolveTargetedExactTemplateEventPointCollisions(
+                    prepared,
+                    CreateTemplateEventPointCollisionTargets(voice, replacement));
         });
 
     private static void RestoreNewTemplateEventMappings(
@@ -944,28 +955,7 @@ public static partial class ProjectDomainEditCommands
                     sourceMapping.TargetSettings.Overflow));
             copy.EventMappings.Add(mappingCopy);
         }
-        foreach (TemplateEvent sourceEvent in source.Events)
-        {
-            TemplateEvent eventCopy = new(project);
-            SetTemplateEvent(eventCopy, CaptureTemplateEvent(sourceEvent));
-            copy.Events.Add(eventCopy);
-        }
-        foreach (ValueCurve sourceCurve in source.Curves)
-        {
-            ValueCurve curveCopy = new(project) { Target = sourceCurve.Target };
-            SetTargetSettings(
-                curveCopy.TargetSettings,
-                new(sourceCurve.TargetSettings.Rounding, sourceCurve.TargetSettings.Overflow));
-            foreach (CurvePoint point in sourceCurve.Points)
-            {
-                curveCopy.Points.Add(new CurvePoint(
-                    project,
-                    point.Tick,
-                    point.Value,
-                    point.Interpolation));
-            }
-            copy.Curves.Add(curveCopy);
-        }
+        CopyBoundedSubVoiceTimeline(project, source, copy);
         return copy;
     }
 
@@ -1024,17 +1014,15 @@ public static partial class ProjectDomainEditCommands
             "The Mapping Chain is no longer attached to the Event Instrument.");
     }
 
-    private static void InsertValueCurvePoint(List<CurvePoint> points, CurvePoint point)
+    private static void InsertValueCurvePoint(CurvePointCollection points, CurvePoint point)
     {
-        if (points.Any(value => value.Id == point.Id || value.Tick == point.Tick))
+        if (points.TryGetById(point.Id, out _)
+            || points.CreateQuerySnapshot().QueryValues(point.Tick, checked(point.Tick + 1)).Any())
         {
             throw new InvalidOperationException(
                 "The Value Curve point ID or tick is already present.");
         }
-        int index = points.FindIndex(value =>
-            value.Tick > point.Tick
-            || value.Tick == point.Tick && value.Id.CompareTo(point.Id) > 0);
-        points.Insert(index < 0 ? points.Count : index, point);
+        points.Insert(FindCurvePointInsertionIndex(points, point.Tick, point.Id), point);
     }
 
     private static void ValidateLogicalParameterDefinitionCreation(

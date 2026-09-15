@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Midora.Common;
 using Midora.Domain;
 
 namespace Midora.Application;
@@ -14,7 +15,8 @@ public sealed record ApplicationPreferencesSaveResult(
 
 public sealed class ApplicationPreferencesStore
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 3;
+    private const int PreviousSchemaVersion = 2;
     private const int MaximumFileBytes = 1024 * 1024;
     private readonly string _filePath;
 
@@ -25,17 +27,8 @@ public sealed class ApplicationPreferencesStore
 
     public string FilePath => _filePath;
 
-    public static string GetDefaultFilePath()
-    {
-        string localApplicationData = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localApplicationData))
-        {
-            throw new InvalidOperationException(
-                "The current Windows user's Local Application Data directory is unavailable.");
-        }
-        return Path.Combine(localApplicationData, "Midora", "preferences-v1.json");
-    }
+    public static string GetDefaultFilePath() =>
+        MidoraProgramData.Current.PreferencesFilePath;
 
     public ApplicationPreferencesLoadResult Load()
     {
@@ -58,11 +51,12 @@ public sealed class ApplicationPreferencesStore
                 json = new byte[checked((int)stream.Length)];
                 stream.ReadExactly(json);
             }
+            StrictApplicationJson.RejectDuplicateProperties(json);
             ApplicationPreferencesJsonV1 dto = JsonSerializer.Deserialize(
                 json,
                 ApplicationPreferencesJsonContextV1.Default.ApplicationPreferencesJsonV1)
                 ?? throw new InvalidDataException("The Application Preferences JSON is null.");
-            if (dto.SchemaVersion != CurrentSchemaVersion)
+            if (dto.SchemaVersion is not (PreviousSchemaVersion or CurrentSchemaVersion))
             {
                 throw new InvalidDataException(
                     $"Unsupported Application Preferences schema version {dto.SchemaVersion}.");
@@ -79,7 +73,7 @@ public sealed class ApplicationPreferencesStore
                     dto.DeviceBufferRequestMilliseconds,
                     dto.RealtimeMaximumSampleVoicesPerUnitStream),
                 new AudioCachePreferences(
-                    dto.AudioCacheRootPath,
+                    MidoraProgramData.Current.AudioCacheDirectory,
                     dto.MaximumReusableAudioCacheBytes).Normalize(),
                 new ApplicationRecentDirectories(
                     ApplicationPreferences.NormalizeDirectory(recentDirectories.OpenProject),
@@ -92,6 +86,7 @@ public sealed class ApplicationPreferencesStore
                         ?? throw new InvalidDataException(
                             "Application Preferences soundFonts is required."))
                     .Select(value => new ApplicationSoundFontPreference(
+                        ReadSoundFontEntryId(value, dto.SchemaVersion),
                         value.Path,
                         value.Enabled,
                         ReadTarget(value)).Normalize())
@@ -111,14 +106,16 @@ public sealed class ApplicationPreferencesStore
                     {
                         ProjectPanelVisible = desktop.ProjectPanelVisible ?? true,
                         BottomPanelVisible = desktop.BottomPanelVisible ?? true,
-                        FollowPlayback = desktop.FollowPlayback ?? true
+                        FollowPlayback = desktop.FollowPlayback
+                            ?? DesktopUiPreferences.Default.FollowPlayback
                     },
                 Playback = new PlaybackPreferences(
                     dto.MasterVolumeDecibels ?? PlaybackPreferences.Default.MasterVolumeDecibels,
                     dto.LimiterEnabled ?? PlaybackPreferences.Default.LimiterEnabled,
                     ParseStopCursorBehavior(dto.StopCursorBehavior)),
                 Appearance = new AppearancePreferences(
-                    dto.Language ?? AppearancePreferences.Default.Language)
+                    dto.Language ?? AppearancePreferences.Default.Language),
+                InstrumentAudition = dto.InstrumentAudition ?? InstrumentAuditionPreferences.Default
             };
             preferences.Validate();
             return new(preferences, null);
@@ -167,15 +164,16 @@ public sealed class ApplicationPreferencesStore
                     preferences.RealtimeAudio.DeviceBufferRequestMilliseconds,
                 RealtimeMaximumSampleVoicesPerUnitStream =
                     preferences.RealtimeAudio.MaximumSampleVoicesPerUnitStream,
-                AudioCacheRootPath = preferences.AudioCache.RootPath,
                 MaximumReusableAudioCacheBytes = preferences.AudioCache.MaximumReusableBytes,
                 MasterVolumeDecibels = preferences.Playback.MasterVolumeDecibels,
                 LimiterEnabled = preferences.Playback.LimiterEnabled,
                 StopCursorBehavior = preferences.Playback.StopCursorBehavior.ToString(),
                 Language = preferences.Appearance.Language,
+                InstrumentAudition = preferences.InstrumentAudition,
                 SoundFonts = preferences.SoundFonts
                     .Select(value => new ApplicationSoundFontPreferenceJsonV1
                     {
+                        EntryId = value.EntryId.ToString(),
                         Path = Path.GetFullPath(value.Path),
                         Enabled = value.Enabled,
                         TargetBankMsb = value.Target?.BankMsb,
@@ -284,6 +282,34 @@ public sealed class ApplicationPreferencesStore
             value.TargetProgram!.Value);
     }
 
+    private static SoundFontEntryId ReadSoundFontEntryId(
+        ApplicationSoundFontPreferenceJsonV1 value,
+        int schemaVersion)
+    {
+        if (schemaVersion == PreviousSchemaVersion)
+        {
+            if (value.EntryId is not null)
+            {
+                throw new InvalidDataException(
+                    "Application Preferences schema 2 cannot contain a SoundFont entry ID.");
+            }
+            return SoundFontEntryId.CreateForSchema2Migration(value.Path);
+        }
+        if (value.EntryId is null)
+        {
+            throw new InvalidDataException(
+                "Application Preferences schema 3 requires every SoundFont entry ID.");
+        }
+        try
+        {
+            return SoundFontEntryId.Parse(value.EntryId);
+        }
+        catch (Exception exception) when (exception is ArgumentException or FormatException)
+        {
+            throw new InvalidDataException("A SoundFont entry ID is invalid.", exception);
+        }
+    }
+
     private static StopCursorBehavior ParseStopCursorBehavior(string? value)
     {
         if (value is null)
@@ -302,6 +328,9 @@ public sealed class ApplicationPreferencesStore
 
 internal sealed class ApplicationPreferencesJsonV1
 {
+    [JsonPropertyOrder(20)]
+    public InstrumentAuditionPreferences? InstrumentAudition { get; set; }
+
     [JsonPropertyOrder(0)]
     public int SchemaVersion { get; set; }
 
@@ -318,48 +347,48 @@ internal sealed class ApplicationPreferencesJsonV1
     public int RealtimeMaximumSampleVoicesPerUnitStream { get; set; }
 
     [JsonPropertyOrder(5)]
-    public required string AudioCacheRootPath { get; set; }
-
-    [JsonPropertyOrder(6)]
     public required long MaximumReusableAudioCacheBytes { get; set; }
 
-    [JsonPropertyOrder(7)]
+    [JsonPropertyOrder(6)]
     public ApplicationRecentDirectoriesJsonV1? RecentDirectories { get; set; }
 
-    [JsonPropertyOrder(8)]
+    [JsonPropertyOrder(7)]
     public DesktopUiPreferencesJsonV1? DesktopUi { get; set; }
 
-    [JsonPropertyOrder(9)]
+    [JsonPropertyOrder(8)]
     public List<ApplicationSoundFontPreferenceJsonV1>? SoundFonts { get; set; }
 
-    [JsonPropertyOrder(10)]
+    [JsonPropertyOrder(9)]
     public double? MasterVolumeDecibels { get; set; }
 
-    [JsonPropertyOrder(11)]
+    [JsonPropertyOrder(10)]
     public bool? LimiterEnabled { get; set; }
 
-    [JsonPropertyOrder(12)]
+    [JsonPropertyOrder(11)]
     public string? StopCursorBehavior { get; set; }
 
-    [JsonPropertyOrder(13)]
+    [JsonPropertyOrder(12)]
     public string? Language { get; set; }
 }
 
 internal sealed class ApplicationSoundFontPreferenceJsonV1
 {
     [JsonPropertyOrder(0)]
-    public required string Path { get; set; }
+    public string? EntryId { get; set; }
 
     [JsonPropertyOrder(1)]
-    public bool Enabled { get; set; }
+    public required string Path { get; set; }
 
     [JsonPropertyOrder(2)]
-    public byte? TargetBankMsb { get; set; }
+    public bool Enabled { get; set; }
 
     [JsonPropertyOrder(3)]
-    public byte? TargetBankLsb { get; set; }
+    public byte? TargetBankMsb { get; set; }
 
     [JsonPropertyOrder(4)]
+    public byte? TargetBankLsb { get; set; }
+
+    [JsonPropertyOrder(5)]
     public byte? TargetProgram { get; set; }
 }
 

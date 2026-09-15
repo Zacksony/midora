@@ -15,17 +15,21 @@ public sealed record MidiExportArtifactDiagnostic(
 
 public sealed class MidiExportArtifactBuildResult
 {
+    private readonly IReadOnlyList<MidiExportEncodingResult> _encodings;
     internal MidiExportArtifactBuildResult(
         MidiExportPreparedArtifact[] artifacts,
-        MidiExportArtifactDiagnostic[] diagnostics)
+        MidiExportArtifactDiagnostic[] diagnostics,
+        IReadOnlyList<MidiExportEncodingResult>? encodings = null)
     {
         Artifacts = Array.AsReadOnly(artifacts);
         Diagnostics = Array.AsReadOnly(diagnostics);
+        _encodings = encodings ?? [];
     }
 
     public bool Succeeded => Diagnostics.Count == 0 && Artifacts.Count != 0;
     public ReadOnlyCollection<MidiExportPreparedArtifact> Artifacts { get; }
     public ReadOnlyCollection<MidiExportArtifactDiagnostic> Diagnostics { get; }
+    public MidiExportPaddingSummary PaddingSummary => MidiExportPaddingSummary.Aggregate(_encodings);
 }
 
 public static class MidiExportArtifactBuilder
@@ -38,10 +42,11 @@ public static class MidiExportArtifactBuilder
     public static MidiExportArtifactBuildResult BuildWholeProject(
         MidiExportFrozenOutputPlan plan,
         WholeProjectMidiEncodingRequest encodingRequest,
-        MidiExportReadmeRequest? readmeRequest = null)
+        MidiExportReadmeRequest? readmeRequest = null,
+        CancellationToken cancellationToken = default)
     {
         RequireMode(plan, MidiExportMode.WholeProject);
-        MidiExportEncodingResult encoded = CanonicalMidiFileExporter.EncodeWholeProject(encodingRequest);
+        MidiExportEncodingResult encoded = CanonicalMidiFileExporter.EncodeWholeProject(encodingRequest, cancellationToken);
         return Complete(
             plan,
             [(WholeProjectSourceKey, encoded)],
@@ -51,7 +56,8 @@ public static class MidiExportArtifactBuilder
     public static MidiExportArtifactBuildResult BuildLogicalTracks(
         MidiExportFrozenOutputPlan plan,
         IEnumerable<LogicalTrackMidiArtifactRequest> requests,
-        MidiExportReadmeRequest? readmeRequest = null)
+        MidiExportReadmeRequest? readmeRequest = null,
+        CancellationToken cancellationToken = default)
     {
         RequireMode(plan, MidiExportMode.PerLogicalTrack);
         ArgumentNullException.ThrowIfNull(requests);
@@ -71,7 +77,7 @@ public static class MidiExportArtifactBuilder
             }
             encoded.Add((
                 sourceKey,
-                CanonicalMidiFileExporter.EncodeLogicalTrack(request.EncodingRequest)));
+                CanonicalMidiFileExporter.EncodeLogicalTrack(request.EncodingRequest, cancellationToken)));
         }
         return Complete(plan, encoded, readmeRequest);
     }
@@ -79,7 +85,8 @@ public static class MidiExportArtifactBuilder
     public static MidiExportArtifactBuildResult BuildPorts(
         MidiExportFrozenOutputPlan plan,
         IEnumerable<PortMidiArtifactRequest> requests,
-        MidiExportReadmeRequest? readmeRequest = null)
+        MidiExportReadmeRequest? readmeRequest = null,
+        CancellationToken cancellationToken = default)
     {
         RequireMode(plan, MidiExportMode.PerPort);
         ArgumentNullException.ThrowIfNull(requests);
@@ -98,7 +105,7 @@ public static class MidiExportArtifactBuilder
             }
             encoded.Add((
                 PortSourceKeyPrefix + (port + 1).ToString("D2", CultureInfo.InvariantCulture),
-                CanonicalMidiFileExporter.EncodePort(request.EncodingRequest)));
+                CanonicalMidiFileExporter.EncodePort(request.EncodingRequest, cancellationToken)));
         }
         return Complete(plan, encoded, readmeRequest);
     }
@@ -118,6 +125,7 @@ public static class MidiExportArtifactBuilder
 
         List<MidiExportPreparedArtifact> artifacts = [];
         List<MidiExportArtifactDiagnostic> diagnostics = [];
+        List<MidiExportEncodingResult> encodings = [];
         foreach ((string sourceKey, MidiExportEncodingResult result) in encodedFiles)
         {
             ArgumentNullException.ThrowIfNull(result);
@@ -129,6 +137,7 @@ public static class MidiExportArtifactBuilder
                 continue;
             }
             artifacts.Add(new(sourceKey, result.WriteTo));
+            encodings.Add(result);
         }
         if (diagnostics.Count != 0)
         {
@@ -162,7 +171,16 @@ public static class MidiExportArtifactBuilder
                     "The README.md file list does not exactly match the frozen output plan.",
                     nameof(readmeRequest));
             }
-            artifacts.Add(new(ReadmeSourceKey, MidiExportReadmeBuilder.Build(readmeRequest)));
+            MidiExportReadmeRequest frozenReadme = MidiExportReadmeBuilder.Freeze(readmeRequest);
+            artifacts.Add(new(ReadmeSourceKey,
+                (output, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (encodings.Any(encoding => !encoding.EncodingCompleted))
+                        throw new InvalidOperationException("MIDI artifacts must be encoded before their README summary.");
+                    MidiExportReadmeBuilder.WriteTo(output, frozenReadme, token,
+                        MidiExportPaddingSummary.Aggregate(encodings));
+                }));
         }
 
         string[] plannedKeys = plan.Targets.Select(target => target.SourceKey)
@@ -177,7 +195,7 @@ public static class MidiExportArtifactBuilder
                 "Encoded MIDI artifact keys do not exactly match the frozen output targets.",
                 nameof(encodedFiles));
         }
-        return new(artifacts.ToArray(), []);
+        return new(artifacts.ToArray(), [], encodings);
     }
 
     private static void RequireMode(MidiExportFrozenOutputPlan plan, MidiExportMode expectedMode)

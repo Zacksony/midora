@@ -10,25 +10,52 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using Midora.Application;
 using Midora.Audio;
+using Midora.Common;
 using Midora.Domain;
 
 namespace Midora.Desktop;
+
+internal enum ApplicationPreferencesPage { Audio, SoundFonts, Appearance }
 
 public partial class ApplicationPreferencesDialog : Window
 {
     private const decimal BytesPerGibibyte = 1024m * 1024m * 1024m;
     private readonly ApplicationPreferences _initial;
+    private readonly InstrumentCatalogState _instrumentCatalog;
+    private readonly Func<ApplicationPreferences, string?>? _submit;
     private readonly ObservableCollection<SoundFontDraftItem> _soundFonts = [];
+    private InstrumentCatalogResolver? _soundFontCatalogResolver;
+    private bool _suppressSoundFontCatalogRefresh;
 
     public ApplicationPreferencesDialog(ApplicationPreferences initial)
+        : this(initial, InstrumentCatalogState.Default, submit: null)
+    {
+    }
+
+    public ApplicationPreferencesDialog(
+        ApplicationPreferences initial,
+        InstrumentCatalogState instrumentCatalog)
+        : this(initial, instrumentCatalog, submit: null)
+    {
+    }
+
+    internal ApplicationPreferencesDialog(
+        ApplicationPreferences initial,
+        InstrumentCatalogState instrumentCatalog,
+        Func<ApplicationPreferences, string?>? submit,
+        ApplicationPreferencesPage initialPage = ApplicationPreferencesPage.Audio)
     {
         _initial = initial ?? throw new ArgumentNullException(nameof(initial));
+        _instrumentCatalog = instrumentCatalog
+            ?? throw new ArgumentNullException(nameof(instrumentCatalog));
+        _submit = submit;
         InitializeComponent();
         StopCursorBox.ItemsSource = Enum.GetValues<StopCursorBehavior>();
         LanguageBox.ItemsSource = new[] { AppearancePreferences.EnglishLanguage };
         SoundFontListBox.ItemsSource = _soundFonts;
         _soundFonts.CollectionChanged += OnSoundFontsCollectionChanged;
         Populate(initial);
+        PreferencesTabs.SelectedIndex = (int)initialPage;
         Loaded += OnLoaded;
     }
 
@@ -79,31 +106,31 @@ public partial class ApplicationPreferencesDialog : Window
         RenderAheadBox.Text = realtime.RenderAheadMilliseconds.ToString(CultureInfo.InvariantCulture);
         DeviceRequestBox.Text = realtime.DeviceBufferRequestMilliseconds.ToString(CultureInfo.InvariantCulture);
         VoicesBox.Text = realtime.MaximumSampleVoicesPerUnitStream.ToString(CultureInfo.InvariantCulture);
-        CacheRootBox.Text = preferences.AudioCache.RootPath;
         CacheQuotaBox.Text = (preferences.AudioCache.MaximumReusableBytes / BytesPerGibibyte)
             .ToString("0.###", CultureInfo.InvariantCulture);
-        foreach (SoundFontDraftItem item in _soundFonts)
+        _suppressSoundFontCatalogRefresh = true;
+        try
         {
-            item.PropertyChanged -= OnSoundFontDraftItemPropertyChanged;
+            foreach (SoundFontDraftItem item in _soundFonts)
+            {
+                item.PropertyChanged -= OnSoundFontDraftItemPropertyChanged;
+            }
+            _soundFonts.Clear();
+            foreach (ApplicationSoundFontPreference soundFont in preferences.SoundFonts)
+            {
+                AddSoundFontDraftItem(new(
+                    soundFont.EntryId,
+                    soundFont.Path,
+                    soundFont.Enabled,
+                    soundFont.Target));
+            }
         }
-        _soundFonts.Clear();
-        foreach (ApplicationSoundFontPreference soundFont in preferences.SoundFonts)
+        finally
         {
-            AddSoundFontDraftItem(new(soundFont.Path, soundFont.Enabled, soundFont.Target));
+            _suppressSoundFontCatalogRefresh = false;
         }
-    }
-
-    private void OnBrowseCacheClick(object sender, RoutedEventArgs e)
-    {
-        OpenFolderDialog dialog = new()
-        {
-            Title = "Select Local Audio Cache Root",
-            InitialDirectory = Directory.Exists(CacheRootBox.Text) ? CacheRootBox.Text : null
-        };
-        if (dialog.ShowDialog(this) == true)
-        {
-            CacheRootBox.Text = dialog.FolderName;
-        }
+        UpdateSelectedSoundFontCount();
+        RefreshSoundFontCatalogNames(rebuildResolver: true);
     }
 
     private void OnAddSoundFontsClick(object sender, RoutedEventArgs e)
@@ -120,18 +147,32 @@ public partial class ApplicationPreferencesDialog : Window
         };
         if (dialog.ShowDialog(this) == true)
         {
-            foreach (string selected in dialog.FileNames)
+            _suppressSoundFontCatalogRefresh = true;
+            try
             {
-                string path = Path.GetFullPath(selected);
-                if (_soundFonts.Any(value => string.Equals(
-                        value.Path,
-                        path,
-                        StringComparison.OrdinalIgnoreCase)))
+                foreach (string selected in dialog.FileNames)
                 {
-                    continue;
+                    string path = Path.GetFullPath(selected);
+                    if (_soundFonts.Any(value => string.Equals(
+                            value.Path,
+                            path,
+                            StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+                    AddSoundFontDraftItem(new(
+                        SoundFontEntryId.Create(),
+                        path,
+                        enabled: true,
+                        target: null));
                 }
-                AddSoundFontDraftItem(new(path, enabled: true, target: null));
             }
+            finally
+            {
+                _suppressSoundFontCatalogRefresh = false;
+            }
+            UpdateSelectedSoundFontCount();
+            RefreshSoundFontCatalogNames(rebuildResolver: true);
             SoundFontListBox.SelectedItem = _soundFonts.LastOrDefault();
         }
     }
@@ -160,14 +201,25 @@ public partial class ApplicationPreferencesDialog : Window
     private void OnSoundFontsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         UpdateSelectedSoundFontCount();
+        RefreshSoundFontCatalogNames(rebuildResolver: true);
     }
 
     private void OnSoundFontDraftItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (string.Equals(
+                e.PropertyName,
+                nameof(SoundFontDraftItem.ResolvedTargetText),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
         if (string.Equals(e.PropertyName, nameof(SoundFontDraftItem.Enabled), StringComparison.Ordinal))
         {
             UpdateSelectedSoundFontCount();
+            RefreshSoundFontCatalogNames(rebuildResolver: true);
+            return;
         }
+        RefreshSoundFontCatalogNames();
     }
 
     private void AddSoundFontDraftItem(SoundFontDraftItem item)
@@ -182,6 +234,33 @@ public partial class ApplicationPreferencesDialog : Window
         SoundFontCountText.Text = count == 1
             ? "1 SoundFont selected"
             : $"{count} SoundFonts selected";
+    }
+
+    private void RefreshSoundFontCatalogNames(bool rebuildResolver = false)
+    {
+        if (_suppressSoundFontCatalogRefresh)
+        {
+            return;
+        }
+        if (rebuildResolver || _soundFontCatalogResolver is null)
+        {
+            InstrumentCatalogSoundFontEntry[] order = _soundFonts
+                .Select(value => new InstrumentCatalogSoundFontEntry(value.EntryId, value.Enabled))
+                .ToArray();
+            _soundFontCatalogResolver = new(_instrumentCatalog, order);
+        }
+        _suppressSoundFontCatalogRefresh = true;
+        try
+        {
+            foreach (SoundFontDraftItem item in _soundFonts)
+            {
+                item.UpdateResolvedTargetText(_soundFontCatalogResolver);
+            }
+        }
+        finally
+        {
+            _suppressSoundFontCatalogRefresh = false;
+        }
     }
 
     private void OnSoundFontListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -290,14 +369,16 @@ public partial class ApplicationPreferencesDialog : Window
                 quotaGib * BytesPerGibibyte,
                 0,
                 MidpointRounding.AwayFromZero));
-            Result = _initial with
+            ApplicationPreferences candidate = _initial with
             {
                 RealtimeAudio = new(
                     (DeviceBox.SelectedItem as DeviceChoice)?.Id,
                     renderAhead,
                     deviceRequest,
                     voices),
-                AudioCache = new AudioCachePreferences(CacheRootBox.Text, quotaBytes).Normalize(),
+                AudioCache = new AudioCachePreferences(
+                    MidoraProgramData.Current.AudioCacheDirectory,
+                    quotaBytes).Normalize(),
                 Playback = new PlaybackPreferences(
                     masterVolumeDecibels,
                     PlaybackLimiterBox.IsChecked == true,
@@ -309,10 +390,20 @@ public partial class ApplicationPreferencesDialog : Window
                     .Select(value => value.ToPreference())
                     .ToArray()
             };
-            Result.Validate();
+            candidate.Validate();
+            string? submitError = _submit?.Invoke(candidate);
+            if (submitError is not null)
+            {
+                ShowValidation(submitError);
+                return;
+            }
+            Result = candidate;
             DialogResult = true;
         }
-        catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or InvalidOperationException
+            or NotSupportedException)
         {
             ShowValidation(exception.Message);
         }
@@ -361,12 +452,16 @@ public partial class ApplicationPreferencesDialog : Window
         private string _bankMsbText;
         private string _bankLsbText;
         private string _programText;
+        private string _resolvedTargetText = string.Empty;
 
         public SoundFontDraftItem(
+            SoundFontEntryId entryId,
             string path,
             bool enabled,
             SoundFontTarget? target)
         {
+            entryId.Validate();
+            EntryId = entryId;
             Path = System.IO.Path.GetFullPath(path);
             _enabled = enabled;
             _hasTarget = IsSfz || target is not null;
@@ -376,6 +471,7 @@ public partial class ApplicationPreferencesDialog : Window
             _programText = effectiveTarget.Program.ToString(CultureInfo.InvariantCulture);
         }
 
+        public SoundFontEntryId EntryId { get; }
         public string Path { get; }
         public string FileName => System.IO.Path.GetFileName(Path);
         public bool IsSfz => string.Equals(
@@ -430,6 +526,31 @@ public partial class ApplicationPreferencesDialog : Window
             set => SetText(ref _programText, value, nameof(ProgramText));
         }
 
+        public string ResolvedTargetText
+        {
+            get => _resolvedTargetText;
+            private set => SetText(ref _resolvedTargetText, value, nameof(ResolvedTargetText));
+        }
+
+        public void UpdateResolvedTargetText(InstrumentCatalogResolver resolver)
+        {
+            ArgumentNullException.ThrowIfNull(resolver);
+            if (!HasTarget)
+            {
+                ResolvedTargetText = "All original presets; no single target address.";
+                return;
+            }
+            if (!TryMidiValue(BankMsbText, out byte bankMsb)
+                || !TryMidiValue(BankLsbText, out byte bankLsb)
+                || !TryMidiValue(ProgramText, out byte program))
+            {
+                ResolvedTargetText = "Enter a valid target to resolve its catalog name.";
+                return;
+            }
+            ResolvedTargetText = resolver.ResolveProgram(
+                new InstrumentAddress(bankMsb, bankLsb, program)).DisplayText;
+        }
+
         public ApplicationSoundFontPreference ToPreference()
         {
             SoundFontTarget? target = null;
@@ -440,7 +561,7 @@ public partial class ApplicationPreferencesDialog : Window
                     ParseMidiValue(BankLsbText, "Bank LSB"),
                     ParseMidiValue(ProgramText, "Program"));
             }
-            return new ApplicationSoundFontPreference(Path, Enabled, target).Normalize();
+            return new ApplicationSoundFontPreference(EntryId, Path, Enabled, target).Normalize();
         }
 
         private byte ParseMidiValue(string text, string name)
@@ -458,6 +579,14 @@ public partial class ApplicationPreferencesDialog : Window
                 name,
                 $"{FileName}: target {name} must be an integer from 0 through 127.");
         }
+
+        private static bool TryMidiValue(string text, out byte result) =>
+            byte.TryParse(
+                text,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out result)
+            && result <= 127;
 
         private void SetText(ref string field, string value, string propertyName)
         {

@@ -15,11 +15,72 @@ public sealed class LogicalNote
         Id = preservedId;
     }
 
+    internal LogicalNote(LogicalNoteSnapshotValue value)
+    {
+        Id = value.Id;
+        _startTick = value.StartTick;
+        _lengthTicks = value.LengthTicks;
+        _note = value.Note;
+        _velocity = value.Velocity;
+    }
+
+    private Action<LogicalNote>? _changeSink;
+    private long _startTick;
+    private long _lengthTicks;
+    private int _note = 60;
+    private int _velocity = 100;
+
     public MidoraId Id { get; init; }
-    public long StartTick { get; set; }
-    public long LengthTicks { get; set; }
-    public int Note { get; set; } = 60;
-    public int Velocity { get; set; } = 100;
+    public long StartTick
+    {
+        get => _startTick;
+        set => Set(ref _startTick, value);
+    }
+    public long LengthTicks
+    {
+        get => _lengthTicks;
+        set => Set(ref _lengthTicks, value);
+    }
+    public int Note
+    {
+        get => _note;
+        set => Set(ref _note, value);
+    }
+    public int Velocity
+    {
+        get => _velocity;
+        set => Set(ref _velocity, value);
+    }
+
+    internal void SetChangeSink(Action<LogicalNote>? sink) => _changeSink = sink;
+
+    internal void SetValues(
+        long startTick,
+        long lengthTicks,
+        int note,
+        int velocity)
+    {
+        if (_startTick == startTick
+            && _lengthTicks == lengthTicks
+            && _note == note
+            && _velocity == velocity)
+        {
+            return;
+        }
+
+        _startTick = startTick;
+        _lengthTicks = lengthTicks;
+        _note = note;
+        _velocity = velocity;
+        _changeSink?.Invoke(this);
+    }
+
+    private void Set<T>(ref T field, T value)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        _changeSink?.Invoke(this);
+    }
 }
 
 public sealed class LogicalParameterLane
@@ -39,7 +100,7 @@ public sealed class LogicalParameterLane
 
     public MidoraId Id { get; init; }
     public MidoraId ParameterId { get; set; }
-    public List<CurvePoint> Points { get; } = [];
+    public CurvePointCollection Points { get; } = new();
 }
 
 public sealed class Segment
@@ -61,7 +122,7 @@ public sealed class Segment
     public long ProjectStartTick { get; set; }
     public long LengthTicks { get; set; }
     public long ContentOffsetTick { get; set; }
-    public List<LogicalNote> Notes { get; } = [];
+    public LogicalNoteCollection Notes { get; } = new();
     public List<LogicalParameterLane> ParameterLanes { get; } = [];
 
     public TickRange ProjectRange => new(ProjectStartTick, checked(ProjectStartTick + LengthTicks));
@@ -92,7 +153,7 @@ public sealed class LogicalTrack
     public MidoraId? EventInstrumentUsageId { get; set; }
     public string? LastBoundEventInstrumentName { get; set; }
     public MidoraColor? ColorOverride { get; set; }
-    public List<Segment> Segments { get; } = [];
+    public List<Segment> Segments { get; internal set; } = [];
 }
 
 public enum StopCursorBehavior
@@ -131,6 +192,10 @@ public sealed class MidoraProject : IDisposable
     private long _nextStableId;
     private readonly List<IDisposable> _runtimeResources = [];
     private int _disposeStarted;
+    // A published detached mirror becomes only an ownership bridge for lazy
+    // value-facade factories. It must never retain its former catalog graph or
+    // allocate identities independently from the live Project.
+    private MidoraProject? _publishedRuntimeOwner;
 
     public MidoraProject(int ticksPerQuarterNote)
         : this(ticksPerQuarterNote, TimeProvider.System.GetUtcNow())
@@ -188,25 +253,27 @@ public sealed class MidoraProject : IDisposable
     }
 
     public int TicksPerQuarterNote { get; }
-    public long NextStableId => _nextStableId;
+    public long NextStableId => _publishedRuntimeOwner?.NextStableId ?? _nextStableId;
     public ProjectMetadata Metadata { get; }
-    public ConductorTrack Conductor { get; }
-    public MidiInitialState GlobalInitialState { get; } = new();
-    public MidiInitialState GlobalResetDefaults { get; } = new();
+    public ConductorTrack Conductor { get; internal set; }
+    public MidiInitialState GlobalInitialState { get; internal set; } = new();
+    public MidiInitialState GlobalResetDefaults { get; internal set; } = new();
     public GlobalEventScopeDefaults GlobalEventScopeDefaults { get; } = new();
-    public List<EventInstrument> EventInstruments { get; } = [];
-    public List<DamagedProjectObject> DamagedEventInstruments { get; } = [];
-    public List<EventInstrumentUsage> EventInstrumentUsages { get; } = [];
-    public List<DamagedProjectObject> DamagedEventInstrumentUsages { get; } = [];
-    public List<LogicalTrack> Tracks { get; } = [];
-    public List<DamagedProjectObject> DamagedLogicalTracks { get; } = [];
-    public List<ArrangementTrackReference> ArrangementTracks { get; } = [];
-    public List<MidiChannelRoot> MidiChannelRoots { get; } = [];
-    public List<DamagedProjectObject> DamagedMidiChannelRoots { get; } = [];
-    public List<PureMidiTrack> PureMidiTracks { get; } = [];
-    public List<DamagedProjectObject> DamagedPureMidiTracks { get; } = [];
+    public List<EventInstrument> EventInstruments { get; internal set; } = [];
+    public List<DamagedProjectObject> DamagedEventInstruments { get; internal set; } = [];
+    public List<EventInstrumentUsage> EventInstrumentUsages { get; internal set; } = [];
+    public List<DamagedProjectObject> DamagedEventInstrumentUsages { get; internal set; } = [];
+    public List<LogicalTrack> Tracks { get; internal set; } = [];
+    public List<DamagedProjectObject> DamagedLogicalTracks { get; internal set; } = [];
+    public List<ArrangementTrackReference> ArrangementTracks { get; internal set; } = [];
+    public List<MidiChannelRoot> MidiChannelRoots { get; internal set; } = [];
+    public List<DamagedProjectObject> DamagedMidiChannelRoots { get; internal set; } = [];
+    public List<PureMidiTrack> PureMidiTracks { get; internal set; } = [];
+    public List<DamagedProjectObject> DamagedPureMidiTracks { get; internal set; } = [];
     public MidoraId AllocateStableId()
     {
+        if (_publishedRuntimeOwner is { } owner) return owner.AllocateStableId();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeStarted) != 0, this);
         if (_nextStableId == long.MaxValue)
         {
             throw new InvalidOperationException("The Project stable ID counter is exhausted.");
@@ -219,8 +286,43 @@ public sealed class MidoraProject : IDisposable
     public void RegisterRuntimeResource(IDisposable resource)
     {
         ArgumentNullException.ThrowIfNull(resource);
+        if (_publishedRuntimeOwner is { } owner) { owner.RegisterRuntimeResource(resource); return; }
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeStarted) != 0, this);
         _runtimeResources.Add(resource);
+    }
+
+    internal void TransferRuntimeResourcesTo(MidoraProject target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeStarted) != 0, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref target._disposeStarted) != 0, target);
+        if (ReferenceEquals(this, target)) return;
+        // Transfer leases, not the detached Project itself: retaining the mirror
+        // would pin unrelated catalog and history roots until Project close.
+        target._runtimeResources.AddRange(_runtimeResources);
+        _runtimeResources.Clear();
+    }
+
+    internal void AdoptDetachedRuntimeOwner(MidoraProject target)
+    {
+        if (_publishedRuntimeOwner is not null)
+            throw new InvalidOperationException("A detached Project already has a published owner.");
+        while (target._publishedRuntimeOwner is { } parent) target = parent;
+        if (ReferenceEquals(this, target)) throw new InvalidOperationException("A detached Project cannot adopt itself.");
+        TransferRuntimeResourcesTo(target);
+        _publishedRuntimeOwner = target;
+    }
+
+    internal void ReleaseDetachedCatalogReferences()
+    {
+        // Replace directory references; never Clear the old lists, which may
+        // already be owned by the prepared publication slots.
+        Tracks = []; PureMidiTracks = []; EventInstruments = [];
+        EventInstrumentUsages = []; MidiChannelRoots = []; ArrangementTracks = [];
+        Conductor = new ConductorTrack(this, createInitialState: false);
+        GlobalInitialState = new(); GlobalResetDefaults = new();
+        DamagedEventInstruments = []; DamagedEventInstrumentUsages = [];
+        DamagedLogicalTracks = []; DamagedMidiChannelRoots = []; DamagedPureMidiTracks = [];
     }
 
     public void Dispose()
@@ -244,11 +346,28 @@ public sealed class MidoraProject : IDisposable
 
     internal void RestoreNextStableId(long nextStableId)
     {
+        if (_publishedRuntimeOwner is not null)
+            throw new InvalidOperationException("A published detached allocator cannot be rewound.");
         if (nextStableId <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(nextStableId));
         }
         _nextStableId = nextStableId;
+    }
+
+    /// <summary>
+    /// Advances the allocator high-water mark without ever returning IDs to
+    /// the pool. Detached edit preparation uses preserved IDs and publishes
+    /// the corresponding high-water mark only with its first successful root
+    /// replacement.
+    /// </summary>
+    internal void AdvanceNextStableId(long minimumNextStableId)
+    {
+        if (_publishedRuntimeOwner is { } owner) { owner.AdvanceNextStableId(minimumNextStableId); return; }
+        if (minimumNextStableId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(minimumNextStableId));
+        if (minimumNextStableId > _nextStableId)
+            _nextStableId = minimumNextStableId;
     }
 
     public void SetEndMarker(long? tick)
@@ -293,4 +412,11 @@ public sealed class ProjectChangeSet
     public HashSet<MidoraId> EventInstrumentUsageIds { get; } = [];
     public HashSet<MidoraId> MidiChannelRootIds { get; } = [];
     public HashSet<MidoraId> PureMidiTrackIds { get; } = [];
+    // Presentation-only source changes are propagated through document history
+    // without marking canonical compilation or PCM-cache generation affected.
+    public HashSet<MidoraId> PresentationTrackIds { get; } = [];
+    public HashSet<MidoraId> PresentationEventInstrumentIds { get; } = [];
+    // Optional exact source/range/page traces for timeline root swaps.  An
+    // empty collection preserves the existing coarse invalidation contract.
+    public List<ProjectTimelineOwnerChangeSet> TimelineOwnerChanges { get; } = [];
 }

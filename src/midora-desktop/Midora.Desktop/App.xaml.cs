@@ -27,12 +27,13 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
         try
         {
+            MidoraProgramData.EnsureReadyAndProbe();
             ApplicationStartupRequest request = new(
                 Path.GetFullPath(Environment.CurrentDirectory),
                 e.Args);
             ApplicationInstanceStartResult result =
                 await SingleApplicationInstanceCoordinator.StartOrForwardAsync(
-                    "Midora.InitialRelease",
+                    "Midora.Portable." + MidoraProgramData.Current.SingleInstanceScope,
                     request);
             if (result.ShouldExit)
             {

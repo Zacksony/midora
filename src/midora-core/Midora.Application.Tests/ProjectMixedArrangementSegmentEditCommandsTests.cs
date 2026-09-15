@@ -21,6 +21,8 @@ public sealed class ProjectMixedArrangementSegmentEditCommandsTests
             fixture.MidiSegment.ProjectStartTick));
         Assert.Single(fixture.Document.History);
         fixture.Document.Undo();
+        Assert.Same(fixture.OriginalLogicalSegment, fixture.LogicalSegment);
+        Assert.Same(fixture.OriginalMidiSegment, fixture.MidiSegment);
         Assert.Equal((100L, 300L), (
             fixture.LogicalSegment.ProjectStartTick,
             fixture.MidiSegment.ProjectStartTick));
@@ -185,8 +187,10 @@ public sealed class ProjectMixedArrangementSegmentEditCommandsTests
 
         fixture.Document.Undo();
 
-        Assert.Same(fixture.LogicalNote, Assert.Single(fixture.LogicalSegment.Notes));
-        Assert.Same(fixture.MidiNote, Assert.Single(fixture.MidiSegment.Notes));
+        Assert.Same(fixture.OriginalLogicalSegment, fixture.LogicalSegment);
+        Assert.Same(fixture.OriginalMidiSegment, fixture.MidiSegment);
+        Assert.Same(fixture.OriginalLogicalNote, Assert.Single(fixture.LogicalSegment.Notes));
+        Assert.Same(fixture.OriginalMidiNote, Assert.Single(fixture.MidiSegment.Notes));
         Assert.Equal(120, fixture.LogicalNote.Note);
         Assert.Equal(120, fixture.MidiNote.Key);
         Assert.False(fixture.Document.IsModified);
@@ -212,6 +216,36 @@ public sealed class ProjectMixedArrangementSegmentEditCommandsTests
         Assert.Equal(300, fixture.MidiSegment.ProjectStartTick);
         Assert.Empty(fixture.Document.History);
         Assert.False(fixture.Document.IsModified);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LargeArrangementWindowAndDeleteUseAtomicDirectoryPublication(bool delete)
+    {
+        using Fixture fixture = CreateFixture();
+        for (int index = 0; index < 5000; index++)
+            fixture.LogicalTrack.Segments.Add(new(fixture.Project)
+            {
+                ProjectStartTick = 1000 + index * 4, LengthTicks = 2
+            });
+        LogicalTrack original = fixture.LogicalTrack;
+        MidoraId[] ids = original.Segments.Skip(1).Select(segment => segment.Id).ToArray();
+        var command = delete
+            ? ProjectDomainEditCommands.DeleteArrangementSegments(ids)
+            : ProjectDomainEditCommands.SetArrangementSegmentValues(ids, lengthTicks: 3);
+        using StagedProjectEdit prepared = fixture.Document.PrepareEdit(command);
+        Assert.Equal(5001, original.Segments.Count);
+        Assert.Equal(2, original.Segments[1].LengthTicks);
+        fixture.Document.ExecutePrepared(prepared);
+        LogicalTrack published = fixture.LogicalTrack;
+        Assert.NotSame(original, published);
+        Assert.Equal(delete ? 1 : 5001, published.Segments.Count);
+        if (!delete) Assert.All(published.Segments.Skip(1), segment => Assert.Equal(3, segment.LengthTicks));
+        fixture.Document.Undo();
+        Assert.Same(original, fixture.LogicalTrack);
+        fixture.Document.Redo();
+        Assert.Same(published, fixture.LogicalTrack);
     }
 
     private static Fixture CreateFixture()
@@ -286,16 +320,23 @@ public sealed class ProjectMixedArrangementSegmentEditCommandsTests
 
     private sealed record Fixture(
         MidoraProject Project,
-        LogicalTrack LogicalTrack,
-        Segment LogicalSegment,
-        LogicalNote LogicalNote,
-        PureMidiTrack MidiTrack,
-        MidiSegment MidiSegment,
-        DirectMidiNote MidiNote,
-        DirectMidiChannelEvent MidiEvent,
+        LogicalTrack OriginalLogicalTrack,
+        Segment OriginalLogicalSegment,
+        LogicalNote OriginalLogicalNote,
+        PureMidiTrack OriginalMidiTrack,
+        MidiSegment OriginalMidiSegment,
+        DirectMidiNote OriginalMidiNote,
+        DirectMidiChannelEvent OriginalMidiEvent,
         ProjectCompilationSession Compilation,
         ProjectDocumentSession Document) : IDisposable
     {
+        public LogicalTrack LogicalTrack => Project.Tracks.Single(value => value.Id == OriginalLogicalTrack.Id);
+        public PureMidiTrack MidiTrack => Project.PureMidiTracks.Single(value => value.Id == OriginalMidiTrack.Id);
+        public Segment LogicalSegment => LogicalTrack.Segments.Single(value => value.Id == OriginalLogicalSegment.Id);
+        public MidiSegment MidiSegment => MidiTrack.Segments.Single(value => value.Id == OriginalMidiSegment.Id);
+        public LogicalNote LogicalNote => LogicalSegment.Notes.FirstOrDefault(value => value.Id == OriginalLogicalNote.Id) ?? OriginalLogicalNote;
+        public DirectMidiNote MidiNote => MidiSegment.Notes.FirstOrDefault(value => value.Id == OriginalMidiNote.Id) ?? OriginalMidiNote;
+        public DirectMidiChannelEvent MidiEvent => MidiSegment.ChannelEvents.First(value => value.Id == OriginalMidiEvent.Id);
         public void Dispose() => Compilation.Dispose();
     }
 }

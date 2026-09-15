@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>Midora.Desktop.Tests</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <MemoryProbeReferenceDirectory Condition="'$(MemoryProbeReferenceDirectory)' == ''">$(MSBuildThisFileDirectory)..\..\src\midora-desktop\Midora.Desktop\bin\Release\net10.0-windows\win-x64</MemoryProbeReferenceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Midora.dll" />
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Midora.*.dll" Exclude="$(MemoryProbeReferenceDirectory)\*.Tests.dll" />
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Google.Protobuf.dll" />
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Microsoft.CodeAnalysis*.dll" />
+    <Reference Include="$(MemoryProbeReferenceDirectory)\ICSharpCode.AvalonEdit.dll" />
+    <Compile Include="..\MemoryStage5Probe\MemoryGuard.cs" Link="MemoryGuard.cs" />
+  </ItemGroup>
+  <Target Name="CheckProbeReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(MemoryProbeReferenceDirectory)\Midora.dll')" Text="Build Desktop Release first, or reference a frozen baseline build." />
+  </Target>
+</Project>

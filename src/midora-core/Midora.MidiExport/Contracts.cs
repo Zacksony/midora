@@ -1,5 +1,6 @@
 using Midora.Compiler;
 using Midora.Domain;
+using Midora.Midi;
 
 namespace Midora.MidiExport;
 
@@ -96,7 +97,9 @@ public sealed class PortMidiEncodingRequest
 
 public sealed class MidiExportEncodingResult
 {
-    private readonly Action<Stream>? _writer;
+    private readonly Func<Stream, CancellationToken, IProgress<StandardMidiFileWriteProgress>?, StandardMidiFileWriteSummary>? _writer;
+    private readonly IReadOnlyList<SourceReference> _sources = [];
+    private readonly long _startTick;
     private byte[]? _fileBytes;
 
     internal MidiExportEncodingResult(byte[] fileBytes, MidiExportDiagnostic[] diagnostics)
@@ -105,12 +108,17 @@ public sealed class MidiExportEncodingResult
         Diagnostics = diagnostics;
     }
 
-    internal MidiExportEncodingResult(Action<Stream> writer, MidiExportDiagnostic[] diagnostics)
+    internal MidiExportEncodingResult(
+        Func<Stream, CancellationToken, IProgress<StandardMidiFileWriteProgress>?, StandardMidiFileWriteSummary> writer,
+        MidiExportDiagnostic[] diagnostics, IReadOnlyList<SourceReference> sources, long startTick)
     {
         _writer = writer ?? throw new ArgumentNullException(nameof(writer));
         Diagnostics = diagnostics;
+        _sources = sources;
+        _startTick = startTick;
     }
 
+    /// <summary>Preparation succeeded; deferred encoding is validated by the atomic output transaction.</summary>
     public bool Succeeded => Diagnostics.Count == 0
         && (_writer is not null || _fileBytes is { Length: > 0 });
     public byte[] FileBytes
@@ -119,21 +127,38 @@ public sealed class MidiExportEncodingResult
         {
             if (_fileBytes is not null) return _fileBytes;
             using MemoryStream output = new();
-            _writer!(output);
+            WriteTo(output);
             _fileBytes = output.ToArray();
             return _fileBytes;
         }
     }
     public IReadOnlyList<MidiExportDiagnostic> Diagnostics { get; }
+    public StandardMidiFileWriteSummary WriteSummary { get; private set; }
+    public bool EncodingCompleted { get; private set; }
 
-    internal void WriteTo(Stream output)
+    internal void WriteTo(Stream output, CancellationToken cancellationToken = default,
+        IProgress<StandardMidiFileWriteProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(output);
-        if (_writer is not null)
+        EncodingCompleted = false;
+        WriteSummary = default;
+        try
         {
-            _writer(output);
-            return;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_writer is not null) WriteSummary = _writer(output, cancellationToken, progress);
+            else output.Write(_fileBytes!);
+            EncodingCompleted = true;
         }
-        output.Write(_fileBytes!);
+        catch (Exception exception) when (exception is MidoraMidiException or ArgumentException or OverflowException)
+        {
+            SourceReference source = default;
+            if (exception is StandardMidiFileEncodingException boundary)
+            {
+                if (boundary.TrackIndex is int index && index >= 0 && index < _sources.Count)
+                    source = _sources[index];
+                if (boundary.Tick is long tick) source = source with { Tick = checked(_startTick + tick) };
+            }
+            throw new MidiExportEncodingException(MidiExportEncodingErrors.FromException(exception, source), exception);
+        }
     }
 }

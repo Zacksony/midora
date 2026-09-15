@@ -24,8 +24,10 @@ public sealed class ProjectValueCurveEditCommandsTests
             tickDelta: 20,
             valueDelta: 5));
 
-        Assert.Equal([140L, 260L], fixture.Curve.Points.Select(value => value.Tick));
-        Assert.Equal([15d, 25d], fixture.Curve.Points.Select(value => value.Value));
+        ValueCurve published = fixture.Project.EventInstruments.Single(item => item.Id == fixture.Instrument.Id)
+            .SubVoices.Single(item => item.Id == fixture.Voice.Id).Curves.Single(item => item.Id == fixture.Curve.Id);
+        Assert.Equal([140L, 260L], published.Points.Select(value => value.Tick));
+        Assert.Equal([15d, 25d], published.Points.Select(value => value.Value));
         Assert.Single(document.History);
         AssertCurrentCompilationMatchesFull(compilation);
 
@@ -55,8 +57,10 @@ public sealed class ProjectValueCurveEditCommandsTests
             value: 64,
             interpolation: CurveInterpolation.Step));
 
-        Assert.Equal([64d, 64d], fixture.Curve.Points.Select(item => item.Value));
-        Assert.All(fixture.Curve.Points, item => Assert.Equal(CurveInterpolation.Step, item.Interpolation));
+        ValueCurve published = fixture.Project.EventInstruments.Single(item => item.Id == fixture.Instrument.Id)
+            .SubVoices.Single(item => item.Id == fixture.Voice.Id).Curves.Single(item => item.Id == fixture.Curve.Id);
+        Assert.Equal([64d, 64d], published.Points.Select(item => item.Value));
+        Assert.All(published.Points, item => Assert.Equal(CurveInterpolation.Step, item.Interpolation));
         Assert.Single(document.History);
         AssertCurrentCompilationMatchesFull(compilation);
 

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);LOGICAL_MEMORY_PROBE</DefineConstants>
+    <MemoryProbeReferenceDirectory Condition="'$(MemoryProbeReferenceDirectory)' == ''">$(MSBuildThisFileDirectory)..\..\.tmp\logical-compiled-memory\baseline</MemoryProbeReferenceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(MemoryProbeReferenceDirectory)\Midora.*.dll" Exclude="$(MemoryProbeReferenceDirectory)\*.Tests.dll" />
+    <Compile Include="..\MemoryStage5Probe\MemoryGuard.cs" Link="MemoryGuard.cs" />
+    <Compile Include="..\..\src\midora-core\Midora.Compiler.Tests\LogicalCompiledMemoryOracleTests.cs" Link="LogicalCompiledMemoryOracle.cs" />
+  </ItemGroup>
+</Project>

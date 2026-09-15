@@ -8,15 +8,15 @@ public static partial class ProjectObjectClipboard
         ProjectDocumentSession document,
         MidoraId eventInstrumentId)
     {
+        using ClipboardCaptureScope capture = ClipboardCaptureScope.Enter();
         ArgumentNullException.ThrowIfNull(document);
         EventInstrument source = document.Project.EventInstruments
             .SingleOrDefault(value => value.Id == eventInstrumentId)
             ?? throw new ArgumentOutOfRangeException(nameof(eventInstrumentId));
+        ReserveInstrumentClipboardMetadata(source);
         MidoraProject snapshotProject = new(document.Project.TicksPerQuarterNote);
-        EventInstrument snapshot = EventInstrumentLibrary.CopyInto(
-            snapshotProject,
-            source,
-            source.Name);
+        EventInstrument snapshot = ProjectCompilationSnapshot.CloneInstrument(snapshotProject, source,
+            BulkEditPreparationContext.Current!.Token);
         return new(
             document.ClipboardSessionIdentity,
             ProjectObjectClipboardKind.EventInstrument,
@@ -34,9 +34,33 @@ public static partial class ProjectObjectClipboard
             targetDocument,
             payload,
             ProjectObjectClipboardKind.EventInstrument);
-        return ProjectDomainEditCommands.PasteEventInstrumentClipboard(
+        return KeepClipboardAlive(payload, ProjectDomainEditCommands.PasteEventInstrumentClipboard(
             data.Snapshot,
-            insertionIndex);
+            insertionIndex));
+    }
+
+    private static void ReserveInstrumentClipboardMetadata(EventInstrument instrument)
+    {
+        ClipboardCaptureScope.ReserveMetadata(checked(1L + instrument.LogicalParameters.Count
+            + instrument.MappingFunctions.Count + instrument.Envelopes.Count + instrument.ParameterMappings.Count));
+        ClipboardCaptureScope.ReserveMetadata(instrument.SubVoices.Count, 2048);
+        ReserveState(instrument.InitialState);
+        foreach (LogicalParameterDefinition parameter in instrument.LogicalParameters)
+            ClipboardCaptureScope.ReserveMetadata(parameter.EnumItems.Count, 128);
+        foreach (CSharpMappingFunction function in instrument.MappingFunctions)
+            ClipboardCaptureScope.ReserveMetadata(function.DeclaredContextFields.Count, 128);
+        foreach (LogicalParameterMapping mapping in instrument.ParameterMappings)
+            ClipboardCaptureScope.ReserveMetadata(mapping.Steps.Count);
+        foreach (SubVoice voice in instrument.SubVoices)
+        {
+            ReserveState(voice.InitialState);
+            ClipboardCaptureScope.ReserveMetadata(checked((long)voice.EventMappings.Count + voice.Curves.Count));
+            foreach (SubVoiceEventMapping mapping in voice.EventMappings)
+                ClipboardCaptureScope.ReserveMetadata(mapping.Steps.Count);
+        }
+        static void ReserveState(MidiInitialState state) => ClipboardCaptureScope.ReserveMetadata(
+            checked((long)state.Controllers.Count + state.RegisteredParameters.Count
+                + state.NonRegisteredParameters.Count), 128);
     }
 }
 
@@ -61,11 +85,10 @@ public static partial class ProjectDomainEditCommands
                 {
                     if (copy is null)
                     {
-                        copy = EventInstrumentLibrary.CopyInto(
+                        copy = CopyBoundedEventInstrument(
                             owner,
                             snapshot,
-                            requestedName: null);
-                        RemoveLaterExactTimelineCollisions(copy);
+                            name: null);
                         // CopyInto registers the new definition immediately. Paste owns the
                         // final insertion position, so remove that provisional append before
                         // inserting the same object at the requested index.

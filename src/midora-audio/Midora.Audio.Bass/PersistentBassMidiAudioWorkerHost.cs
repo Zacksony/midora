@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
+using Midora.Common;
 using Midora.AudioDevice;
 
 namespace Midora.Audio.Bass;
@@ -9,6 +10,7 @@ namespace Midora.Audio.Bass;
 internal sealed class PersistentBassMidiAudioWorkerHost : IDisposable
 {
     private readonly object _sync = new();
+    private readonly MidoraOwnedTemporaryDirectoryLease _ownedDirectoryLease;
     private readonly string _ownedDirectory;
     private readonly SharedAudioWorkerControl _control;
     private readonly Process _process;
@@ -93,13 +95,22 @@ internal sealed class PersistentBassMidiAudioWorkerHost : IDisposable
         SoundFonts = Array.AsReadOnly(normalizedSoundFonts);
         SoundFontPaths = Array.AsReadOnly(fontPaths);
         _defaultTimeout = preparingTimeout;
-        _ownedDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"midora-audio-host-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_ownedDirectory);
-        string soundFontSetPath = Path.Combine(_ownedDirectory, "soundfonts.masf");
-        SoundFontSetFile.Write(soundFontSetPath, SoundFonts);
-        _control = SharedAudioWorkerControl.Create($"Midora.Audio.Host.{Guid.NewGuid():N}");
+        _ownedDirectoryLease = MidoraOwnedTemporaryDirectoryLease.Create(
+            MidoraProgramData.Current.AudioWorkerExchangeDirectory,
+            "midora-audio-host");
+        _ownedDirectory = _ownedDirectoryLease.DirectoryPath;
+        string soundFontSetPath;
+        try
+        {
+            soundFontSetPath = Path.Combine(_ownedDirectory, "soundfonts.masf");
+            SoundFontSetFile.Write(soundFontSetPath, SoundFonts);
+            _control = SharedAudioWorkerControl.Create($"Midora.Audio.Host.{Guid.NewGuid():N}");
+        }
+        catch
+        {
+            _ownedDirectoryLease.Dispose();
+            throw;
+        }
         try
         {
             ProcessStartInfo startInfo = CreateStartInfo(WorkerPath);
@@ -506,20 +517,7 @@ internal sealed class PersistentBassMidiAudioWorkerHost : IDisposable
 
     private void TryDeleteOwnedDirectory()
     {
-        try
-        {
-            string fullPath = Path.GetFullPath(_ownedDirectory);
-            string prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()))
-                + Path.DirectorySeparatorChar;
-            if (fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileName(fullPath).StartsWith("midora-audio-host-", StringComparison.Ordinal))
-            {
-                Directory.Delete(fullPath, recursive: true);
-            }
-        }
-        catch
-        {
-        }
+        _ownedDirectoryLease.Dispose();
     }
 
     private static ProcessStartInfo CreateStartInfo(string workerPath)

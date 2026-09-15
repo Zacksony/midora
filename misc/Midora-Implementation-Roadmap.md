@@ -3,7 +3,13 @@
 文档修订日期：2026-08-08
 性质：需求理解、现状审阅和实施建议；不是 SRS 的替代品。
 
+> 2026-09-14 最新开发批次：A1 原清单与返修、A2a 统一乐器选择器／Inst. 单点／Initial State／preset audition 的 6 项人工验收均已获用户通过。source 关联要求当前 writer 为 Project Format 4，保留 Format 1/2/3 reader 和安全迁移副本；应用仍 `1.0.0-dev`。实际测试、9KX2 数据层测量、未跑专项及用户原答见 [A2a 报告](Midora-A2a-Instrument-Changes-Implementation-2026-09-14.md)。本次按要求记录并提交／推送，不发布；下一切片 A2b 全编辑与 Lane Tabs 尚未开始，当前不宣称 R27 全部完成。本段之后的旧进度保持历史原貌。
+
+> 2026-09-10 最新状态：**Logical 编译结果内存/时间优化（含 LC-T3）与极端 Tick UI 防护均已人工验收；SMF 导出编码边界已实施并完成自动验证，待本轮人工验收，然后进入新一轮需求**。初次时间退化保留在[历史内存报告](Midora-Logical-Canonical-Memory-Verification-2026-09-10.md)，时间回收见[时间优化记录](Midora-Logical-Canonical-Time-Implementation-2026-09-10.md)。SMF 的超长 delta 填充、每 MTrk 数据区 `0xFFFFFFFF` 字节上限/不拆分、流式事务与导出级汇总已落地，Compiler 不增加 delta/字节扫描；范围、实际测试与未覆盖的大文件 I/O 边界见[SMF 实施记录](Midora-SMF-Encoding-Boundaries-Implementation-2026-09-10.md)和[下一步台账](Midora-Pre-Expansion-Closeout-and-Next-Step-2026-09-09.md)。
+
 > 现状提示（2026-08-08）：本文后续“当前进度/尚未实现”描述保留为历史路线记录，已经过时；不得据此判定源码缺口。当前权威实施状态见 `misc/Midora-Non-UI-Implementation-Tracker.md`，§7～§12 逐节证据见 `misc/Midora-Domain-Compiler-Conformance-Matrix.md`。
+>
+> 2026-09-10 LC-T3：用户在独立实验后另行批准并正式接入紧凑 canonical/source 热路径，不改变既有预算、来源或音乐语义；现已确认本轮验收通过。当前验证与性能反例见 [LC-T3 实施记录](Midora-Logical-Canonical-Compact-Implementation-2026-09-10.md)；上述时间回收报告归档 T1/T2，后续极端 Tick/SMF 工作顺序不变。
 >
 > UI 阶段现状（2026-08-22）：正式 `Midora.Desktop`、共享 `Midora.Desktop.Presentation` 及其测试项目已经建立。主窗口、Project 生命周期、工作区、事务式对象 Properties、独立 Diagnostics、单前台 Task overlay、Preferences、MIDI/Audio 输出工作流和第 18 章主要编辑器已接入正式 Domain/Application/Compiler/consumer 入口；Arrangement、Segment、SubVoice、Logical Parameter 和 Conductor 的大量对象编辑采用专用渲染表面。生产主窗口已删除 Global Inspector、Bottom Panel 与 Details/Tasks；Style Gallery 继续作为同一共享主题的历史视觉样例，不是生产依赖。当前 UI 需求映射与验证证据见 `misc/Midora-WPF-UI-Requirement-Trace.md`，架构决定见 `misc/Midora-WPF-UI-Architecture-Decisions.md`。
 >

@@ -19,35 +19,33 @@ using WireTemplateEventMappingParameter = Midora.Persistence.Wire.Proto.V1.Templ
 
 namespace Midora.Persistence;
 
-internal static class EventInstrumentProtobufCodecV1
+internal static partial class EventInstrumentProtobufCodecV1
 {
     public const string ObjectType = "event-instrument";
 
     public static byte[] Serialize(EventInstrument value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        EventInstrumentV1 wire = ToWire(value);
-        Validate(wire);
-        return StrictProtobufWireV1.SerializeDeterministic(wire);
+        using MemoryStream output = new();
+        Serialize(value, output);
+        return output.ToArray();
     }
 
     public static EventInstrument Restore(MidoraProject project, ReadOnlySpan<byte> bytes)
     {
         ArgumentNullException.ThrowIfNull(project);
-        try
-        {
-            StrictProtobufWireV1.Validate(bytes, EventInstrumentV1.Descriptor);
-            EventInstrumentV1 wire = EventInstrumentV1.Parser.ParseFrom(bytes);
-            Validate(wire);
-            return FromWire(project, wire);
-        }
-        catch (InvalidProtocolBufferException exception)
-        {
-            throw new InvalidDataException("Event Instrument protobuf is malformed.", exception);
-        }
+        using MemoryStream input = new(bytes.ToArray(), writable: false);
+        return Restore(project, input);
     }
 
-    private static EventInstrumentV1 ToWire(EventInstrument value)
+    public static EventInstrument Restore(MidoraProject project, byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        using MemoryStream input = new(bytes, writable: false);
+        return Restore(project, input);
+    }
+
+    private static EventInstrumentV1 ToWire(EventInstrument value, bool includeChildren = true)
     {
         PersistenceValueValidationV1.ValidateShortText(value.Name, "Event Instrument name");
         EventInstrumentV1 result = new()
@@ -64,7 +62,7 @@ internal static class EventInstrumentProtobufCodecV1
             OverlapScope = (WireOverlapScope)(int)value.OverlapScope,
             ShortLifecycle = (WireShortLifecycle)(int)value.ShortLifecycle,
             LongLifecycle = (WireLongLifecycle)(int)value.LongLifecycle,
-            InitialState = ToWire(value.InitialState)
+            InitialState = includeChildren ? ToWire(value.InitialState) : new MidiInitialStateV1()
         };
         if (value.Description is not null)
         {
@@ -73,11 +71,14 @@ internal static class EventInstrumentProtobufCodecV1
         }
         if (value.LoopStartTick.HasValue) result.LoopStartTick = value.LoopStartTick.Value;
         if (value.LoopEndTick.HasValue) result.LoopEndTick = value.LoopEndTick.Value;
-        result.LogicalParameters.Add(value.LogicalParameters.Select(ToWire));
-        result.SubVoices.Add(value.SubVoices.Select(ToWire));
-        result.Envelopes.Add(value.Envelopes.Select(ToWire));
-        result.MappingFunctions.Add(value.MappingFunctions.Select(ToWire));
-        result.ParameterMappings.Add(value.ParameterMappings.Select(ToWire));
+        if (includeChildren)
+        {
+            result.LogicalParameters.Add(value.LogicalParameters.Select(item => ToWire(item)));
+            result.SubVoices.Add(value.SubVoices.Select(item => ToWire(item)));
+            result.Envelopes.Add(value.Envelopes.Select(ToWire));
+            result.MappingFunctions.Add(value.MappingFunctions.Select(ToWire));
+            result.ParameterMappings.Add(value.ParameterMappings.Select(ToWire));
+        }
         return result;
     }
 
@@ -107,7 +108,7 @@ internal static class EventInstrumentProtobufCodecV1
         return result;
     }
 
-    private static MidiInitialStateV1 ToWire(MidiInitialState value)
+    private static MidiInitialStateV1 ToWire(MidiInitialState value, bool includeEntries = true)
     {
         MidiInitialStateV1 result = new();
         if (value.BankMsb.HasValue) result.BankMsb = value.BankMsb.Value;
@@ -119,9 +120,12 @@ internal static class EventInstrumentProtobufCodecV1
             result.PitchBendRangeSemitones = value.PitchBendRangeSemitones.Value;
         }
         if (value.PitchBendRangeCents.HasValue) result.PitchBendRangeCents = value.PitchBendRangeCents.Value;
-        result.Controllers.Add(ToEntries(value.Controllers));
-        result.RegisteredParameters.Add(ToEntries(value.RegisteredParameters));
-        result.NonRegisteredParameters.Add(ToEntries(value.NonRegisteredParameters));
+        if (includeEntries)
+        {
+            result.Controllers.Add(ToEntries(value.Controllers));
+            result.RegisteredParameters.Add(ToEntries(value.RegisteredParameters));
+            result.NonRegisteredParameters.Add(ToEntries(value.NonRegisteredParameters));
+        }
         return result;
     }
 
@@ -158,7 +162,7 @@ internal static class EventInstrumentProtobufCodecV1
         }
     }
 
-    private static LogicalParameterDefinitionV1 ToWire(LogicalParameterDefinition value)
+    private static LogicalParameterDefinitionV1 ToWire(LogicalParameterDefinition value, bool includeChildren = true)
     {
         PersistenceValueValidationV1.ValidateShortText(value.Name, "Logical Parameter name");
         ProtobufValueCodecV1.RequireFinite(value.Minimum, "Logical Parameter minimum");
@@ -178,7 +182,7 @@ internal static class EventInstrumentProtobufCodecV1
             DefaultValue = value.DefaultValue,
             UsesExplicitEnumValues = value.UsesExplicitEnumValues
         };
-        result.EnumItems.Add(value.EnumItems.Select(ToWire));
+        if (includeChildren) result.EnumItems.Add(value.EnumItems.Select(ToWire));
         return result;
     }
 
@@ -219,12 +223,12 @@ internal static class EventInstrumentProtobufCodecV1
             Value = value.Value
         };
 
-    private static SubVoiceV1 ToWire(SubVoice value)
+    private static SubVoiceV1 ToWire(SubVoice value, bool includeChildren = true)
     {
         SubVoiceV1 result = new()
         {
             Id = ProtobufValueCodecV1.ToWire(value.Id),
-            InitialState = ToWire(value.InitialState)
+            InitialState = includeChildren ? ToWire(value.InitialState) : new MidiInitialStateV1()
         };
         if (value.Name is not null)
         {
@@ -232,13 +236,16 @@ internal static class EventInstrumentProtobufCodecV1
             result.Name = value.Name;
         }
         if (value.RootNoteOverride.HasValue) result.RootNoteOverride = value.RootNoteOverride.Value;
+        if (includeChildren)
+        {
         result.EventMappings.Add(value.EventMappings
             .OrderBy(item => item.Target.EventKind)
             .ThenBy(item => item.Target.EventNumber)
             .ThenBy(item => item.Target.Parameter)
             .Select(ToWire));
         result.Events.Add(value.Events.Select(ToWire));
-        result.Curves.Add(value.Curves.Select(ToWire));
+        result.Curves.Add(value.Curves.Select(item => ToWire(item)));
+        }
         return result;
     }
 
@@ -313,7 +320,7 @@ internal static class EventInstrumentProtobufCodecV1
         return result;
     }
 
-    private static ValueCurveV1 ToWire(ValueCurve value)
+    private static ValueCurveV1 ToWire(ValueCurve value, bool includeChildren = true)
     {
         ValueCurveV1 result = new()
         {
@@ -321,7 +328,7 @@ internal static class EventInstrumentProtobufCodecV1
             Target = ToWire(value.Target),
             TargetSettings = ToWire(value.TargetSettings)
         };
-        result.Points.Add(value.Points.Select(ToWire));
+        if (includeChildren) result.Points.Add(value.Points.Select(ToWire));
         return result;
     }
 
@@ -600,8 +607,8 @@ internal static class EventInstrumentProtobufCodecV1
         HashSet<int> numbers = [];
         foreach (MidiStateEntryV1 item in values)
         {
-            ProtobufValueCodecV1.Require(item.HasNumber, $"{fieldName}.number");
-            ProtobufValueCodecV1.Require(item.HasValue, $"{fieldName}.value");
+            if (!item.HasNumber) throw new InvalidDataException($"{fieldName}.number is required.");
+            if (!item.HasValue) throw new InvalidDataException($"{fieldName}.value is required.");
             if (!numbers.Add(item.Number)) throw new InvalidDataException($"{fieldName} contains a duplicate number.");
         }
     }
@@ -779,8 +786,8 @@ internal static class EventInstrumentProtobufCodecV1
     private static void Validate(MappingChainV1? value, string fieldName)
     {
         if (value is null) throw new InvalidDataException($"{fieldName} is required.");
-        _ = ProtobufValueCodecV1.FromWire(value.Id, $"{fieldName} ID");
-        ProtobufValueCodecV1.Require(value.HasIsEnabled, $"{fieldName}.isEnabled");
+        _ = ProtobufValueCodecV1.FromWire(value.Id, "Mapping Chain ID");
+        if (!value.HasIsEnabled) throw new InvalidDataException($"{fieldName}.isEnabled is required.");
         foreach (ValueMappingStepV1 step in value.Steps)
         {
             _ = ProtobufValueCodecV1.FromWire(step.Id, "Mapping Step ID");
@@ -816,14 +823,14 @@ internal static class EventInstrumentProtobufCodecV1
     private static void Validate(MidiValueTargetV1? value, string fieldName)
     {
         if (value is null) throw new InvalidDataException($"{fieldName} is required.");
-        ProtobufValueCodecV1.Require(value.HasKind, $"{fieldName}.kind");
-        ProtobufValueCodecV1.Require(value.HasNumber, $"{fieldName}.number");
+        if (!value.HasKind) throw new InvalidDataException($"{fieldName}.kind is required.");
+        if (!value.HasNumber) throw new InvalidDataException($"{fieldName}.number is required.");
     }
 
     private static void Validate(MidiIntegerTargetSettingsV1? value, string fieldName)
     {
         if (value is null) throw new InvalidDataException($"{fieldName} is required.");
-        ProtobufValueCodecV1.Require(value.HasRounding, $"{fieldName}.rounding");
-        ProtobufValueCodecV1.Require(value.HasOverflow, $"{fieldName}.overflow");
+        if (!value.HasRounding) throw new InvalidDataException($"{fieldName}.rounding is required.");
+        if (!value.HasOverflow) throw new InvalidDataException($"{fieldName}.overflow is required.");
     }
 }

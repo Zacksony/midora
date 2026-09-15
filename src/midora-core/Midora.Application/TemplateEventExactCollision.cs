@@ -4,6 +4,23 @@ namespace Midora.Application;
 
 internal static class TemplateEventExactCollision
 {
+    internal static (int First, int Second, int Count) Details(TemplateEventSnapshotValue value) => value.Kind switch
+    {
+        TemplateEventKind.Note => (-1 - value.Number, 0, 1),
+        TemplateEventKind.ControlChange => (checked(ControlChangeBase + value.Number), 0, 1),
+        TemplateEventKind.Bank when value.HasBankMsb && value.HasBankLsb => (BankMsb, BankLsb, 2),
+        TemplateEventKind.Bank when value.HasBankMsb => (BankMsb, 0, 1),
+        TemplateEventKind.Bank when value.HasBankLsb => (BankLsb, 0, 1),
+        TemplateEventKind.Bank => (0, 0, 0),
+        TemplateEventKind.Program => (Program, 0, 1),
+        TemplateEventKind.PitchBend => (PitchBend, 0, 1),
+        TemplateEventKind.RegisteredParameter when value.Number == 0 => (PitchBendRangeOrRpnZero, 0, 1),
+        TemplateEventKind.RegisteredParameter => (checked(RpnBase + value.Number), 0, 1),
+        TemplateEventKind.NonRegisteredParameter => (checked(NrpnBase + value.Number), 0, 1),
+        TemplateEventKind.PitchBendRange => (PitchBendRangeOrRpnZero, 0, 1),
+        _ => (checked(OtherBase + (int)value.Kind), 0, 1)
+    };
+
     private const int BankMsb = 1;
     private const int BankLsb = 2;
     private const int Program = 3;
@@ -81,9 +98,9 @@ public static partial class ProjectDomainEditCommands
     private static void RemoveLaterExactTimelineCollisions(SubVoice voice)
     {
         HashSet<(bool Note, long Tick, int Detail)> occupied = [];
-        for (int index = 0; index < voice.Events.Count;)
+        List<TemplateEvent> discarded = [];
+        foreach (TemplateEvent value in voice.Events)
         {
-            TemplateEvent value = voice.Events[index];
             (bool Note, long Tick, int Detail)[] keys = value.Kind == TemplateEventKind.Note
                 ? [(true, value.Tick, value.Number)]
                 : TemplateEventExactCollision.GetNonNoteDetails(
@@ -95,12 +112,13 @@ public static partial class ProjectDomainEditCommands
                     .ToArray();
             if (keys.Any(occupied.Contains))
             {
-                voice.Events.RemoveAt(index);
+                discarded.Add(value);
                 continue;
             }
             occupied.UnionWith(keys);
-            index++;
         }
+        if (discarded.Count != 0)
+            _ = voice.Events.RemoveRange(discarded);
 
         foreach (ValueCurve curve in voice.Curves)
         {

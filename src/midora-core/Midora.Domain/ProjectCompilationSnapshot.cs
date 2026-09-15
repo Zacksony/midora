@@ -5,7 +5,7 @@ namespace Midora.Domain;
 /// background compiler. Stable IDs are preserved because compiler checkpoints
 /// and diagnostics use them as identity.
 /// </summary>
-internal static class ProjectCompilationSnapshot
+internal static partial class ProjectCompilationSnapshot
 {
     public static MidoraProject Create(
         MidoraProject source,
@@ -186,23 +186,25 @@ internal static class ProjectCompilationSnapshot
             _ => throw new InvalidOperationException("Unsupported compilation snapshot object.")
         };
 
-        List<T> reusable = [.. snapshot];
+        Dictionary<MidoraId, T> reusable = new(snapshot.Count);
+        foreach (T value in snapshot)
+        {
+            reusable.TryAdd(IdOf(value), value);
+        }
         List<T> synchronized = new(source.Count);
         foreach (T sourceValue in source)
         {
             cancellationToken.ThrowIfCancellationRequested();
             MidoraId sourceId = IdOf(sourceValue);
-            int reusableIndex = changedIds.Contains(sourceId)
-                ? -1
-                : reusable.FindIndex(value => IdOf(value) == sourceId);
-            if (reusableIndex < 0)
+            if (changedIds.Contains(sourceId)
+                || !reusable.TryGetValue(sourceId, out T? reusableValue))
             {
                 synchronized.Add(clone(sourceValue));
                 continue;
             }
 
-            synchronized.Add(reusable[reusableIndex]);
-            reusable.RemoveAt(reusableIndex);
+            synchronized.Add(reusableValue);
+            reusable.Remove(sourceId);
         }
         snapshot.Clear();
         snapshot.AddRange(synchronized);
@@ -213,50 +215,14 @@ internal static class ProjectCompilationSnapshot
         ConductorTrack target,
         CancellationToken cancellationToken)
     {
-        List<TempoChange> tempos = new(source.Tempos.Count);
-        List<TimeSignatureChange> timeSignatures = new(source.TimeSignatures.Count);
-        List<KeySignatureChange> keySignatures = new(source.KeySignatures.Count);
-        List<ProjectMarker> markers = new(source.Markers.Count);
-        foreach (TempoChange value in source.Tempos)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            tempos.Add(new TempoChange(value.Id, value.Tick, value.BeatsPerMinute));
-        }
-        foreach (TimeSignatureChange value in source.TimeSignatures)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            timeSignatures.Add(new TimeSignatureChange(
-                value.Id,
-                value.Tick,
-                value.Numerator,
-                value.Denominator));
-        }
-        foreach (KeySignatureChange value in source.KeySignatures)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            keySignatures.Add(new KeySignatureChange(
-                value.Id,
-                value.Tick,
-                value.SharpsFlats,
-                value.IsMinor));
-        }
-        foreach (ProjectMarker marker in source.Markers)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            markers.Add(new ProjectMarker(marker.Id, marker.Tick, marker.Name));
-        }
-        ProjectEndMarker? endMarker = source.EndMarker is null
-            ? null
-            : new ProjectEndMarker(source.EndMarker.Id, source.EndMarker.Tick);
-        target.Tempos.Clear();
-        target.Tempos.AddRange(tempos);
-        target.TimeSignatures.Clear();
-        target.TimeSignatures.AddRange(timeSignatures);
-        target.KeySignatures.Clear();
-        target.KeySignatures.AddRange(keySignatures);
-        target.Markers.Clear();
-        target.Markers.AddRange(markers);
-        target.EndMarker = endMarker;
+        cancellationToken.ThrowIfCancellationRequested();
+        ConductorTrack captured = source.CloneFrozen();
+        cancellationToken.ThrowIfCancellationRequested();
+        target.Tempos = captured.Tempos;
+        target.TimeSignatures = captured.TimeSignatures;
+        target.KeySignatures = captured.KeySignatures;
+        target.Markers = captured.Markers;
+        target.EndMarker = captured.EndMarker;
     }
 
     private static LogicalTrack CloneTrack(
@@ -280,18 +246,7 @@ internal static class ProjectCompilationSnapshot
                 LengthTicks = segment.LengthTicks,
                 ContentOffsetTick = segment.ContentOffsetTick
             };
-            for (int index = 0; index < segment.Notes.Count; index++)
-            {
-                if ((index & 0xff) == 0) cancellationToken.ThrowIfCancellationRequested();
-                LogicalNote note = segment.Notes[index];
-                segmentCopy.Notes.Add(new LogicalNote(project, note.Id)
-                {
-                    StartTick = note.StartTick,
-                    LengthTicks = note.LengthTicks,
-                    Note = note.Note,
-                    Velocity = note.Velocity
-                });
-            }
+            segmentCopy.Notes.AdoptSnapshot(project, segment.Notes.CreateQuerySnapshot());
             foreach (LogicalParameterLane lane in segment.ParameterLanes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -299,15 +254,11 @@ internal static class ProjectCompilationSnapshot
                 {
                     ParameterId = lane.ParameterId
                 };
-                for (int index = 0; index < lane.Points.Count; index++)
-                {
-                    if ((index & 0xff) == 0) cancellationToken.ThrowIfCancellationRequested();
-                    CurvePoint point = lane.Points[index];
-                    laneCopy.Points.Add(ClonePoint(project, point));
-                }
+                laneCopy.Points.AdoptSnapshot(project, lane.Points.CreateQuerySnapshot());
                 segmentCopy.ParameterLanes.Add(laneCopy);
             }
             result.Segments.Add(segmentCopy);
+
         }
         return result;
     }
@@ -360,7 +311,7 @@ internal static class ProjectCompilationSnapshot
         return result;
     }
 
-    private static EventInstrument CloneInstrument(
+    internal static EventInstrument CloneInstrument(
         MidoraProject project,
         EventInstrument source,
         CancellationToken cancellationToken)
@@ -372,6 +323,7 @@ internal static class ProjectCompilationSnapshot
             Color = source.Color,
             RootNote = source.RootNote,
             TemplateLengthTicks = source.TemplateLengthTicks,
+            PreRollTicks = source.PreRollTicks,
             RequiresChannelIsolation = source.RequiresChannelIsolation,
             OverlapPolicy = source.OverlapPolicy,
             OverlapScope = source.OverlapScope,
@@ -483,37 +435,32 @@ internal static class ProjectCompilationSnapshot
             CopyChain(project, mapping.Steps, mappingCopy.Steps, cancellationToken);
             result.EventMappings.Add(mappingCopy);
         }
-        foreach (TemplateEvent value in source.Events)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            TemplateEvent eventCopy = new(project, value.Id)
-            {
-                Kind = value.Kind,
-                Tick = value.Tick,
-                LengthTicks = value.LengthTicks,
-                Number = value.Number,
-                Value = value.Value,
-                SecondaryValue = value.SecondaryValue,
-                HasBankMsb = value.HasBankMsb,
-                HasBankLsb = value.HasBankLsb,
-                FollowPitchDelta = value.FollowPitchDelta
-            };
-            result.Events.Add(eventCopy);
-        }
+        result.Events.AdoptSnapshot(project, source.Events.CreateQuerySnapshot());
+        result.InstrumentChanges = source.InstrumentChanges;
         foreach (ValueCurve curve in source.Curves)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ValueCurve curveCopy = new(project, curve.Id) { Target = curve.Target };
             CopyTargetSettings(curve.TargetSettings, curveCopy.TargetSettings);
-            for (int index = 0; index < curve.Points.Count; index++)
-            {
-                if ((index & 0xff) == 0) cancellationToken.ThrowIfCancellationRequested();
-                CurvePoint point = curve.Points[index];
-                curveCopy.Points.Add(ClonePoint(project, point));
-            }
+            curveCopy.Points.AdoptSnapshot(project, curve.Points.CreateQuerySnapshot());
             result.Curves.Add(curveCopy);
         }
         return result;
+
+    }
+
+    private static IEnumerable<CurvePoint> CloneCurvePoints(
+        IEnumerable<CurvePoint> source,
+        MidoraProject project,
+        CancellationToken cancellationToken)
+    {
+        // Sequential page enumeration avoids IList[index]'s page-directory scan.
+        int index = 0;
+        foreach (CurvePoint point in source)
+        {
+            if ((index++ & 0xff) == 0) cancellationToken.ThrowIfCancellationRequested();
+            yield return ClonePoint(project, point);
+        }
     }
 
     private static CurvePoint ClonePoint(MidoraProject project, CurvePoint source) =>

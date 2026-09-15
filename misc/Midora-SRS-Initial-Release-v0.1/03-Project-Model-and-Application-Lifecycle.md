@@ -315,9 +315,21 @@ Zip 包中存在但未被 `project.json` 纳入当前 Project 语义的未知或
 ---
 ## 3.10 项目修改状态
 任何正式 Project Source Data 编辑都必须标记 Modified，包括 Metadata、Conductor、Event Instrument/Usage/Root/Track/Segment/Note/Event/Parameter、正式顺序与 Reset Defaults。播放位置、选择、缩放、试听、诊断筛选、Save Copy、Application Preferences，以及 MIDI Export / Audio Render Task Draft 不标记 Project Modified。
-## 3.11 UI 视图状态
-初版不将 UI 视图状态保存进 Project。
-不保存的 UI 状态包括但不限于：
+## 3.11 Project Presentation 与会话 UI 状态
+
+Format 3 允许在 `.midora` 的独立 `settings/project-presentation.json` 中保存规格明确批准的 Project presentation 数据。该数据不是 Project Source Data，不进入 Project Domain、编译、canonical fingerprint、音频缓存或 Undo/Redo；presentation revision 与 Project Modified/save baseline 分离，presentation 的后台或显式保存不得令标题出现音乐内容修改星号，也不得触发关闭前保存提示。
+
+首个 Project presentation schema 固定以下容器；正式 Onion / All Tracks UI 见 §18.11：
+
+```text
+Per-Track Onion source selection / enabled / opacity
+Per-SubVoice Onion source selection / enabled / opacity
+All-Tracks overlay mode: raw | compiled
+```
+
+引用已删除对象的 dormant presentation entry 在保存快照时过滤；presentation 文件损坏、引用失效或 schema 不合法时恢复默认 presentation 并报告 Warning，音乐 Project 仍按其正式源数据打开且不因此标记 Project Modified。
+
+除上述显式白名单外，初版不把一般 UI 会话状态保存进 Project。包括但不限于：
 ```text
 当前打开的编辑器
 时间轴缩放

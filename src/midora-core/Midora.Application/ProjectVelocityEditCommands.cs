@@ -23,7 +23,12 @@ public static partial class ProjectDomainEditCommands
                 return Snapshot(item.Note) with { Velocity = velocity };
             }).ToArray();
             ValidateLogicalNoteBatch(replacement);
-            return PrepareLogicalNoteBatch(location.Track.Id, selected, old, replacement);
+            return PrepareLogicalNoteBatch(
+                location.Track.Id,
+                location.Segment.Notes,
+                selected,
+                old,
+                replacement);
         });
 
     public static IProjectEditCommand PaintTemplateNoteVelocities(
@@ -39,10 +44,11 @@ public static partial class ProjectDomainEditCommands
             }
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
-            TemplateEvent[] notes = velocities.Keys
-                .Select(id => FindTemplateEvent(voice, id))
-                .ToArray();
-            if (notes.Any(item => item.Kind != TemplateEventKind.Note))
+            TemplateEvent[] notes = ResolveTemplateEventsByIds(
+                voice.Events,
+                velocities.Keys.ToArray());
+            if (notes.Length != velocities.Count
+                || notes.Any(item => item.Kind != TemplateEventKind.Note))
             {
                 throw new ArgumentException("Velocity painting accepts Template Note events only.", nameof(velocities));
             }
@@ -59,10 +65,12 @@ public static partial class ProjectDomainEditCommands
                 EventInstrumentChange(eventInstrumentId),
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     for (int index = 0; index < notes.Length; index++) SetTemplateEvent(notes[index], replacement[index]);
                 },
                 _ =>
                 {
+                    using IDisposable batch = voice.Events.BeginBatchChange();
                     for (int index = 0; index < notes.Length; index++) SetTemplateEvent(notes[index], old[index]);
                 });
         });

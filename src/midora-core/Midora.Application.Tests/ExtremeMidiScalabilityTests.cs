@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using Midora.Audio;
 using Midora.Compiler;
 using Midora.Playback;
@@ -9,6 +10,84 @@ namespace Midora.Application.Tests;
 
 public sealed class ExtremeMidiScalabilityTests(ITestOutputHelper output)
 {
+    [Fact]
+    public void OptInSampleLargeDuplicateUndoUsesBatchOverlayCompaction()
+    {
+        string? path = Environment.GetEnvironmentVariable("MIDORA_SCALE_MIDI_PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            output.WriteLine("Set MIDORA_SCALE_MIDI_PATH to run the opt-in large-MIDI Undo gate.");
+            return;
+        }
+
+        MidiProjectImportResult imported = MidiProjectImportService.ImportFile(
+            Path.GetFullPath(path),
+            Path.GetFileNameWithoutExtension(path));
+        try
+        {
+            MidiSegment segment = imported.Project.PureMidiTracks
+                .SelectMany(static track => track.Segments)
+                .OrderByDescending(static value => value.Notes.Count)
+                .First(static value => value.Notes.Count != 0);
+            int requestedCount = int.TryParse(
+                    Environment.GetEnvironmentVariable("MIDORA_SCALE_UNDO_COUNT"),
+                    out int configuredCount)
+                ? Math.Max(1, configuredCount)
+                : 100_000;
+            DirectMidiNoteValue[] selected = segment.Notes.QueryValues(
+                    segment.ContentOffsetTick,
+                    segment.ContentEndTick)
+                .Take(requestedCount)
+                .ToArray();
+            Assert.NotEmpty(selected);
+            int originalCount = segment.Notes.Count;
+            long destinationStart = checked(segment.Notes.CreateQuerySnapshot().MaximumEndTick + 1_024);
+            long tickDelta = checked(destinationStart - selected.Min(static value => value.StartTick));
+
+            Stopwatch prepareTimer = Stopwatch.StartNew();
+            IPreparedProjectEdit source = ProjectDomainEditCommands.DuplicateDirectMidiNotes(
+                    segment.Id,
+                    selected.Select(static value => value.Id).ToArray(),
+                    tickDelta,
+                    keyDelta: 0)
+                .Prepare(imported.Project);
+            IPreparedProjectEdit edit = ExactTimelineCollisionPolicy.Wrap(imported.Project, source);
+            prepareTimer.Stop();
+
+            Stopwatch firstApply = Stopwatch.StartNew();
+            edit.Apply(imported.Project);
+            firstApply.Stop();
+            int createdCount = segment.Notes.Count - originalCount;
+            Assert.InRange(createdCount, 1, selected.Length);
+
+            Stopwatch firstUndo = Stopwatch.StartNew();
+            edit.Undo(imported.Project);
+            firstUndo.Stop();
+            Assert.Equal(originalCount, segment.Notes.Count);
+
+            Stopwatch warmApply = Stopwatch.StartNew();
+            edit.Apply(imported.Project);
+            warmApply.Stop();
+            Assert.Equal(checked(originalCount + createdCount), segment.Notes.Count);
+
+            Stopwatch warmUndo = Stopwatch.StartNew();
+            edit.Undo(imported.Project);
+            warmUndo.Stop();
+            Assert.Equal(originalCount, segment.Notes.Count);
+
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            output.WriteLine(
+                $"notes={originalCount}; requested={selected.Length}; created={createdCount}; "
+                + $"prepare={prepareTimer.Elapsed}; firstApply={firstApply.Elapsed}; "
+                + $"firstUndo={firstUndo.Elapsed}; warmApply={warmApply.Elapsed}; "
+                + $"warmUndo={warmUndo.Elapsed}; managedMiB={GC.GetTotalMemory(false) / 1048576d:F1}");
+        }
+        finally
+        {
+            imported.Project.Dispose();
+        }
+    }
+
     [Fact]
     public void OptInSamplePagedSelectionEditUsesBoundedTargetedWork()
     {
@@ -114,6 +193,88 @@ public sealed class ExtremeMidiScalabilityTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void OptInSampleEditedCompilationRevisionRemainsPaged()
+    {
+        string? path = Environment.GetEnvironmentVariable("MIDORA_SCALE_MIDI_PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            output.WriteLine(
+                "Set MIDORA_SCALE_MIDI_PATH to run the opt-in edited-compilation gate.");
+            return;
+        }
+
+        MidiProjectImportResult imported = MidiProjectImportService.ImportFile(
+            Path.GetFullPath(path),
+            Path.GetFileNameWithoutExtension(path));
+        try
+        {
+            PureMidiTrack track = imported.Project.PureMidiTracks
+                .OrderByDescending(static value => value.Segments.Sum(segment => segment.Notes.Count))
+                .First(static value => value.Segments.Any(segment => segment.Notes.Count != 0));
+            MidiSegment segment = track.Segments
+                .OrderByDescending(static value => value.Notes.Count)
+                .First(static value => value.Notes.Count != 0);
+            int requestedCount = int.TryParse(
+                    Environment.GetEnvironmentVariable("MIDORA_SCALE_EDIT_COUNT"),
+                    out int configuredCount)
+                ? Math.Max(1, configuredCount)
+                : 60_000;
+            MidoraId[] ids = segment.Notes.QueryValues(
+                    segment.ContentOffsetTick,
+                    segment.ContentEndTick)
+                .Take(requestedCount)
+                .Select(static value => value.Id)
+                .ToArray();
+            Assert.NotEmpty(ids);
+
+            using MidoraProject mirror = ProjectCompilationSnapshot.Create(imported.Project);
+            IPreparedProjectEdit sourceEdit = ProjectDomainEditCommands.AdjustDirectMidiNoteEdges(
+                segment.Id,
+                ids,
+                startDelta: 0,
+                endDelta: 1).Prepare(imported.Project);
+            IPreparedProjectEdit edit = ExactTimelineCollisionPolicy.Wrap(
+                imported.Project,
+                sourceEdit);
+            edit.Apply(imported.Project);
+
+            ProjectChangeSet changes = new();
+            changes.PureMidiTrackIds.Add(track.Id);
+            Stopwatch captureTimer = Stopwatch.StartNew();
+            ProjectCompilationSnapshot.RevisionCapture capture =
+                ProjectCompilationSnapshot.CaptureRevision(mirror, imported.Project, changes);
+            captureTimer.Stop();
+            Stopwatch materializeTimer = Stopwatch.StartNew();
+            MidoraProject materialized = ProjectCompilationSnapshot.MaterializeRevision(capture);
+            materializeTimer.Stop();
+            Assert.Same(mirror, materialized);
+
+            Stopwatch compileTimer = Stopwatch.StartNew();
+            using MidoraCompiler compiler = new();
+            CanonicalCompiledResult compiled = compiler.CompileFull(materialized);
+            compileTimer.Stop();
+            Assert.True(compiled.EndTick > compiled.StartTick);
+            output.WriteLine(
+                $"editedNotes={ids.Length}; capture={captureTimer.Elapsed}; "
+                + $"materialize={materializeTimer.Elapsed}; compile={compileTimer.Elapsed}; "
+                + $"compiledRange=[{compiled.StartTick}, {compiled.EndTick})");
+            Assert.True(
+                captureTimer.Elapsed < TimeSpan.FromSeconds(3),
+                $"Edited compilation capture took {captureTimer.Elapsed}.");
+            Assert.True(
+                materializeTimer.Elapsed < TimeSpan.FromSeconds(5),
+                $"Edited compilation mirror materialization took {materializeTimer.Elapsed}.");
+            Assert.True(
+                compileTimer.Elapsed < TimeSpan.FromSeconds(10),
+                $"Edited full compile took {compileTimer.Elapsed}.");
+        }
+        finally
+        {
+            imported.Project.Dispose();
+        }
+    }
+
+    [Fact]
     public void OptInSampleImportAndCompileRemainPaged()
     {
         string? path = Environment.GetEnvironmentVariable("MIDORA_SCALE_MIDI_PATH");
@@ -128,13 +289,23 @@ public sealed class ExtremeMidiScalabilityTests(ITestOutputHelper output)
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         long baselineHeap = GC.GetTotalMemory(forceFullCollection: true);
         Process process = Process.GetCurrentProcess();
+        using ManagedHeapSampler managedHeapSampler = new();
         Stopwatch importTimer = Stopwatch.StartNew();
         MidiProjectImportResult imported = MidiProjectImportService.ImportFile(
             path,
             Path.GetFileNameWithoutExtension(path));
         importTimer.Stop();
+        managedHeapSampler.Stop();
         try
         {
+            PureMidiContentPack[] contentPacks = imported.Project.PureMidiTracks
+                .SelectMany(static track => track.Segments)
+                .Select(static segment => segment.TryGetPristineContentPack())
+                .OfType<PureMidiContentPack>()
+                .DistinctBy(static pack => pack.Path, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static pack => pack.Path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            Assert.NotEmpty(contentPacks);
             Stopwatch compileTimer = Stopwatch.StartNew();
             using MidoraCompiler compiler = new();
             CanonicalCompiledResult compiled = compiler.CompileFull(imported.Project);
@@ -224,11 +395,95 @@ public sealed class ExtremeMidiScalabilityTests(ITestOutputHelper output)
             output.WriteLine($"pages={metrics.ContentPageCount}; packBytes={metrics.ContentPackBytes}");
             output.WriteLine($"pass1={metrics.FirstPassElapsed}; pass2={metrics.SecondPassElapsed}; import={importTimer.Elapsed}; compile={compileTimer.Elapsed}");
             output.WriteLine($"plan={planTimer.Elapsed}; startupWindow={windowTimer.Elapsed}; startupEvents={startupEventCount}");
-            output.WriteLine($"retainedManagedBytes={retainedHeap}; peakWorkingSetBytes={process.PeakWorkingSet64}");
+            output.WriteLine(
+                $"retainedManagedBytes={retainedHeap}; peakManagedBytes={managedHeapSampler.PeakByteCount}; "
+                + $"peakManagedDeltaBytes={Math.Max(0, managedHeapSampler.PeakByteCount - baselineHeap)}; "
+                + $"peakWorkingSetBytes={process.PeakWorkingSet64}");
+            byte[][] packHashes = contentPacks.Select(static pack =>
+            {
+                using FileStream stream = new(
+                    pack.Path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read | FileShare.Delete,
+                    1024 * 1024,
+                    FileOptions.SequentialScan);
+                return SHA256.HashData(stream);
+            }).ToArray();
+            byte[] combinedHashInput = new byte[packHashes.Length * SHA256.HashSizeInBytes];
+            for (int index = 0; index < packHashes.Length; index++)
+            {
+                packHashes[index].CopyTo(
+                    combinedHashInput,
+                    index * SHA256.HashSizeInBytes);
+            }
+            output.WriteLine(
+                $"packCount={packHashes.Length}; packCombinedSha256="
+                + Convert.ToHexStringLower(SHA256.HashData(combinedHashInput)));
+
         }
         finally
         {
             imported.Project.Dispose();
         }
     }
+
+    private sealed class ManagedHeapSampler : IDisposable
+    {
+        private readonly ManualResetEventSlim _stop = new(initialState: false);
+        private readonly Thread _thread;
+        private long _peakByteCount = GC.GetTotalMemory(forceFullCollection: false);
+        private bool _stopped;
+
+        public ManagedHeapSampler()
+        {
+            _thread = new(Sample)
+            {
+                IsBackground = true,
+                Name = "Midora scale-test managed-heap sampler"
+            };
+            _thread.Start();
+        }
+
+        public long PeakByteCount => Volatile.Read(ref _peakByteCount);
+
+        public void Stop()
+        {
+            if (_stopped) return;
+            _stopped = true;
+            _stop.Set();
+            _thread.Join();
+            Observe(GC.GetTotalMemory(forceFullCollection: false));
+        }
+
+        public void Dispose()
+        {
+            Stop();
+            _stop.Dispose();
+        }
+
+        private void Sample()
+        {
+            do
+            {
+                Observe(GC.GetTotalMemory(forceFullCollection: false));
+            }
+            while (!_stop.Wait(TimeSpan.FromMilliseconds(25)));
+        }
+
+        private void Observe(long byteCount)
+        {
+            long previous = Volatile.Read(ref _peakByteCount);
+            while (byteCount > previous)
+            {
+                long observed = Interlocked.CompareExchange(
+                    ref _peakByteCount,
+                    byteCount,
+                    previous);
+                if (observed == previous) return;
+                previous = observed;
+            }
+        }
+    }
+
 }

@@ -1,4 +1,5 @@
 using Midora.Audio;
+using Midora.Common;
 using Midora.Compiler;
 using Midora.Domain;
 using Midora.Midi;
@@ -6,13 +7,23 @@ using Midora.Midi;
 namespace Midora.Playback;
 
 internal sealed class CanonicalMidiRenderEventPageProvider :
-    IMidiRenderEventDemandAwarePageProvider
+    IMidiRenderEventDemandAwarePageProvider, IRetainedStorageSource
 {
     private readonly CanonicalCompiledResult _compiled;
     private readonly TempoSampleMap _map;
     private readonly int _sampleRate;
     private readonly IReadOnlyDictionary<MidoraId, int> _sourceIndices;
     private readonly IReadOnlySet<MidoraId>? _audibleTrackIds;
+
+    public void CollectRetainedStorage(RetainedStorageCollector collector)
+    {
+        if (!collector.Add(this, 64)) return;
+        _compiled.CollectRetainedStorage(collector);
+        _map.CollectRetainedStorage(collector);
+        collector.Dictionary(_sourceIndices);
+        if (_audibleTrackIds is not null)
+            collector.Add(_audibleTrackIds, 128L + 64L * _audibleTrackIds.Count);
+    }
 
     public CanonicalMidiRenderEventPageProvider(
         CanonicalCompiledResult compiled,

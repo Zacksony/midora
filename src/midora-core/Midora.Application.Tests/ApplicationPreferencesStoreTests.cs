@@ -1,10 +1,31 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Midora.Domain;
 
 namespace Midora.Application.Tests;
 
 public sealed class ApplicationPreferencesStoreTests
 {
+    [Fact]
+    public void InstrumentAuditionRoundTripsIndependentlyAndOldPreferencesUseDefaults()
+    {
+        using TemporaryDirectory directory = new();
+        string path = Path.Combine(directory.Path, "preferences.json");
+        var store = new ApplicationPreferencesStore(path);
+        var expected = ApplicationPreferences.Default with { InstrumentAudition = new(false, 127, 1, 900) };
+        Assert.True(store.Save(expected).Succeeded);
+        var loaded = store.Load();
+        Assert.Null(loaded.Notice); Assert.Equal(expected.InstrumentAudition, loaded.Preferences.InstrumentAudition);
+        Assert.Equal(expected.RealtimeAudio, loaded.Preferences.RealtimeAudio);
+        var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        Assert.True(json.Remove("instrumentAudition"));
+        File.WriteAllText(path, json.ToJsonString());
+        loaded = store.Load(); Assert.Null(loaded.Notice);
+        Assert.Equal(new InstrumentAuditionPreferences(true, 60, 100, 500), loaded.Preferences.InstrumentAudition);
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.Save(expected with { InstrumentAudition = new(true, 128, 100, 500) }));
+    }
+
     [Fact]
     public void MissingFileUsesSpecifiedDefaultsWithoutNotice()
     {
@@ -24,6 +45,34 @@ public sealed class ApplicationPreferencesStoreTests
         Assert.Equal(PlaybackPreferences.Default, result.Preferences.Playback);
         Assert.Equal(AppearancePreferences.Default, result.Preferences.Appearance);
         Assert.Empty(result.Preferences.SoundFonts);
+        Assert.False(result.Preferences.DesktopUi.FollowPlayback);
+    }
+
+    [Fact]
+    public void FollowPlaybackDefaultsOffButKeepsAnExplicitEnabledPreference()
+    {
+        using TemporaryDirectory directory = new();
+        string path = Path.Combine(directory.Path, "preferences.json");
+        ApplicationPreferencesStore store = new(path);
+        ApplicationPreferences explicitlyEnabled = ApplicationPreferences.Default with
+        {
+            DesktopUi = ApplicationPreferences.Default.DesktopUi with
+            {
+                FollowPlayback = true
+            }
+        };
+
+        Assert.True(store.Save(explicitlyEnabled).Succeeded);
+        Assert.True(store.Load().Preferences.DesktopUi.FollowPlayback);
+
+        JsonObject root = JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))!.AsObject();
+        Assert.True(root["desktopUi"]!.AsObject().Remove("followPlayback"));
+        File.WriteAllText(
+            path,
+            root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        Assert.False(store.Load().Preferences.DesktopUi.FollowPlayback);
     }
 
     [Fact]
@@ -63,6 +112,9 @@ public sealed class ApplicationPreferencesStoreTests
 
         Assert.True(store.Save(preferences).Succeeded);
         byte[] first = File.ReadAllBytes(path);
+        string persistedJson = Encoding.UTF8.GetString(first);
+        Assert.DoesNotContain("audioCacheRootPath", persistedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(preferences.AudioCache.RootPath, persistedJson, StringComparison.Ordinal);
         Assert.True(store.Save(preferences).Succeeded);
         byte[] second = File.ReadAllBytes(path);
         ApplicationPreferencesLoadResult loaded = store.Load();
@@ -70,7 +122,11 @@ public sealed class ApplicationPreferencesStoreTests
         Assert.Equal(first, second);
         Assert.Null(loaded.Notice);
         Assert.Equal(preferences.RealtimeAudio, loaded.Preferences.RealtimeAudio);
-        Assert.Equal(preferences.AudioCache, loaded.Preferences.AudioCache);
+        Assert.Equal(
+            new AudioCachePreferences(
+                Midora.Common.MidoraProgramData.Current.AudioCacheDirectory,
+                preferences.AudioCache.MaximumReusableBytes),
+            loaded.Preferences.AudioCache);
         Assert.Equal(preferences.Playback, loaded.Preferences.Playback);
         Assert.Equal(preferences.Appearance, loaded.Preferences.Appearance);
         Assert.Equal(preferences.RecentDirectories, loaded.Preferences.RecentDirectories);
@@ -214,7 +270,15 @@ public sealed class ApplicationPreferencesStoreTests
 
         Assert.False(failed.Succeeded);
         Assert.Equal("PreferenceWriteFailed", failed.Notice?.Code);
-        Assert.Equal(original, store.Load().Preferences);
+        Assert.Equal(
+            original with
+            {
+                AudioCache = original.AudioCache with
+                {
+                    RootPath = Midora.Common.MidoraProgramData.Current.AudioCacheDirectory
+                }
+            },
+            store.Load().Preferences);
         Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
     }
 
@@ -268,6 +332,81 @@ public sealed class ApplicationPreferencesStoreTests
         sf2.Validate();
         Assert.Throws<ArgumentException>(sfzWithoutTarget.Validate);
         sfzWithTarget.Validate();
+    }
+
+    [Fact]
+    public void Schema2SoundFontsReceiveStableIdsAndNextSaveWritesSchema3()
+    {
+        using TemporaryDirectory directory = new();
+        string path = Path.Combine(directory.Path, "preferences.json");
+        ApplicationPreferencesStore store = new(path);
+        ApplicationPreferences original = ApplicationPreferences.Default with
+        {
+            SoundFonts = [new(Path.Combine(directory.Path, "legacy.sf2"), true)]
+        };
+        Assert.True(store.Save(original).Succeeded);
+
+        JsonObject root = JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))!.AsObject();
+        root["schemaVersion"] = 2;
+        JsonObject legacySoundFont = root["soundFonts"]!.AsArray()[0]!.AsObject();
+        Assert.True(legacySoundFont.Remove("entryId"));
+        File.WriteAllText(
+            path,
+            root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        ApplicationPreferencesLoadResult first = store.Load();
+        ApplicationPreferencesLoadResult second = store.Load();
+
+        Assert.Null(first.Notice);
+        Assert.Null(second.Notice);
+        SoundFontEntryId migratedId = Assert.Single(first.Preferences.SoundFonts).EntryId;
+        Assert.NotEqual(default, migratedId);
+        Assert.Equal(migratedId, Assert.Single(second.Preferences.SoundFonts).EntryId);
+        Assert.True(store.Save(first.Preferences).Succeeded);
+        JsonObject rewritten = JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))!.AsObject();
+        Assert.Equal(3, rewritten["schemaVersion"]!.GetValue<int>());
+        Assert.Equal(
+            migratedId.ToString(),
+            rewritten["soundFonts"]!.AsArray()[0]!["entryId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void DuplicateJsonPropertiesAreRejectedInsteadOfLastValueWinning()
+    {
+        using TemporaryDirectory directory = new();
+        string path = Path.Combine(directory.Path, "preferences.json");
+        ApplicationPreferencesStore store = new(path);
+        Assert.True(store.Save(ApplicationPreferences.Default).Succeeded);
+        string valid = File.ReadAllText(path, Encoding.UTF8);
+        string duplicate = valid.Replace(
+            "\"schemaVersion\": 3",
+            "\"schemaVersion\": 3,\n  \"schemaVersion\": 3",
+            StringComparison.Ordinal);
+        Assert.NotEqual(valid, duplicate);
+        File.WriteAllText(path, duplicate, new UTF8Encoding(false));
+
+        ApplicationPreferencesLoadResult result = store.Load();
+
+        Assert.Equal(ApplicationPreferences.Default, result.Preferences);
+        Assert.Equal("PreferenceReadFailed", result.Notice?.Code);
+        Assert.IsType<InvalidDataException>(result.Notice?.Error);
+    }
+
+    [Fact]
+    public void DuplicateSoundFontEntryIdsAreRejected()
+    {
+        SoundFontEntryId id = SoundFontEntryId.Create();
+        ApplicationPreferences invalid = ApplicationPreferences.Default with
+        {
+            SoundFonts =
+            [
+                new(id, Path.GetFullPath("first.sf2"), true),
+                new(id, Path.GetFullPath("second.sf2"), true)
+            ]
+        };
+
+        Assert.Throws<ArgumentException>(invalid.Validate);
     }
 
     [Theory]
