@@ -760,5 +760,5 @@ All Tracks 在 Raw/Compiled 下均显示绝对播放指针，并遵守全局 Fol
 
 来源查询、分页读取、密集列聚合和 Logical compiled FIFO 索引均在有界后台执行；WPF 线程不得为绘制全量枚举音符。来源分块局部失效，洋葱皮使用独立缓存身份，不污染已验收的普通 Note/Selection/Velocity/Event 缓存。允许每 Key 一行的只读占用缓存，垂直缩放/滚动复用；不得使其成为领域数据或编辑命中来源。Raw/Compiled 可复用未改变的 Pure MIDI 来源快照与相同内容块缓存。缓存必须有明确预算及取消、Workspace/Project 关闭后的释放时机。
 
-配置复用 §16.7.5 的 Format 3 presentation schema 2：目标、手选来源、sourceMode、enable、opacity、默认 Raw/Compiled 随显式 Save / Save Copy 保存，不增加 Undo、不设置音乐 Modified、不引发关闭保存提示。来源顺序在保存快照中按当前正式顺序过滤、排序。删除来源时，仍存活目标的来源引用在会话中 dormant，Undo 恢复同身份时重新生效；保存过滤仍悬空的来源引用但不破坏该会话恢复。删除目标自身时立即释放其配置，不保留目标自身的 dormant profile，音乐 Undo 不复活该配置或自动重开 Tab。Duplicate Track/SubVoice 复制该目标配置，Definition 深复制重映射内部 SubVoice 引用；视图配置本身不随音乐 Undo 回退。损坏隔离沿用 §16.33，不阻止音乐加载。
+配置复用 §16.7.5 的 Format 4 presentation schema 3：目标、手选来源、sourceMode、enable、opacity、默认 Raw/Compiled，以及 B2 批准的 workspace profile/local view/lane/monitoring 状态，随显式 Save / Save Copy 保存，不增加 Undo、不设置音乐 Modified、不引发关闭保存提示。来源顺序在保存快照中按当前正式顺序过滤、排序。删除来源时，仍存活目标的来源引用在会话中 dormant，Undo 恢复同身份时重新生效；保存过滤仍悬空的来源引用但不破坏该会话恢复。删除目标自身时立即释放其配置，不保留目标自身的 dormant profile，音乐 Undo 不复活该配置或自动重开 Tab。Duplicate Track/SubVoice 复制该目标配置，Definition 深复制重映射内部 SubVoice 引用；视图配置本身不随音乐 Undo 回退。损坏隔离沿用 §16.33，不阻止音乐加载。schema 3 的 workspace 分区按独立预算保存，损坏或超预算时完整省略该分区并报告，不静默截断。
 ---

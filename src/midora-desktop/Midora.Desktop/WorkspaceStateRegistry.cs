@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.IO;
 using Midora.Desktop.Presentation.Controls;
 using Midora.Desktop.Presentation.Interaction;
 using Midora.Domain;
+using Midora.Persistence;
 
 namespace Midora.Desktop;
 
@@ -184,6 +186,123 @@ internal sealed class WorkspaceStateRegistry : IDisposable
 
     internal WorkspaceStateSnapshot Freeze() => new(Revision, [.. _profiles], [.. _views], [.. _lanes]);
     internal void MarkSaved(long revision) => SavedRevision = Math.Clamp(revision, 0, Revision);
+
+    internal ProjectPresentationWorkspaceStateV4 CapturePresentationState(
+        ProjectPresentationMonitoringV4 monitoring)
+    {
+        ArgumentNullException.ThrowIfNull(monitoring);
+        WorkspaceStateSnapshot snapshot = Freeze();
+        ProjectPresentationEditorProfileV4[] profiles = snapshot.Profiles
+            .Select(pair => new ProjectPresentationEditorProfileV4(
+                ToPresentationOwner(pair.Key),
+                ToPresentationSettings(pair.Value.Value.Piano),
+                ToPresentationSettings(pair.Value.Value.Event),
+                pair.Value.Value.TickSpan,
+                pair.Value.Value.KeyHeight,
+                (int)pair.Value.Value.Tool,
+                (int)pair.Value.Value.Shape,
+                pair.Value.Value.LanesVisible,
+                pair.Value.Value.LanesHeight,
+                pair.Value.Value.ListVisible,
+                pair.Value.Value.ListWidth))
+            .ToArray();
+        ProjectPresentationEditorLocalViewV4[] views = snapshot.Views
+            .Select(pair => new ProjectPresentationEditorLocalViewV4(
+                ToPresentationOwner(pair.Key),
+                pair.Value.StartTick,
+                pair.Value.FirstLane,
+                pair.Value.FirstRow))
+            .ToArray();
+        ProjectPresentationLaneMemoryV4[] lanes = snapshot.Lanes
+            .Select(pair => new ProjectPresentationLaneMemoryV4(
+                ToPresentationOwner(pair.Key),
+                ToPresentationKey(pair.Value.Active),
+                pair.Value.Targets.Select(target => new ProjectPresentationLaneTargetV4(
+                    ToPresentationKey(target.Key), target.Hidden, target.Minimum, target.Maximum)).ToArray(),
+                pair.Value.ExplicitMidiTargets.Select(target => new ProjectPresentationLaneKeyV4(
+                    3, null, (int)target.Kind, target.Data1)).ToArray()))
+            .ToArray();
+        return new(profiles, views, lanes, monitoring);
+    }
+
+    internal bool TryRestorePresentationState(ProjectPresentationWorkspaceStateV4 state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        try
+        {
+            EditorStateOwner ToOwner(ProjectPresentationWorkspaceOwnerV4 owner) => owner.Kind switch
+            {
+                ProjectPresentationWorkspaceOwnerKindV4.Track =>
+                    new(EditorStateOwnerKind.Track, owner.Id),
+                ProjectPresentationWorkspaceOwnerKindV4.Segment =>
+                    new(EditorStateOwnerKind.Segment, owner.Id),
+                ProjectPresentationWorkspaceOwnerKindV4.SubVoice when owner.InstrumentId is { } instrument =>
+                    new(EditorStateOwnerKind.SubVoice, owner.Id, instrument),
+                _ => throw new InvalidDataException("Workspace owner is invalid.")
+            };
+            EditorSettingsValues FromSettings(ProjectPresentationEditorSettingsV4 value) => new(
+                new(value.Operation.Numerator, value.Operation.Denominator, value.Operation.Label, value.Operation.IsBar),
+                value.Snap, value.Grid, value.Length, value.Velocity);
+
+            WorkspaceStateSnapshot snapshot = new(
+                Revision,
+                [.. state.Profiles.Select(value =>
+                    new KeyValuePair<EditorStateOwner, VersionedEditorProfile>(
+                        ToOwner(value.Owner),
+                        new(0, new(
+                            FromSettings(value.Piano),
+                            FromSettings(value.Event),
+                            value.TickSpan,
+                            value.KeyHeight,
+                            (TimelineToolMode)value.Tool,
+                            (TimelineValueTraceShape)value.Shape,
+                            value.LanesVisible,
+                            value.LanesHeight,
+                            value.ListVisible,
+                            value.ListWidth))))],
+                [.. state.Views.Select(value =>
+                    new KeyValuePair<EditorStateOwner, EditorLocalView>(
+                        ToOwner(value.Owner),
+                        new(value.StartTick, value.FirstLane, value.FirstRow)))],
+                [.. state.Lanes.Select(value =>
+                {
+                    LaneTabKey FromKey(ProjectPresentationLaneKeyV4 key) =>
+                        new(key.Type, key.Parameter ?? default, key.Kind, key.Number);
+                    LaneTabMemory memory = new(
+                        FromKey(value.Active),
+                        [.. value.Targets.Select(target => new LaneTargetView(
+                            FromKey(target.Key), target.Hidden, target.Minimum, target.Maximum))])
+                    {
+                        ExplicitMidiTargets = [.. value.ExplicitMidiTargets.Select(target =>
+                            new DirectMidiEventLaneTarget(
+                                (DirectMidiChannelEventKind)target.Kind,
+                                target.Number))]
+                    };
+                    return new KeyValuePair<EditorStateOwner, LaneTabMemory>(ToOwner(value.Owner), memory);
+                })]);
+            return TryRestore(snapshot);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or ArgumentException or OverflowException)
+        {
+            return false;
+        }
+    }
+
+    private static ProjectPresentationWorkspaceOwnerV4 ToPresentationOwner(EditorStateOwner owner) =>
+        new(owner.Kind switch
+        {
+            EditorStateOwnerKind.Track => ProjectPresentationWorkspaceOwnerKindV4.Track,
+            EditorStateOwnerKind.Segment => ProjectPresentationWorkspaceOwnerKindV4.Segment,
+            EditorStateOwnerKind.SubVoice => ProjectPresentationWorkspaceOwnerKindV4.SubVoice,
+            _ => throw new InvalidDataException("Unknown editor state owner kind.")
+        }, owner.Id, owner.Kind == EditorStateOwnerKind.SubVoice ? owner.Instrument : null);
+
+    private static ProjectPresentationEditorSettingsV4 ToPresentationSettings(EditorSettingsValues value) =>
+        new(new(value.Operation.Numerator, value.Operation.Denominator, value.Operation.Label, value.Operation.IsBar),
+            value.Snap, value.Grid, value.Length, value.Velocity);
+
+    private static ProjectPresentationLaneKeyV4 ToPresentationKey(LaneTabKey key) =>
+        new(key.Type, key.Parameter == default ? null : key.Parameter, key.Kind, key.Number);
 
     // B2's codec validates its own wire schema; this boundary validates the value partition atomically.
     internal bool TryRestore(WorkspaceStateSnapshot snapshot)

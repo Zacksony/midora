@@ -35,17 +35,25 @@ public sealed record SubVoiceOnionPresetV3(
 public sealed record ProjectPresentationStateV3(
     ProjectPresentationAllTracksModeV3 AllTracksMode,
     IReadOnlyList<TrackOnionPresetV3> TrackOnionPresets,
-    IReadOnlyList<SubVoiceOnionPresetV3> SubVoiceOnionPresets)
+    IReadOnlyList<SubVoiceOnionPresetV3> SubVoiceOnionPresets,
+    ProjectPresentationWorkspaceStateV4? WorkspaceState = null)
 {
     public static ProjectPresentationStateV3 Empty { get; } = new(
         ProjectPresentationAllTracksModeV3.Raw,
         Array.Empty<TrackOnionPresetV3>(),
-        Array.Empty<SubVoiceOnionPresetV3>());
+        Array.Empty<SubVoiceOnionPresetV3>(),
+        ProjectPresentationWorkspaceStateV4.Empty);
 }
 
 internal static class ProjectPresentationCodecV3
 {
     public static ProjectPresentationStateV3 Parse(
+        ReadOnlySpan<byte> utf8,
+        MidoraProject project,
+        int? declaredSchemaVersion = null)
+        => ParseWithRecovery(utf8, project, declaredSchemaVersion).State;
+
+    internal static ProjectPresentationParseResultV4 ParseWithRecovery(
         ReadOnlySpan<byte> utf8,
         MidoraProject project,
         int? declaredSchemaVersion = null)
@@ -59,15 +67,17 @@ internal static class ProjectPresentationCodecV3
             || !version.TryGetInt32(out int schemaVersion)
             || declaredSchemaVersion is { } declared && schemaVersion != declared)
             throw new InvalidDataException("project-presentation.json schemaVersion is missing or differs from its manifest.");
+        if (schemaVersion == 3)
+            return ProjectPresentationCodecV4.Read(utf8, project, declaredSchemaVersion);
         if (schemaVersion == 2)
-            return ProjectPresentationCodecV2.Read(utf8, project);
+            return new(ProjectPresentationCodecV2.Read(utf8, project), false, []);
         if (schemaVersion != 1)
             throw new InvalidDataException("project-presentation.json schemaVersion is not supported.");
         ProjectPresentationJsonV3 dto = JsonSerializer.Deserialize(
             utf8,
             ProjectPresentationJsonContextV3.Default.ProjectPresentationJsonV3)
             ?? throw new InvalidDataException("project-presentation.json cannot be null.");
-        return FromDto(dto, project);
+        return new(FromDto(dto, project), false, []);
     }
 
     public static byte[] Serialize(
@@ -76,43 +86,7 @@ internal static class ProjectPresentationCodecV3
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(project);
-        ProjectPresentationStateV3 canonical = ValidateAndCanonicalize(state, project);
-        ProjectPresentationJsonV2 dto = new()
-        {
-            SchemaVersion = PersistenceContractV3.ProjectPresentationSchemaVersion,
-            AllTracksMode = canonical.AllTracksMode switch
-            {
-                ProjectPresentationAllTracksModeV3.Raw => "raw",
-                ProjectPresentationAllTracksModeV3.Compiled => "compiled",
-                _ => throw new InvalidDataException("Unknown all-tracks presentation mode.")
-            },
-            TrackOnionPresets = canonical.TrackOnionPresets.Select(value =>
-                new TrackOnionPresetJsonV2
-                {
-                    TargetTrackId = new(value.TargetTrackId.Value),
-                    Enabled = value.Enabled,
-                    Opacity = value.Opacity,
-                    SourceMode = ProjectPresentationCodecV2.FormatMode(value.SourceMode),
-                    SourceTrackIds = value.SourceTrackIds
-                        .Select(id => new StableIdJsonV1(id.Value))
-                        .ToArray()
-                }).ToArray(),
-            SubVoiceOnionPresets = canonical.SubVoiceOnionPresets.Select(value =>
-                new SubVoiceOnionPresetJsonV2
-                {
-                    EventInstrumentId = new(value.EventInstrumentId.Value),
-                    TargetSubVoiceId = new(value.TargetSubVoiceId.Value),
-                    Enabled = value.Enabled,
-                    Opacity = value.Opacity,
-                    SourceMode = ProjectPresentationCodecV2.FormatMode(value.SourceMode),
-                    SourceSubVoiceIds = value.SourceSubVoiceIds
-                        .Select(id => new StableIdJsonV1(id.Value))
-                        .ToArray()
-                }).ToArray()
-        };
-        return StrictJsonV1.SerializeWithFinalLf(
-            dto,
-            ProjectPresentationJsonContextV2.Default.ProjectPresentationJsonV2);
+        return ProjectPresentationCodecV4.Serialize(state, project);
     }
 
     public static ProjectPresentationStateV3 ValidateAndCanonicalize(
@@ -146,7 +120,10 @@ internal static class ProjectPresentationCodecV3
         {
             throw new InvalidDataException("The all-tracks presentation mode is invalid.");
         }
-        return new(state.AllTracksMode, tracks, subVoices);
+        ProjectPresentationWorkspaceStateV4 workspace = ProjectPresentationCodecV4.ValidateWorkspace(
+            state.WorkspaceState,
+            project);
+        return new(state.AllTracksMode, tracks, subVoices, workspace);
     }
 
     private static ProjectPresentationStateV3 FromDto(

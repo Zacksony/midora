@@ -337,15 +337,33 @@ public partial class MainWindow : Window
             if (dialog.ShowDialog(this) != true) return false;
             firstPath = dialog.FileName;
         }
+        MidoraProjectSaveResultV1? saveResult = null;
         bool saved = await RunOperationAsync(
             "Save Project",
-            () => _session.SaveProjectAsync(firstPath, overwriteAuthorized: firstPath is not null && File.Exists(firstPath)));
+            async () => saveResult = await _session.SaveProjectAsync(
+                firstPath,
+                overwriteAuthorized: firstPath is not null && File.Exists(firstPath)));
         if (saved && (firstPath ?? _session.Persistence?.CurrentProjectPath) is string path)
         {
             RecordRecentDirectory(RecentDirectoryPurpose.SaveAndSaveCopy, Path.GetDirectoryName(path));
             RecordRecentProject(path);
+            ReportOmittedPresentationSections(saveResult);
         }
         return saved;
+    }
+
+    private void ReportOmittedPresentationSections(MidoraProjectSaveResultV1? result)
+    {
+        if (result?.OmittedPresentationSections is not { Count: > 0 } omitted)
+        {
+            return;
+        }
+
+        string list = string.Join(Environment.NewLine, omitted.Select(section => $"• {section}"));
+        _session.SetStatusMessage(
+            "音乐已保存，但部分视图状态未保存。",
+            details: $"以下 presentation 分区因损坏或预算限制被完整省略：{Environment.NewLine}{list}",
+            detailsTitle: "Presentation Save");
     }
 
     private async void OnSaveCopyClick(object sender, RoutedEventArgs e)
@@ -359,11 +377,15 @@ public partial class MainWindow : Window
         if (!StopPlaybackForProjectCommand("Save Project Copy")) return;
         SaveFileDialog dialog = CreateProjectSaveDialog("Save Project Copy");
         if (dialog.ShowDialog(this) != true) return;
+        MidoraProjectSaveResultV1? saveResult = null;
         if (await RunOperationAsync(
             "Save Project Copy",
-            () => _session.SaveCopyAsync(dialog.FileName, overwriteAuthorized: File.Exists(dialog.FileName))))
+            async () => saveResult = await _session.SaveCopyAsync(
+                dialog.FileName,
+                overwriteAuthorized: File.Exists(dialog.FileName))))
         {
             RecordRecentDirectory(RecentDirectoryPurpose.SaveAndSaveCopy, Path.GetDirectoryName(dialog.FileName));
+            ReportOmittedPresentationSections(saveResult);
         }
     }
 

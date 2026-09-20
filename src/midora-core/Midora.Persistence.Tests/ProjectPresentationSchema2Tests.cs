@@ -18,8 +18,8 @@ public sealed class ProjectPresentationSchema2Tests
         using var project = CreateProject();
         var state = State(project, mode);
         byte[] bytes = ProjectPresentationCodecV3.Serialize(state, project);
-        Assert.Equal(2, JsonNode.Parse(bytes)!["schemaVersion"]!.GetValue<int>());
-        var parsed = ProjectPresentationCodecV3.Parse(bytes, project, 2);
+        Assert.Equal(3, JsonNode.Parse(bytes)!["schemaVersion"]!.GetValue<int>());
+        var parsed = ProjectPresentationCodecV3.Parse(bytes, project, 3);
         Assert.Equal(bytes, ProjectPresentationCodecV3.Serialize(parsed, project));
         AssertState(state, parsed, mode);
         using var directory = new TestDirectory();
@@ -35,12 +35,13 @@ public sealed class ProjectPresentationSchema2Tests
     }
 
     [Fact]
-    public async Task Schema1IsReadAsCustomAndSavedAsSchema2WithoutChangingMusic()
+    public async Task Schema1IsReadAsCustomAndSavedAsSchema3WithoutChangingMusic()
     {
         using var project = CreateProject();
         var state = State(project, OnionSourceMode.Next);
         JsonObject legacy = JsonNode.Parse(ProjectPresentationCodecV3.Serialize(state, project))!.AsObject();
         legacy["schemaVersion"] = 1;
+        legacy.Remove("workspaceState");
         foreach (string name in new[] { "trackOnionPresets", "subVoiceOnionPresets" })
             foreach (var preset in legacy[name]!.AsArray()) preset!.AsObject().Remove("sourceMode");
         byte[] bytes = Encoding.UTF8.GetBytes(legacy.ToJsonString());
@@ -56,7 +57,7 @@ public sealed class ProjectPresentationSchema2Tests
         string upgraded = Path.Combine(directory.Path, "new.midora");
         await packages.SaveCopyAsync(opened.Project, opened.Presentation, upgraded);
         using var archive = ZipFile.OpenRead(upgraded);
-        Assert.Equal(2, JsonNode.Parse(ReadEntry(archive, MidoraPackagePathsV1.ProjectPresentation))!["schemaVersion"]!.GetValue<int>());
+        Assert.Equal(3, JsonNode.Parse(ReadEntry(archive, MidoraPackagePathsV1.ProjectPresentation))!["schemaVersion"]!.GetValue<int>());
         Assert.Equal(project.Tracks.Select(t => t.Id), opened.Project.Tracks.Select(t => t.Id));
         Assert.Empty(opened.Diagnostics);
     }
@@ -77,7 +78,7 @@ public sealed class ProjectPresentationSchema2Tests
         var state = State(project, OnionSourceMode.Previous);
         JsonObject payload = JsonNode.Parse(ProjectPresentationCodecV3.Serialize(state, project))!.AsObject();
         JsonObject preset = payload["trackOnionPresets"]![0]!.AsObject();
-        int declared = 2;
+        int declared = 3;
         switch (corruption)
         {
             case "future-version": payload["schemaVersion"] = declared = 99; break;
@@ -86,8 +87,8 @@ public sealed class ProjectPresentationSchema2Tests
             case "missing-mode": preset.Remove("sourceMode"); break;
             case "null-mode": preset["sourceMode"] = null; break;
             case "unknown-field": preset["unsupported"] = true; break;
-            case "string-version": payload["schemaVersion"] = "2"; break;
-            case "legacy-unknown-field": payload["schemaVersion"] = declared = 1; break;
+            case "string-version": payload["schemaVersion"] = "3"; break;
+            case "legacy-unknown-field": payload["schemaVersion"] = declared = 1; payload.Remove("workspaceState"); break;
         }
         string json = payload.ToJsonString();
         if (corruption == "duplicate-mode") json = json.Replace("\"sourceMode\":\"previous\"", "\"sourceMode\":\"previous\",\"sourceMode\":\"custom\"");
@@ -100,7 +101,10 @@ public sealed class ProjectPresentationSchema2Tests
         Assert.False(opened.IsModified); Assert.True(opened.IsPresentationModified);
         Assert.Equal(ProjectPresentationStateV3.Empty, opened.Presentation);
         Assert.Equal(project.Tracks.Select(t => t.Id), opened.Project.Tracks.Select(t => t.Id));
-        Assert.Equal("MIDORA-PERSIST-PRESENTATION-RECOVERED", Assert.Single(opened.Diagnostics).Code);
+        string expectedDiagnostic = corruption is "null-mode" or "unknown-mode" or "missing-mode" or "unknown-field"
+            ? "MIDORA-PERSIST-PRESENTATION-SECTION-RECOVERED"
+            : "MIDORA-PERSIST-PRESENTATION-RECOVERED";
+        Assert.Equal(expectedDiagnostic, Assert.Single(opened.Diagnostics).Code);
     }
 
     [Fact]
@@ -108,6 +112,111 @@ public sealed class ProjectPresentationSchema2Tests
     {
         using var project = CreateProject();
         Assert.Throws<InvalidDataException>(() => ProjectPresentationCodecV3.Serialize(State(project, (OnionSourceMode)99), project));
+    }
+
+    [Fact]
+    public void Schema3RoundTripsWorkspaceAndMonitoringState()
+    {
+        using var project = CreateProject();
+        LogicalTrack track = project.Tracks[0];
+        EventInstrumentUsage usage = Assert.Single(project.EventInstrumentUsages);
+        ProjectPresentationEditorSettingsV4 settings = new(
+            new(1, 4, "1/4"), Snap: true, Grid: false, Length: 192, Velocity: 96);
+        ProjectPresentationWorkspaceStateV4 workspace = new(
+            [new(
+                new(ProjectPresentationWorkspaceOwnerKindV4.Track, track.Id),
+                settings,
+                settings with { Snap = false },
+                TickSpan: 1024,
+                KeyHeight: 5,
+                Tool: 1,
+                Shape: 0,
+                LanesVisible: true,
+                LanesHeight: 220,
+                ListVisible: false,
+                ListWidth: 300)],
+            [],
+            [],
+            new(
+                [track.Id],
+                [],
+                [usage.Id],
+                []));
+        ProjectPresentationStateV3 source = State(project, OnionSourceMode.Custom) with
+        {
+            WorkspaceState = workspace
+        };
+
+        byte[] bytes = ProjectPresentationCodecV3.Serialize(source, project);
+        ProjectPresentationStateV3 restored = ProjectPresentationCodecV3.Parse(bytes, project, 3);
+        ProjectPresentationEditorProfileV4 profile = Assert.Single(restored.WorkspaceState!.Profiles);
+        Assert.Equal(track.Id, profile.Owner.Id);
+        Assert.True(profile.Piano.Snap);
+        Assert.False(profile.Event.Snap);
+        Assert.Equal([track.Id], restored.WorkspaceState!.Monitoring.MutedTrackIds);
+        Assert.Equal([usage.Id], restored.WorkspaceState!.Monitoring.MutedGroupIds);
+        Assert.Equal(bytes, ProjectPresentationCodecV3.Serialize(restored, project));
+    }
+
+    [Fact]
+    public void DamagedWorkspaceSectionIsRecoveredWithoutDiscardingOnionState()
+    {
+        using var project = CreateProject();
+        ProjectPresentationStateV3 source = State(project, OnionSourceMode.Next) with
+        {
+            WorkspaceState = new(
+                [new(
+                    new(ProjectPresentationWorkspaceOwnerKindV4.Track, project.Tracks[0].Id),
+                    new(new(1, 4, "1/4"), true, true, 192, 100),
+                    new(new(1, 4, "1/4"), true, true, 192, 100),
+                    1024, 4, 0, 0, true, 220, false, 300)],
+                [], [], ProjectPresentationMonitoringV4.Empty)
+        };
+        JsonObject payload = JsonNode.Parse(ProjectPresentationCodecV3.Serialize(source, project))!.AsObject();
+        payload["workspaceState"]!["profiles"]![0]!["owner"]!["id"] = long.MaxValue;
+        ProjectPresentationParseResultV4 result = ProjectPresentationCodecV3.ParseWithRecovery(
+            Encoding.UTF8.GetBytes(payload.ToJsonString()), project, 3);
+        Assert.True(result.Recovered);
+        Assert.Contains("workspaceState", result.RecoveredSections);
+        Assert.Equal(source.TrackOnionPresets.Select(value => value.TargetTrackId),
+            result.State.TrackOnionPresets.Select(value => value.TargetTrackId));
+        Assert.Empty(result.State.WorkspaceState!.Profiles);
+    }
+
+    [Fact]
+    public async Task SavePreparationOmitsOnlyInvalidWorkspaceSectionAndReportsIt()
+    {
+        using var project = CreateProject();
+        ProjectPresentationStateV3 source = State(project, OnionSourceMode.Next) with
+        {
+            WorkspaceState = new(
+                [new(
+                    new(ProjectPresentationWorkspaceOwnerKindV4.Segment, project.Tracks[0].Id),
+                    new(new(1, 4, "1/4"), true, true, 192, 100),
+                    new(new(1, 4, "1/4"), true, true, 192, 100),
+                    1024, 4, 0, 0, true, 220, false, 300)],
+                [], [], ProjectPresentationMonitoringV4.Empty)
+        };
+
+        ProjectPresentationSerializationResultV4 prepared =
+            ProjectPresentationCodecV4.PrepareForSave(source, project);
+        Assert.Contains("workspaceState.profiles", prepared.OmittedSections);
+        Assert.Empty(prepared.State.WorkspaceState!.Profiles);
+        Assert.NotEmpty(prepared.State.TrackOnionPresets);
+
+        using var directory = new TestDirectory();
+        string path = Path.Combine(directory.Path, "partial-presentation.midora");
+        MidoraProjectSaveResultV1 saved = await new MidoraProjectPackageV1("1.0.0-dev-test")
+            .SaveCopyAsync(project, source, path);
+        Assert.Contains(saved.Diagnostics,
+            diagnostic => diagnostic.Code == "MIDORA-PERSIST-PRESENTATION-SECTION-OMITTED"
+                && diagnostic.Message.Contains("workspaceState.profiles", StringComparison.Ordinal));
+        Assert.Contains("workspaceState.profiles", saved.OmittedPresentationSections ?? []);
+        await using var opened = await new MidoraProjectPackageV1("1.0.0-dev-test").OpenAsync(path);
+        Assert.False(opened.IsModified);
+        Assert.Empty(opened.Diagnostics);
+        Assert.Empty(opened.Presentation.WorkspaceState!.Profiles);
+        Assert.NotEmpty(opened.Presentation.TrackOnionPresets);
     }
 
     [Fact]

@@ -486,11 +486,13 @@ trackOnionPresets[] = targetTrackId + enabled + opacity + ordered sourceTrackIds
 subVoiceOnionPresets[] = eventInstrumentId + targetSubVoiceId + enabled + opacity + ordered sourceSubVoiceIds
 ```
 
-当前 writer 使用独立 presentation schema 2：每个 Track/SubVoice preset 在 v1 字段外追加必填 `sourceMode = custom | previous | next`。原有 source ID 列表始终表示保留的手选来源；previous/next 只改变显示模式，不改写列表。前后邻居按当前正式顺序解析，不循环；显式保存后重开恢复相同模式。v1 reader/DTO/schema 保留并显式转换为 custom，不将 sourceMode 反向写入 v1。
+当前 writer 使用独立 presentation schema 3：保留 schema 2 的 Onion/All-Tracks 字段，并增加严格的 `workspaceState` 分区。该分区只包含 B1 已批准的 Track profile、Segment/SubVoice 局部视图与 Lane 记忆，以及 Track/Usage/Root 的 Mute/Solo 展示状态；Tab 顺序、活动页、子页和其他 B3 导航状态不写入。schema 2 reader 仍可读并以空 workspace 作为默认；schema 1 reader/DTO/schema 保留并显式转换为 custom，不将 sourceMode 反向写入旧 schema。
+
+workspace 的稳定 ID 只作为 owner/reference 保存，绝不把 ViewModel、WPF 控件、选择、Undo、任务、位图、编译结果或缓存写入项目。当前 presentation JSON 总预算为 64 MiB，profiles/views/lanes 各最多 131,072 条，单 owner 的 Lane target 总数最多 65,536。writer 在预算内确定排序并输出，超出时必须保留音乐及仍可表达的 presentation section，并以 `MIDORA-PERSIST-PRESENTATION-SECTION-OMITTED` 明确记录被省略的完整 section，不得静默截断。
 
 opacity 必须是有限 `0..1`。target 必须存在且唯一，source 必须存在、同类、唯一且不得等于 target。写出按 target stable ID 确定排序；source 顺序保存为当次正式 Arrangement / SubVoice 顺序过滤后的叠加顺序，而非另建用户可重排的顺序。运行时跟随正式轨道 / SubVoice 顺序，首项最底层。保存快照过滤已经删除的 target/source，不得为 presentation 引用复活 Project 对象。
 
-该 entry 缺失、hash 不符、strict JSON/schema/引用验证失败、未知 presentation schema/模式或 manifest 与 payload schemaVersion 不一致时，只隔离 presentation、恢复 `allTracksMode=raw` 且 preset arrays 为空，并报告 `MIDORA-PERSIST-PRESENTATION-RECOVERED` Warning。音乐 Project source 仍可打开，`IsModified` 不因此成立；presentation session 单独保持 recovery-dirty，下一次普通 Save 可重写默认有效 entry。Format 1/2 没有该 entry，detached migration 使用同一默认 presentation。
+该 entry 缺失、hash 不符、strict JSON/schema/根级引用验证失败、未知 presentation schema/模式或 manifest 与 payload schemaVersion 不一致时，只隔离 presentation、恢复 `allTracksMode=raw` 且 preset arrays 为空，并报告 `MIDORA-PERSIST-PRESENTATION-RECOVERED` Warning。schema 3 内部的 workspace section 读取和项目 owner 验证按 section 隔离：损坏 section 回退为空并报告 `MIDORA-PERSIST-PRESENTATION-SECTION-RECOVERED`，有效的 Onion/All-Tracks 或其他 workspace section 必须保留。恢复结果设置独立 presentation recovery-dirty，但打开不自动修复；只有用户显式 Save 才写回有效当前 presentation。音乐 Project source 仍可打开，`IsModified` 不因此成立。Mute/Solo 只属于 presentation dirty，不进入音乐 Modified、Undo、canonical、编译或导出。旧软件可读取音乐并丢弃 schema 3 的新增 workspace 字段；若旧软件随后保存，字段丢失是明确兼容边界。Format 1/2 没有该 entry，detached migration 使用同一默认 presentation。
 ## 16.8 conductor-track.json
 ### 16.8.1 内容
 `conductor-track.json` 保存完整 Conductor Track 内容，包括：
@@ -1955,7 +1957,7 @@ minimumReadableVersion = 3
 manifestSchemaVersion = 3
 ```
 
-Format 3 新增一个 `project-presentation-json` file kind，且必须在 canonical path `settings/project-presentation.json` 恰好出现一次。其 manifest schemaVersion 是正整数，由独立 presentation reader 分派（当前读 1/2、写 2）；未知版本交由 presentation 恢复边界处理，不阻止音乐加载。除该 entry 与 manifest v3 外，Format 3 逐项复用 Format 2 的 Project source JSON schemas、Event Instrument protobuf v2、其他 protobuf v1 与 Pure MIDI content-pack wire；复用不允许修改那些既有契约。
+Format 3 新增一个 `project-presentation-json` file kind，且必须在 canonical path `settings/project-presentation.json` 恰好出现一次。其 manifest schemaVersion 是正整数，由独立 presentation reader 分派（当前读 1/2/3、写 3）；未知版本交由 presentation 恢复边界处理，不阻止音乐加载。除该 entry 与 manifest v3 外，Format 3 逐项复用 Format 2 的 Project source JSON schemas、Event Instrument protobuf v2、其他 protobuf v1 与 Pure MIDI content-pack wire；复用不允许修改那些既有契约。当前外层 writer 仍为 Project Format 4，schema 3 只是该独立 presentation entry 的版本升级。
 
 ### 16.33.2 Reader、writer 与损坏边界
 
@@ -1977,8 +1979,11 @@ Format 3 必须持续覆盖：
 manifest-v3 与 project-presentation-v1/v2 schema set hash
 空/非空 presentation deterministic bytes 与 package golden
 strict unknown/duplicate/type/range/reference rejection
-presentation v1 -> custom / v2 mode + custom sources, manifest/payload version agreement
+presentation v1 -> custom / v2 mode + custom sources / v3 workspace, manifest/payload version agreement
 presentation missing/hash/corruption isolation without Project Modified
+schema 3 分区损坏只回退对应 section，显式 Save 才修复 recovery-dirty entry
+workspace 条目/字节预算超限时保留音乐和可表达 section，并报告省略 section
+Mute/Solo 只影响 presentation baseline，不改变 canonical、MIDI/WAV 或 Project Modified
 Format 1/2 detached migration + default presentation
 Format 1/2 -> confirmed in-place Format 3 upgrade + exact-byte permanent backup
 source identity mutation, backup collision/reuse, staging/self-validation/backup/publish fault injection
@@ -2023,7 +2028,7 @@ manifest 缺失/损坏、裸 GUID、未知文件、活动锁、越界或 reparse
 
 ## 16.35 Format 4：Instrument Change 编辑关联
 
-依据 2026-09-14 已确认 R27。当前 writer 固定 `fileFormatVersion=minimumReadableVersion=manifestSchemaVersion=4`；旧 1/2/3 独立 reader、schema、descriptor、golden 均冻结并持续可读。新 writer 不更改其音乐字段布局，复用 EI protobuf v2、其他 source v1、Pure MIDI content pack 和 presentation v2。
+依据 2026-09-14 已确认 R27。当前 writer 固定 `fileFormatVersion=minimumReadableVersion=manifestSchemaVersion=4`；旧 1/2/3 独立 reader、schema、descriptor、golden 均冻结并持续可读。新 writer 不更改其音乐字段布局，复用 EI protobuf v2、其他 source v1、Pure MIDI content pack 和 presentation schema 3（读 schema 1/2）。
 
 新增必需 `settings/instrument-changes.pb`，manifest kind 为 `instrument-changes-pb`、schemaVersion=1。它是正式 source，不走 presentation 损坏回退：缺失、hash 不符、未知/重复字段、坏身份/owner/成员/target/Tick/重复占用必须拒绝该新 source 的加载，不默默降成无包装。文件使用 protobuf Edition 2024 显式 presence；根字段为版本 `1` 与 repeated 关联 `2`，关联字段依次为包装 ID `1`、owner ID `2`、directMidi `3`、Bank成员 `4`、可选Direct LSB成员 `5`、Program成员 `6`；其余字段号保留。
 

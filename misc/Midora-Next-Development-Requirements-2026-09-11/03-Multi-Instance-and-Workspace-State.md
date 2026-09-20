@@ -1,10 +1,10 @@
 # 多实例、跨项目剪贴板与工作区恢复
 
-覆盖R01、R06、R07（均P2）以及文件打开R04（P3）。这两个大型专题应分别分阶段，不与几处UI小修合并成不可验收的大提交。本文区分 Q1/Q2 已决定的产品方向和仍待验证的实现设计；产品实施及 SRS 同步尚未开始。
+覆盖R01、R06、R07（均P2）以及文件打开R04（P3）。这两个大型专题应分别分阶段，不与几处UI小修合并成不可验收的大提交。本文区分 Q1/Q2 已决定的产品方向和仍待验证的实现设计；B1/B2 已实施，B3 与多实例仍未开始。
 
 共同入口：[需求总表](00-Overview-and-Delivery-Plan.md)、[决策与问答主文档](04-Decisions-and-Preparation.md)。源码行号基于 `0bb9670`。
 
-2026-09-18 补充入口：[主题05](execution/05-Workspace-State-and-Track-Navigation.md) 的 B1 已实施，待 UAT-B1-01～06；[实施证据](../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 记录资源预算与验证。以下旧基线源码线索保留历史上下文；B1 只交付会话内归属/记忆，B2 实际文件 schema/保存、B3 完整懒恢复均未实施。
+2026-09-20 补充入口：[主题05](execution/05-Workspace-State-and-Track-Navigation.md) 的 B1 已实施并通过用户验收，提交 `a6ac12a` 已推送；[实施证据](../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 记录资源预算与验证。[B2 执行文档](execution/06-Workspace-State-Persistence-B2.md) 记录 schema 3 codec、Save/Copy、损坏隔离、Mute/Solo、保存省略诊断及 UAT-B2-01～06 全部通过。以下旧基线源码线索保留历史上下文；B1/B2 已交付会话与批准白名单持久化，B3 完整懒恢复仍未实施。
 
 2026-09-14 Q1/Q2 答复归并：用户已经逐项填写 Q1/Q2，并明确“同意”表示同意对应推荐；原回答保留在 `04`，本文不改写、不另建第二套回答。Q2 的用户修正优先于此前推荐，当前工具按 D-UI01.d 的最终共享 Draw 方案解释。相关产品边界已定，不再以旧 Q2 待答项阻塞实施规划；方向获批不等于协议/schema 已冻结、SRS 已更新、代码已实施或测试已通过。原答与前轮归并已提交推送至 `7227090`；本轮仅归并文档，不提交／推送，不运行发布。
 
@@ -145,7 +145,7 @@ R06明确替代“普通UI和Mute/Solo不保存”的旧规定，但保留以下
 
 这不是允许序列化整个ViewModel。字段应有类型、合法范围、默认值、owner身份和未知/损坏恢复策略；不保存内部ID到可见UI，但序列化引用仍使用Stable ID。
 
-B专题必须通过资源实验冻结可执行的数值预算：presentation总字节、Tab/profile/lane条目数、单文本长度、恢复在途任务数和后台缓存上限。细化后的分工为：B1冻结会话resident/条目/通知预算并提供快照成本测量，B2在真实codec上冻结文件字节/读取预算，B3在真实激活上冻结恢复并发预算；不得把后续尚不存在的路径写成B1已实测。不能仅以“轻量/几十个Tab”替代输入上限。超过恢复预算时隔离对应presentation区并说明，不影响音乐加载；保存端不得静默截断用户视图。D-STATE02.c 已批准明确提示后允许保存音乐及可用视图部分，或取消；对应处理应落实到schema/工作流。预算数值由实验固定，不要求用户猜字节数。
+B专题必须通过资源实验冻结可执行的数值预算：presentation总字节、Tab/profile/lane条目数、单文本长度、恢复在途任务数和后台缓存上限。B1 已冻结会话 resident/条目/通知预算；B2 writer 已冻结 64 MiB presentation JSON 上限、131,072 个 section 条目和 65,536 个单 owner Lane target；B3 仍需在真实激活时冻结恢复并发预算。超过恢复预算时隔离对应 presentation 区并说明，不影响音乐加载；保存端不静默截断用户视图，而是完整省略 section 并在保存诊断列出。D-STATE02.c 的“保存音乐及可用视图部分/取消”已落到 B2 Save preparation。
 
 ### 3.3 保存与恢复合同
 
@@ -158,7 +158,7 @@ B专题必须通过资源实验冻结可执行的数值预算：presentation总�
 7. presentation损坏/未知版本继续不阻碍音乐加载；D-STATE02.b 已批准尽可能独立section回退，而非任意一个字段使全部布局丢失，同时维持严格JSON/版本检查和可理解Warning。
 8. 新presentation schema不原地修改v1/v2，保留reader/golden。D-STATE02.d 已接受旧软件重写后可能丢失未知新视图字段，但不能损坏音乐；不承诺旧软件也完整恢复新字段。
 
-只扩presentation通常可继续用独立schema分派；原调查时外层为Format3，A2a后当前writer已是Format4，B2必须以实施时正式版本为准，不倒退writer。若音乐source同时增加不可表达内容，另评估Project Format。保留旧Format1/2/3 reader及detached migration、确认后备份再原路径保存规则。
+只扩presentation继续使用独立 schema 分派；当前外层 writer 为 Format 4，B2 已实施 presentation schema 3，不倒退 writer。若音乐 source 同时增加不可表达内容，另评估 Project Format。保留旧 Format 1/2/3 reader 及 detached migration、确认后备份再原路径保存规则。
 
 ## 4. R07：Track通用profile与Segment独立状态
 

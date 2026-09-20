@@ -15,7 +15,7 @@
 
 - [ ] `PersistenceContractV1.FileFormatVersion == 1`，且没有原地改变 Format 1 schema/field semantics。
 - [ ] 当前 writer 使用 `PersistenceContractV3.FileFormatVersion == 3` / manifest schema 3；Event Instrument 继续复用 v2 表示，其他组件按各自冻结版本读取。
-- [ ] 独立 `settings/project-presentation.json` 使用 schema 2；schema 1 显式读取为 custom 来源模式，音乐内容不依赖视图配置。
+- [ ] 独立 `settings/project-presentation.json` writer 使用 schema 3；继续读取 schema 1/2，schema 1 显式读取为 custom 来源模式，音乐内容不依赖视图配置；B2 workspace 分区预算/恢复诊断已验证。
 - [ ] JSON schema set SHA-256、protobuf descriptor hash 与代表性 golden wire bytes 全部通过。
 - [ ] 1.0.0-dev 期间保存的真实完整作品能够由候选版本打开、编译、编辑、保存副本并再次打开。
 - [ ] Save Copy 不改变来源或清除 migration-dirty；Format 1/2 迁移会话普通 Save 经确认、冻结副本路径、逐字节一致的可见永久旧版副本和临时包重开校验后，才可原路径原子升级保存。

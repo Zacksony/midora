@@ -3,7 +3,7 @@
 文档修订日期：2026-08-08
 性质：需求理解、现状审阅和实施建议；不是 SRS 的替代品。
 
-> 2026-09-18 B1 实施：在 A4b `caf8cec` 基线上完成 [工作区状态归属与同轨道设置共享](Midora-Next-Development-Requirements-2026-09-11/execution/05-Workspace-State-and-Track-Navigation.md) 的10个子项，待6项人工检查整体验收；[实施证据与样例入口](Midora-B1-Workspace-State-Implementation-2026-09-18.md) 单独归档。B2/B3 保存/恢复未实施，现行文件格式不变。本轮不提交、推送或发布；以下验收段保留其各自历史授权。
+> 2026-09-20 B2 实施并验收：在 B1 `a6ac12a` 基线上完成 [工作区状态持久化与保存读取契约](Midora-Next-Development-Requirements-2026-09-11/execution/06-Workspace-State-Persistence-B2.md)，UAT-B2-01～06 已全部通过；B2 schema 3、分区 Save/Restore、坏 section 隔离、保存省略诊断和运行期 Mute/Solo 已归档并推送。B3 保存/恢复未实施，外层 Project Format 4 不变；本轮不本地发布，以下验收段保留其各自历史原貌。
 
 > 2026-09-18 最新批次：A1～A4b 及已记录返修获用户验收。A4b 正式边界与实测见 [报告](Midora-A4b-Template-Timeline-Feedback-2026-09-17.md)和[当前执行索引](Midora-Next-Development-Requirements-2026-09-11/execution/00-Execution-Plan.md)。追加 Loop/Pre-Roll 手柄、右键编辑、编译旋转/黄色提示、Template 蓝色标签和四种手柄圆角柔化也均已获明确验收，见 [追加记录](Midora-A4b-Marker-Editing-Followup-2026-09-17.md)。本轮按用户要求归档、提交和推送，不本地发布；逻辑参数类型约束强化仍延期，B/C 未启动。后文旧进度保持历史原貌。
 

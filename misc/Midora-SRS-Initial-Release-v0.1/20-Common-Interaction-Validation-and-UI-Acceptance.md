@@ -46,7 +46,7 @@ Snap Enabled
 ```
 Arrangement 使用独立设置。Logical/MIDI Segment 的通用编辑偏好按正式 Track ID 共享，不按 Usage/Root 或全 Project 共享；每个 SubVoice 按 Definition ID + SubVoice ID 独立。只共享设置值，不共享 TPQN、有效拍号、参考时间等解析上下文。Piano 与底部事件区的 Snap enabled/subdivision 各自独立。现行默认 Grid 为 Bar-only 且显示，Segment/SubVoice 的 Operation 为 `1/16`、Snap enabled，默认 Note 长度为 TPQN、Velocity 为 100。Arrangement 的 Operation 初值继续为 `1/8`。
 
-B1 会话记忆还包括 Track 的横向缩放、纵向 key 高度、主 ToolMode、独立 ValueTraceShape、Lanes 显隐/最后有效高度及 List 显隐/宽度；每个 Segment 独立记忆滚动位置、活动 Lane、Lane 顺序/显隐/纵轴和 List 行位置。SubVoice 独立拥有上述全部适用状态。关闭 Tab 释放 VM/资源而保留纯描述；删除 owner 清除其自身描述，Undo 不自动重开或恢复已删除描述。普通切页/重开保留位置，显式导航按 §18.2.2 优先。纯状态不进入音乐 Modified/Undo/编译或 canonical，不触发全源重建。B1 不新增文件字段；关闭或替换 Project 清除新增记忆，后续 B2/B3 的跨重启扩展另行实施。
+B1 会话记忆还包括 Track 的横向缩放、纵向 key 高度、主 ToolMode、独立 ValueTraceShape、Lanes 显隐/最后有效高度及 List 显隐/宽度；每个 Segment 独立记忆滚动位置、活动 Lane、Lane 顺序/显隐/纵轴和 List 行位置。SubVoice 独立拥有上述全部适用状态。关闭 Tab 释放 VM/资源而保留纯描述；删除 owner 清除其自身描述，Undo 不自动重开或恢复已删除描述。普通切页/重开保留位置，显式导航按 §18.2.2 优先。纯状态不进入音乐 Modified/Undo/编译或 canonical，不触发全源重建。B2 schema 3 将这些已批准描述及 Track/Usage/Root Mute/Solo 写入 `settings/project-presentation.json`；Tab 顺序、活动页、子页仍留到 B3。打开不自动修复损坏 presentation，显式 Save 才写回；旧 schema 1/2 读入空 workspace。
 
 分数相对于全音符：`1/1 = 4 × TPQ`、`1/2 = 2 × TPQ`、`1/4 = TPQ`。实际 tick 步长统一为：
 ```text

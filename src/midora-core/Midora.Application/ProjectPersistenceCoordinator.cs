@@ -227,7 +227,12 @@ public sealed class ProjectPersistenceCoordinator
                 _fileInformation = result.FileInformation;
             }
             _document.MarkSaveSucceeded();
-            _presentation.MarkSaveSucceeded(presentation);
+            // Preserve presentation dirty state when the package intentionally
+            // omitted a damaged or over-budget section.
+            if (result.OmittedPresentationSections is not { Count: > 0 })
+            {
+                _presentation.MarkSaveSucceeded(presentation);
+            }
             return result;
         }
         finally
@@ -406,7 +411,10 @@ public sealed class ProjectPersistenceCoordinator
                 _legacySourceIdentity = null;
             }
             _document.MarkSaveSucceeded();
-            _presentation.MarkSaveSucceeded(presentation);
+            if (result.OmittedPresentationSections is not { Count: > 0 })
+            {
+                _presentation.MarkSaveSucceeded(presentation);
+            }
             return result;
         }
         finally

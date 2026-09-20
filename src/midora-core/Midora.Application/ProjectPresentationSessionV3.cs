@@ -95,6 +95,12 @@ public sealed class ProjectPresentationSessionV3
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    public void ReplaceWorkspace(ProjectPresentationWorkspaceStateV4 workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        Replace(Current with { WorkspaceState = workspace });
+    }
+
     public ProjectPresentationSaveSnapshotV3 CreateSaveSnapshot(MidoraProject project)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -161,7 +167,10 @@ public sealed class ProjectPresentationSessionV3
                     .ToArray()
             })
             .ToArray();
-        return new(state.AllTracksMode, trackPresets, subVoicePresets);
+        // Workspace state is a presentation-only snapshot. The desktop session
+        // prunes its owner directories before capture; preserve it here so a
+        // Save/Save Copy cannot silently discard valid view state.
+        return new(state.AllTracksMode, trackPresets, subVoicePresets, state.WorkspaceState);
     }
 }
 

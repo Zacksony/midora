@@ -23,7 +23,7 @@ public sealed class PersistenceContractV2Tests
         Assert.Equal(1, PersistenceContractV2.ReusedComponentSchemaVersion);
         Assert.Equal(3, PersistenceContractV3.FileFormatVersion);
         Assert.Equal(3, PersistenceContractV3.ManifestSchemaVersion);
-        Assert.Equal(2, PersistenceContractV3.ProjectPresentationSchemaVersion);
+        Assert.Equal(3, PersistenceContractV3.ProjectPresentationSchemaVersion);
     }
 
     [Fact]
@@ -137,8 +137,8 @@ public sealed class PersistenceContractV2Tests
         byte[] packageBytes = await File.ReadAllBytesAsync(path);
         Assert.Equal(packageBytes, await File.ReadAllBytesAsync(equivalentPath));
         string packageHash = Convert.ToHexStringLower(SHA256.HashData(packageBytes));
-        Assert.True(packageHash == "629cda088ea5c3ee8113e5d26a7b3ff4801482708ea3aa87a9088f6851b8e8d4",
-            $"Actual Format 4 / presentation schema 2 package hash: {packageHash}");
+        Assert.True(packageHash == "1c7957a6d00f9c33783f870d3bfc0dad80962cb7102e029471558d9f78684839",
+            $"Actual Format 4 / presentation schema 3 package hash: {packageHash}");
 
         using (ZipArchive archive = ZipFile.OpenRead(path))
         {
@@ -152,7 +152,7 @@ public sealed class PersistenceContractV2Tests
                 manifest.Files,
                 item => item.Kind == "project-presentation-json");
             Assert.Equal(MidoraPackagePathsV1.ProjectPresentation, presentationEntry.Path);
-            Assert.Equal(2, presentationEntry.SchemaVersion);
+            Assert.Equal(3, presentationEntry.SchemaVersion);
             ManifestFileEntryJsonV1 instrumentEntry = Assert.Single(
                 manifest.Files,
                 item => item.Kind == "event-instrument-pb");
@@ -188,7 +188,7 @@ public sealed class PersistenceContractV2Tests
                 output.Write(entry.FullName == "manifest.json" ? ManifestCodecV3.Serialize(v3) : ReadEntry(current, entry.FullName));
             }
         }
-        Assert.Equal("44eef7db01bab5d1ad57a94916a2ff362b4c8486ec56726606adaa8d72405e99",
+        Assert.Equal("955f1ed500b65319ce9ff375cd09423a9bac96d30d31e99a32e3850227150445",
             Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(legacyPath))));
         await using var legacyOpened = await packages.OpenAsync(legacyPath);
         Assert.Equal(3, legacyOpened.SourceFileFormatVersion); Assert.True(legacyOpened.RequiresFormatUpgrade);
@@ -395,6 +395,7 @@ public sealed class PersistenceContractV2Tests
             "metadata-v1.schema.json",
             "project-presentation-v1.schema.json",
             "project-presentation-v2.schema.json",
+            "project-presentation-v3.schema.json",
             "project-settings-v1.schema.json",
             "project-v1.schema.json"
         ];

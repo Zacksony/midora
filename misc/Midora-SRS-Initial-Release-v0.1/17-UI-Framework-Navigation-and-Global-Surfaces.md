@@ -160,7 +160,7 @@ Application Preferences 必须分为 `Audio | SoundFonts | Appearance` 三个 Ta
 Appearance 同时提供全局 `Show event lane lines`，默认启用，控制 MIDI Segment、Logical Segment 和 SubVoice 除 Vel.／Inst. 外全部 Lane 的辅助线（§18.2.10）。不再在各 Lane 工具栏提供 Lines 开关。设置成功保存后立即应用于已打开及以后打开的 Lane；取消、关闭或设置保存失败不发布 draft 值。旧程序设置没有此字段时使用启用默认值。该显示偏好不标记 Project Modified、不进入 Undo／canonical／音频配置，不因此重建 Worker。
 ### 17.2.3 Project Presentation 与 Project Session UI State
 
-Format 3 的 Project presentation 只保存第 3.11 与第 16.33 节明确列出的 Onion/All-Tracks 容器。它使用独立 revision/save baseline，不标记 Project Modified、不进入 Undo/Redo、编译或 canonical；损坏时恢复默认 presentation 并独立警告。
+Format 3/4 的 Project presentation 使用独立 revision/save baseline。当前 schema 3 保存第 3.11 与第 16.33 节明确列出的 Onion/All-Tracks、B1 profile、Segment/SubVoice 局部视图/Lane 记忆和 Track/Usage/Root Mute/Solo；不标记音乐 Project Modified、不进入 Undo/Redo、编译或 canonical。损坏 section 只回退对应展示状态并独立警告；打开不自动修复，显式 Save 才写回。
 
 以下普通状态仍只存在于当前 Project 会话：
 ```text
@@ -183,7 +183,7 @@ Track/SubVoice piano-roll default Note length and velocity
 ```
 关闭或替换 Project 后清除，不跨应用重启恢复。
 
-B1 的轻量会话记忆按 §20.1.4 区分共享 profile 与 Segment/SubVoice 局部描述，普通关闭 Tab 不清除描述，但必须释放 VM、页、位图及任务。无内容持有的纯值冻结边界不等于已经写入项目文件；现行 presentation schema 2 的 Onion/All Tracks 能力保持不变。Selection、Time Range、手势、浮动选区工具位置、焦点历史、Undo 和草稿不进入这些描述。
+B1 的轻量会话记忆按 §20.1.4 区分共享 profile 与 Segment/SubVoice 局部描述，普通关闭 Tab 不清除描述，但必须释放 VM、页、位图及任务。schema 3 将这些已批准的纯值描述写入独立 presentation；B3 的 Tab 顺序、活动页、子页仍不写入。Selection、Time Range、手势、浮动选区工具位置、焦点历史、Undo 和草稿不进入这些描述。Mute/Solo 可随 presentation 保存，但只形成 presentation dirty，不改变音乐星号、Undo 或编译。
 
 状态栏 transient message 必须提供直接“已读”操作；该操作只清除当前 transient message，不清除 Diagnostics、不修改 Project，也不创建 Undo。
 ### 17.2.4 Transient Interaction State

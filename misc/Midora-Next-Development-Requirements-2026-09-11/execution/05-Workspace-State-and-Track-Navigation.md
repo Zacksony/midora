@@ -1,6 +1,6 @@
 # 工作区恢复、同轨道共享与 Tracks 导航：B1 详细计划及 B2/B3 边界
 
-初稿：2026-09-14；B1 细化/实施：2026-09-18。实施前源码基线：`caf8cec81e8d5b019df870fa871a46e464522d01`。状态：**B1 已实施，自动验证及预算见实施记录，待 UAT-B1-01～06 人工验收；B2/B3 与 TRACK 未实施** 。用户随后明确授权“实施 B1”；本轮不提交、推送、发布或使用 computer-use。详见 [B1 实施记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
+初稿：2026-09-14；B1/B2 实施：2026-09-18；B2 人工验收归档：2026-09-20。实施前源码基线：`caf8cec81e8d5b019df870fa871a46e464522d01`。状态：**B1、B2 已实施并通过用户验收；B3 与 TRACK 未实施** 。B2 的独立任务、UAT-B2-01～06 及证据见 [06-B2 执行文档](06-Workspace-State-Persistence-B2.md)。详见 [B1 实施记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
 
 入口：[执行总计划](00-Execution-Plan.md)。需求／源码依据：[03](../03-Multi-Instance-and-Workspace-State.md)、[01 的 R30](../01-Interaction-and-Display.md)；唯一决定与原答：[04](../04-Decisions-and-Preparation.md) D-STATE01～03、D-TRACK01，包含 Q2 D-STATE03.d/e。本文件不重复问答，不改变已经批准的白名单。
 
@@ -17,13 +17,13 @@
 
 B1 的 R28/A2b 与 A3 前置已经实施并获人工验收，A4b 及追加修订也已验收并提交；仍保留各轮报告中的未测平台和性能断言波动，不能把人工验收写成所有工程门通过。不要求 R30 已实施。主 ToolMode 与事件绘线形态继承 A3 最终合同，不另造工具系统。B 与多实例 C 的保存冲突接口需共同审查，但无须让两专题整体互等。
 
-B1 已按 Q1/Q2 修订会话内归属、默认、删除目标与 dormant 来源边界的 SRS/ADR。现行 SRS §16.28、§16.33 及第21章、INV-011/060/091/112 的文件白名单保持不变；B2 才处理持久化扩展，不提前固定新 schema 或 Project Format 版本号。
+B1 已按 Q1/Q2 修订会话内归属、默认、删除目标与 dormant 来源边界的 SRS/ADR。现行 SRS §16.28、§16.33 及第21章、INV-011/060/091/112 的文件白名单保持不变；B2 已以独立 schema 3 处理持久化扩展，外层 Project Format 4 不变，B3 仍不改变音乐 source。
 
 ## 2. 阶段交付及原任务追踪
 
 保留原 T-ID。下面三阶段仍各按一次完整人工验收组织，B1 的内部拆分不增加验收轮次：
 
-- **B1：会话内的正确归属与记忆。** 实施 Track 通用 profile、Segment/SubVoice 轻量局部状态、关闭再开及 owner 生命周期。只为后续保存建立可冻结的纯数据边界；不把新增字段写入 `.midora`，不自动重开项目 Tabs。已有 Onion/All-Tracks schema 2 保存能力保持。
+- **B1：会话内的正确归属与记忆。** 实施 Track 通用 profile、Segment/SubVoice 轻量局部状态、关闭再开及 owner 生命周期。只为后续保存建立可冻结的纯数据边界；不自动重开项目 Tabs。已有 Onion/All-Tracks 能力在 B2 schema 3 中保持并继续由该 schema 持久化。
 - **B2：保存和读取契约。** 新 presentation schema、冻结快照、显式 Save/Save Copy、分区故障隔离、静止指针和两级监听初值。读取后的新编辑状态先进入 B1 registry，手动打开对应编辑器可消费；自动恢复所有 Tabs/子页属于 B3。
 - **B3：完整工作区恢复。** 接通剩余白名单的实际捕获/应用、Tabs 顺序/活动项、各 Workspace 子页与布局、隐藏页懒恢复和长会话验证。不能用 B2 已有某个 DTO 字段就宣称界面已能恢复；未接通的字段必须列明，不能写假默认值冒充捕获。
 
@@ -34,9 +34,9 @@ B1→B2→B3 是本专题依赖。C 多实例、TRACK 侧栏不作为 B1 前置�
 | T-STATE-01 | D-STATE01、D-STATE03；R28身份合同 | 按 §4/5 冻结字段、纯数据接口、通知及预算；正式实施前同步对应规格/ADR | 状态归属和默认值测试、资源预算实测与来源记录 | B1，展开为 01a～01c |
 | T-STATE-02 | T-STATE-01；A3工具合同 | Track profile 同步、Segment/SubVoice 局部状态、现有控件接入和关闭再开 | 三宿主真实 WPF、延迟 target 发现、焦点与首次布局回归 | B1，展开为 02a～02c |
 | T-STATE-03 | T-STATE-02；D-STATE03.c/d | Duplicate／转轨／删除／Undo、dormant 来源 ID、项目替换及完整回归 | 删除后无额外 source lease/VM 引用；一次人工验收包 | B1，展开为 03a～03d |
-| T-STATE-04 | T-STATE-01；D-STATE02 | 独立版本化presentation及分区验证；冻结可执行的条目／字节／恢复资源预算 | 旧音乐格式读取、新旧presentation golden、损坏/未知字段/超限隔离；预算实测，不凭经验猜上限 | B2 |
-| T-STATE-05 | T-STATE-04；D-STATE02.a/c | Save/Save Copy冻结轻量描述；纯视图变化可显式保存、不加星、不产生关闭确认；超限按已定选择处理 | 保存期间新视图变化、取消、写入失败、旧格式升级副本和源identity竞争；无部分覆盖 | B2 |
-| T-STATE-06 | T-STATE-05；D-STATE01.b/c | 恢复静止指针、Track/group监听初值；永远Stopped，不自动播放 | 首次播放过滤正确、两级Mute/Solo独立；canonical与SMF/WAV不受presentation污染 | B2 |
+| T-STATE-04 | T-STATE-01；D-STATE02 | 独立版本化 presentation codec、section 校验与 B2 文件/读取预算；子项 04a～04e 见 [06 §4.1](06-Workspace-State-Persistence-B2.md#41-t-state-04codec-schema-与预算) | 旧音乐格式读取、新旧 presentation golden、损坏/未知字段/超限隔离；预算实测，不凭经验猜上限 | B2a Codec/预算 |
+| T-STATE-05 | T-STATE-04；D-STATE02.a/c | Save/Save Copy 冻结轻量描述、并发 revision、staging/atomic publish 与迁移保护；子项 05a～05f 见 [06 §4.2](06-Workspace-State-Persistence-B2.md#42-t-state-05save-save-copy-与原子发布) | 保存期间新视图变化、取消、写入失败、旧格式升级副本和 source identity 竞争；无部分覆盖 | B2b Save/Copy |
+| T-STATE-06 | T-STATE-05；D-STATE01.b/c | section 隔离读取、B1 registry 导入、静止指针边界、Track/group Mute/Solo 初值；子项 06a～06e 见 [06 §4.3](06-Workspace-State-Persistence-B2.md#43-t-state-06读取隔离恢复与监听初值) | 首次播放过滤正确、两级 Mute/Solo 独立；canonical 与 SMF/WAV 不受 presentation 污染 | B2c Read/Monitor |
 | T-STATE-07 | T-STATE-02～06 | Tabs顺序、活动子页／owner、局部viewport、面板状态懒恢复；显式Arrangement打开保留定位编辑指针优先级 | 隐藏Tab不提前扫描／编译；活动Compiled正常后台准备；关闭/切换不串状态 | B3 |
 | T-STATE-08 | T-STATE-07 | 长会话、批量打开关闭及音乐编辑后的状态回归 | 订阅数、managed/native/WPF及任务持有释放证据；同音乐Full/Incremental与成品等价 | B3 |
 | T-TRACK-01 | R30、D-TRACK01.a～d | 两类Segment左侧Tracks默认隐藏，复用Arrangement头及命令，不创建第二套轨道顺序 | 当前owner与操作选中态可区分；各命令路由及音符选择不被误清 | TRACK |
@@ -59,7 +59,7 @@ B1→B2→B3 是本专题依赖。C 多实例、TRACK 侧栏不作为 B1 前置�
 | `Midora.Application/ProjectDocumentSession.cs`：`ContentChanged`、`PresentationObjectsCloned` | 已有音乐发布/change set 和复制 ID map 入口 | 用正式 owner/ID 变化关联生命周期，不能按名称或轨道索引猜迁移；重复通知和 Undo/Redo 不重写仍存活对象的新视图状态 |
 | `Midora.Desktop/AllTracksWorkspaceViewModel.cs` | 已有首布局适配标志、独立 viewport、异步编译展开生命周期 | B1 不重做 All Tracks；B3 恢复已有 viewport 时必须优先于首次 Fit，仍只构建活动视图 |
 
-源码目录：Desktop 位于 `src/midora-desktop/`，Application/Persistence 位于 `src/midora-core/`。现有 `V3` 类名不等于当前 Project writer 版本：当前音乐 writer 是 Format 4、presentation writer 是 schema 2。
+源码目录：Desktop 位于 `src/midora-desktop/`，Application/Persistence 位于 `src/midora-core/`。现有 `V3` 类名不等于当前 Project writer 版本：当前音乐 writer 是 Format 4、presentation writer 是 schema 3（reader 保留 schema 1/2）。
 
 ### 3.1 正式规格衔接清单
 
@@ -70,7 +70,7 @@ B1→B2→B3 是本专题依赖。C 多实例、TRACK 侧栏不作为 B1 前置�
 | SRS §20.1.4、§17.2.3 | 旧文描述全会话共享 Segment/SubVoice settings；新决定为 Track profile 与各 SubVoice 独立 | B1；同时消除旧 Grid 默认描述与当前 Bar-only 界面的文码差异，不恢复 Grid 值选择 |
 | §20.1.6、§18.2、§18.4、INV-098/120 | 新 Workspace 默认、主工具与绘线形态、Lane 状态现在需与会话轻量记忆衔接 | B1；继承 A3 主 ToolMode，不生成两套主工具 |
 | §18.11.3、INV-116；[presentation ADR](../../Midora-Project-Presentation-and-Format-3-Architecture-Decisions.md) | 需要明确“删除目标自身状态”与“存活目标保留 dormant 来源 ID”的边界 | B1，保存端延续 B2 |
-| §3.11、§16.7.5/16.28/16.33、§17.2、§20.15、第21章；INV-011/060/091/112 | 当前文件白名单仅 Onion/All-Tracks，部分条款明确禁止普通视图/监听初值持久化 | B2；监听仍只影响消费过滤，不进入音乐 source 或 canonical |
+| §3.11、§16.7.5/16.28/16.33、§17.2、§20.15、第21章；INV-011/060/091/112 | 当前文件白名单扩展为 schema 3 批准 workspace section；监听仍只影响消费过滤 | B2 已实施；不进入音乐 source 或 canonical |
 | §17 Workspace 导航、§18 各工作区、§20.1.6 | 自动恢复 Tabs/子页、懒应用与失效 owner 处理 | B3；不自动恢复 Selection、Time Range、历史、任务或播放 |
 
 ## 4. 字段归属、默认与保存边界
@@ -96,7 +96,7 @@ B1→B2→B3 是本专题依赖。C 多实例、TRACK 侧栏不作为 B1 前置�
 | 每 target 纵轴（含 Vel.） | Segment ID + typed target key | 现行完整合法显示范围 | 复用 Surface Capture/Restore 的坐标契约，有限值校验；不将显示域范围写回原始 MIDI 值 | B2 |
 | List 局部行位置及现有可配置列/筛选/排序 | Segment ID | 首行及现有控件默认 | 行 ordinal 不能跨内容修订直接当对象身份，按新 source 边界校准；没有的控件不为本阶段新增 | B2，未接入的全局布局由 B3 补齐 |
 | 上述编辑设置、缩放、位置、Lane/List | Event Instrument ID + SubVoice ID | 各宿主现有默认 | 每 SubVoice 独立；切 SubVoice 前捕获、后应用；关闭 Instrument Tab 可释放 VM 而保留合法轻量描述 | B2 |
-| Track/SubVoice Onion 配置 | 现行 target Track/SubVoice ID | 当前 schema 2 默认 | 不复制第二套；只衔接 Duplicate、删除自身状态与 dormant 来源引用 | 已保存；B1 不退化旧能力 |
+| Track/SubVoice Onion 配置 | 现行 target Track/SubVoice ID | schema 3 默认 | 不复制第二套；只衔接 Duplicate、删除自身状态与 dormant 来源引用 | 已保存；B1 不退化旧能力 |
 
 Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留字段分区与能力扩展点，B1 不显示空面板、伪造默认选项或提前实现 R30。
 
@@ -191,7 +191,7 @@ Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留�
 
 ### 7.2 基准与预算的冻结方式
 
-规划阶段未运行实验；B1 实施已补同机 `caf8cec` / 当前版本对照和 10,000 个已访问 owner 压力测试，实际数值、边界与未测项见实施记录。注册表采用 64 MiB 保守计费、131,072 项总条目、单 owner 65,536 个 Lane 描述/显式 target 上限；预算不等同于进程总内存。B2 文件字节预算与 B3 恢复并发预算仍未冻结。
+规划阶段未运行实验；B1 实施已补同机 `caf8cec` / 当前版本对照和 10,000 个已访问 owner 压力测试，实际数值、边界与未测项见实施记录。注册表采用 64 MiB 保守计费、131,072 项总条目、单 owner 65,536 个 Lane 描述/显式 target 上限；B2 复用 64 MiB presentation JSON 编码上限，预算不等同于进程总内存。B3 恢复并发预算仍未冻结。
 
 | 预算/指标 | 实验输入与记录 | 通过条件 |
 |---|---|---|
@@ -211,7 +211,7 @@ Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留�
 
 已生成 `B1-Workspace-State.midora` 小型样例及说明，位置为仓库忽略的 `.tmp/uat/b1/`，不提交二进制产物。包含两个同轨 Logical Segment 与共享成员轨，Fixed/Auto 各两条 MIDI 轨，两个 SubVoice，不同起点/ContentOffset 和多个 target。工程故障、资源峰值与组合由自动测试承担；用户不手工构造坏包或百万对象。
 
-保留原 UAT-B1-01/02 的范围，补充 03～06。全部当前为 **实现已交付、待用户验收** ；自动测试通过不代替人工验收。
+保留原 UAT-B1-01/02 的范围，补充 03～06。全部当前为 **实现已交付并通过用户验收** ；自动测试通过不代替人工验收。提交 `a6ac12a` 已推送。
 
 | 编号 | 操作 | 可观察预期 |
 |---|---|---|
@@ -229,13 +229,13 @@ Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留�
 | 接口 | B1 交付 | 后续责任与不可越界 |
 |---|---|---|
 | Freeze | 当前会话/owner 下的不可变纯值、分区 revision，音乐/presentation 身份分开 | B2 在正式 Save 起点冻结音乐与视图；保存中新增变化不能被标为已保存；Save Copy 不重置原基线 |
-| Restore | typed 分区验证/应用接口，默认工厂、owner 有效性与通知抑制 | B2 定义新独立 schema/预算和 section recovery；B3 控制初始化顺序/激活焦点；B1 不提前改 schema 2 |
+| Restore | typed 分区验证/应用接口，默认工厂、owner 有效性与通知抑制 | B2 已实现 schema 3/预算和 section recovery；B3 控制初始化顺序/激活焦点 |
 | Owner lifecycle | 复制映射、转轨、删除目标与 dormant 来源分离 | B2 保存过滤悬空副本；B3 丢弃已失效 Tab 描述，不恢复 Selection/任务，不重新创造 Domain 对象 |
 | Activation | 新 VM 绑定当前 profile/局部描述；隐藏 adapter 不进行重计算 | B3 恢复轻量 Tabs，按需创建；只当前活动 Compiled 视图正常后台准备，不为隐藏 Tabs 全量编译/渲染 |
 | Monitoring/cursors | 预留只含 stable ID/标量的独立分区，不连接音频新路径 | B2 在首次播放计划前恢复监听初值和合法静止指针，永远 Stopped；不恢复设备/voice/native state |
 | 多实例保存 | 不新增长期持有文件/全局静态跨会话状态 | C 后续接入文件身份/冲突协调；B 继续遵守已存在旧格式确认备份和原子保存，不先删除 Mutex 或修改共享目录 |
 
-新 presentation schema 版本、实际 JSON 分区布局、字节预算在 B2 进入前冻结；保留旧 schema 1/2 reader/golden。仅扩展独立视图数据不等于必然提升音乐 Project Format，届时按实际格式能力判断；不能原地给旧 strict schema 偷加字段。
+新 presentation schema 版本、实际 JSON 分区布局、字节预算已在 B2 实施中冻结为 schema 3、64 MiB presentation JSON 上限及有界 section 数量；保留旧 schema 1/2 reader/golden。仅扩展独立视图数据不提升音乐 Project Format 4；不能原地给旧 strict schema 偷加字段。
 
 后续人工 ID 保持，进入对应阶段再细化操作，不在 B1 要求验收：
 
@@ -246,7 +246,7 @@ Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留�
 
 ## 10. 进入门与前序文档验证（历史记录）
 
-进入 B1 需用户另行明确授权实施。工程进入门为：复核基线、承接已批准语义修订对应 SRS/ADR、建立原基线测量与 §4 字段测试；按 §6 顺序完成而非直接散改 XAML。B1 验收通过后才冻结 B2 具体存储方案；B3 的真实冷恢复不能由热缓存结果替代。
+进入 B1 需用户另行明确授权实施。工程进入门为：复核基线、承接已批准语义修订对应 SRS/ADR、建立原基线测量与 §4 字段测试；按 §6 顺序完成而非直接散改 XAML。B1 验收通过后已冻结并实施 B2 schema 3；B3 的真实冷恢复不能由热缓存结果替代。
 
 2026-09-18 本轮仅只读复核源码和文档，细化本计划及索引。没有运行产品构建、自动测试、WPF/音频或性能实验，没有生成 UAT 工程；未改代码、SRS、ADR、版本、用户原答，未提交、推送或发布。文档检查单独记录，不冒充产品验证。
 
@@ -254,4 +254,8 @@ Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留�
 
 ## 11. B1 实施交接
 
-T-STATE-01a～01c、02a～02c、03a～03d 已实施。跨类型 Move 的新旧 Segment ID 由 Application 正式转换结果提供；Copy 不继承局部状态；未创建事件的显式 MIDI Lane 也可在会话内关闭重开。真实 WPF 模板恢复、预算/释放、源码包不变性与大样本对照的证据集中在 [B1 记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md)，不在多份索引重复维护测试数字。B1 仅等待本节所列一次人工验收，不进入 B2。
+T-STATE-01a～01c、02a～02c、03a～03d 已实施并通过用户整体验收，提交 `a6ac12a` 已推送。跨类型 Move 的新旧 Segment ID 由 Application 正式转换结果提供；Copy 不继承局部状态；未创建事件的显式 MIDI Lane 也可在会话内关闭重开。真实 WPF 模板恢复、预算/释放、源码包不变性与大样本对照的证据集中在 [B1 记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。B2 schema 3、分区 Save/Restore、坏 section recovery 和省略诊断已实施，自动证据见 [06-B2 执行文档](06-Workspace-State-Persistence-B2.md)，B3 仍未开始。
+
+## 12. B2 细化入口
+
+B2 不再沿用“临近再细化”的旧状态。其四个工程切片、T-STATE-04a～06e、B2-CODEC/PERSIST/RESTORE/MONITOR/RESOURCE/COMPAT 验证门、UAT-B2-01～06 及六项实施前决策，统一维护在 [06-Workspace-State-Persistence-B2.md](06-Workspace-State-Persistence-B2.md)。本文件继续作为专题总边界和 B1 的字段/生命周期依据；若 B2 实施方案改变既有外部语义，必须先回到 04 决策问答和 SRS/ADR 更新。

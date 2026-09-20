@@ -707,7 +707,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         return result;
     }
 
-    public async Task SaveProjectAsync(
+    public async Task<MidoraProjectSaveResultV1> SaveProjectAsync(
         string? firstSavePath = null,
         bool overwriteAuthorized = false,
         CancellationToken cancellationToken = default)
@@ -716,13 +716,15 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         {
             throw new InvalidOperationException("No Project is open.");
         }
-        await Task.Run(
+        CaptureWorkspacePresentationForSave();
+        MidoraProjectSaveResultV1 result = await Task.Run(
             () => Persistence.SaveProjectAsync(
                 firstSavePath,
                 overwriteAuthorized,
                 cancellationToken),
             cancellationToken);
         RefreshAll();
+        return result;
     }
 
     public async Task<string> UpgradeLegacyProjectInPlaceAsync(
@@ -733,6 +735,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         {
             throw new InvalidOperationException("No Project is open.");
         }
+        CaptureWorkspacePresentationForSave();
         MidoraProjectSaveResultV1 result = await Task.Run(
             () => Persistence.UpgradeLegacyProjectInPlaceAsync(plan, cancellationToken),
             cancellationToken);
@@ -754,7 +757,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             cancellationToken);
     }
 
-    public async Task SaveCopyAsync(
+    public async Task<MidoraProjectSaveResultV1> SaveCopyAsync(
         string path,
         bool overwriteAuthorized,
         CancellationToken cancellationToken = default)
@@ -763,7 +766,8 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         {
             throw new InvalidOperationException("No Project is open.");
         }
-        await Task.Run(
+        CaptureWorkspacePresentationForSave();
+        return await Task.Run(
             () => Persistence.SaveCopyAsync(path, overwriteAuthorized, cancellationToken),
             cancellationToken);
     }
@@ -2566,6 +2570,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
                 ProjectSegmentIndex.Warm(next.Compilation.Project);
                 _displayCurrentTick = next.Playback?.CurrentTick ?? 0;
                 StartEditorStateSession(next);
+                RestoreWorkspacePresentation(next);
                 Subscribe(next);
             }
             finally

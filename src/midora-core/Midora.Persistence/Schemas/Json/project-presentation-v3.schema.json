@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Midora Project presentation v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "allTracksMode", "trackOnionPresets", "subVoiceOnionPresets", "workspaceState"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "allTracksMode": { "enum": ["raw", "compiled"] },
+    "trackOnionPresets": { "type": "array", "items": { "$ref": "#/$defs/trackPreset" } },
+    "subVoiceOnionPresets": { "type": "array", "items": { "$ref": "#/$defs/subVoicePreset" } },
+    "workspaceState": { "$ref": "#/$defs/workspaceState" }
+  },
+  "$defs": {
+    "stableId": { "$ref": "common-v1.schema.json#/$defs/stableId" },
+    "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "sourceMode": { "enum": ["custom", "previous", "next"] },
+    "trackPreset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetTrackId", "enabled", "opacity", "sourceTrackIds", "sourceMode"],
+      "properties": {
+        "targetTrackId": { "$ref": "#/$defs/stableId" }, "enabled": { "type": "boolean" },
+        "opacity": { "$ref": "#/$defs/opacity" },
+        "sourceTrackIds": { "type": "array", "items": { "$ref": "#/$defs/stableId" } },
+        "sourceMode": { "$ref": "#/$defs/sourceMode" }
+      }
+    },
+    "subVoicePreset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventInstrumentId", "targetSubVoiceId", "enabled", "opacity", "sourceSubVoiceIds", "sourceMode"],
+      "properties": {
+        "eventInstrumentId": { "$ref": "#/$defs/stableId" }, "targetSubVoiceId": { "$ref": "#/$defs/stableId" },
+        "enabled": { "type": "boolean" }, "opacity": { "$ref": "#/$defs/opacity" },
+        "sourceSubVoiceIds": { "type": "array", "items": { "$ref": "#/$defs/stableId" } },
+        "sourceMode": { "$ref": "#/$defs/sourceMode" }
+      }
+    },
+    "owner": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["track", "segment", "subVoice"] },
+        "id": { "$ref": "#/$defs/stableId" },
+        "instrumentId": { "$ref": "#/$defs/stableId" }
+      }
+    },
+    "subdivision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["numerator", "denominator", "label", "isBar"],
+      "properties": {
+        "numerator": { "type": "integer", "minimum": 1 }, "denominator": { "type": "integer", "minimum": 1 },
+        "label": { "type": "string", "maxLength": 64 }, "isBar": { "type": "boolean" }
+      }
+    },
+    "settings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "snap", "grid", "length", "velocity"],
+      "properties": {
+        "operation": { "$ref": "#/$defs/subdivision" }, "snap": { "type": "boolean" }, "grid": { "type": "boolean" },
+        "length": { "type": "integer", "minimum": 1 }, "velocity": { "type": "integer", "minimum": 1, "maximum": 127 }
+      }
+    },
+    "profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["owner", "piano", "event", "tickSpan", "keyHeight", "tool", "shape", "lanesVisible", "lanesHeight", "listVisible", "listWidth"],
+      "properties": {
+        "owner": { "$ref": "#/$defs/owner" }, "piano": { "$ref": "#/$defs/settings" }, "event": { "$ref": "#/$defs/settings" },
+        "tickSpan": { "type": "integer", "minimum": 1 }, "keyHeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 128 },
+        "tool": { "type": "integer", "minimum": 0, "maximum": 3 }, "shape": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "lanesVisible": { "type": "boolean" }, "lanesHeight": { "type": "number", "minimum": 110, "maximum": 520 },
+        "listVisible": { "type": "boolean" }, "listWidth": { "type": "number", "minimum": 240, "maximum": 700 }
+      }
+    },
+    "view": {
+      "type": "object", "additionalProperties": false, "required": ["owner", "startTick", "firstLane", "firstRow"],
+      "properties": {
+        "owner": { "$ref": "#/$defs/owner" }, "startTick": { "type": "integer", "minimum": 0 },
+        "firstLane": { "type": "integer", "minimum": 0, "maximum": 127 }, "firstRow": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "laneKey": {
+      "type": "object", "additionalProperties": false, "required": ["type", "kind", "number"],
+      "properties": {
+        "type": { "type": "integer", "minimum": 0, "maximum": 5 }, "parameter": { "$ref": "#/$defs/stableId" },
+        "kind": { "type": "integer", "minimum": 0, "maximum": 16383 }, "number": { "type": "integer", "minimum": 0, "maximum": 16383 }
+      }
+    },
+    "laneTarget": {
+      "type": "object", "additionalProperties": false, "required": ["key", "hidden", "minimum", "maximum"],
+      "properties": {
+        "key": { "$ref": "#/$defs/laneKey" }, "hidden": { "type": "boolean" },
+        "minimum": { "type": "number", "minimum": 0, "maximum": 1 }, "maximum": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "laneMemory": {
+      "type": "object", "additionalProperties": false, "required": ["owner", "active", "targets", "explicitMidiTargets"],
+      "properties": {
+        "owner": { "$ref": "#/$defs/owner" }, "active": { "$ref": "#/$defs/laneKey" },
+        "targets": { "type": "array", "maxItems": 65536, "items": { "$ref": "#/$defs/laneTarget" } },
+        "explicitMidiTargets": { "type": "array", "maxItems": 65536, "items": { "$ref": "#/$defs/laneKey" } }
+      }
+    },
+    "monitoring": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mutedTrackIds", "soloTrackIds", "mutedGroupIds", "soloGroupIds"],
+      "properties": {
+        "mutedTrackIds": { "type": "array", "items": { "$ref": "#/$defs/stableId" } },
+        "soloTrackIds": { "type": "array", "items": { "$ref": "#/$defs/stableId" } },
+        "mutedGroupIds": { "type": "array", "items": { "$ref": "#/$defs/stableId" } },
+        "soloGroupIds": { "type": "array", "items": { "$ref": "#/$defs/stableId" } }
+      }
+    },
+    "workspaceState": {
+      "type": "object", "additionalProperties": false, "required": ["profiles", "views", "lanes", "monitoring"],
+      "properties": {
+        "profiles": { "type": "array", "maxItems": 131072, "items": { "$ref": "#/$defs/profile" } },
+        "views": { "type": "array", "maxItems": 131072, "items": { "$ref": "#/$defs/view" } },
+        "lanes": { "type": "array", "maxItems": 131072, "items": { "$ref": "#/$defs/laneMemory" } },
+        "monitoring": { "$ref": "#/$defs/monitoring" }
+      }
+    }
+  }
+}

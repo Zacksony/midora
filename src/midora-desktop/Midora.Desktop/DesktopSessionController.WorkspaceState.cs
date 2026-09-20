@@ -1,5 +1,6 @@
 using Midora.Domain;
 using Midora.Application;
+using Midora.Persistence;
 using System.Windows.Threading;
 
 namespace Midora.Desktop;
@@ -84,5 +85,56 @@ public sealed partial class DesktopSessionController
             new(EditorStateOwnerKind.SubVoice, x.TargetSubVoiceId, x.EventInstrumentId))).ToArray();
         if (trackPresets.Length != onion.TrackOnionPresets.Count || voicePresets.Length != onion.SubVoiceOnionPresets.Count)
             presentation.Replace(onion with { TrackOnionPresets = trackPresets, SubVoiceOnionPresets = voicePresets });
+    }
+
+    private ProjectPresentationMonitoringV4 CaptureMonitoringPresentation()
+    {
+        return new(
+            _mutedTrackIds.OrderBy(id => id).ToArray(),
+            _soloTrackIds.OrderBy(id => id).ToArray(),
+            _mutedSharedGroupIds.OrderBy(id => id).ToArray(),
+            _soloSharedGroupIds.OrderBy(id => id).ToArray());
+    }
+
+    /// <summary>
+    /// Publishes the bounded, presentation-only workspace snapshot immediately
+    /// before a save. This keeps the hot registry independent from Project
+    /// commands while ensuring the file contains the latest UI state.
+    /// </summary>
+    private void CaptureWorkspacePresentationForSave()
+    {
+        if (Project is null || Persistence is null || EditorStates.IsDisposed) return;
+        Persistence.Presentation.ReplaceWorkspace(
+            EditorStates.CapturePresentationState(CaptureMonitoringPresentation()));
+    }
+
+    private void RestoreWorkspacePresentation(ProjectContext context)
+    {
+        ProjectPresentationWorkspaceStateV4 state =
+            context.Persistence.Presentation.Current.WorkspaceState
+            ?? ProjectPresentationWorkspaceStateV4.Empty;
+        _ = EditorStates.TryRestorePresentationState(state);
+
+        _mutedTrackIds.Clear();
+        _soloTrackIds.Clear();
+        _mutedSharedGroupIds.Clear();
+        _soloSharedGroupIds.Clear();
+        if (Project is not { } project) return;
+
+        HashSet<MidoraId> trackIds = project.ArrangementTracks
+            .Select(track => track.TrackId).ToHashSet();
+        HashSet<MidoraId> groupIds = project.EventInstrumentUsages.Select(item => item.Id)
+            .Concat(project.MidiChannelRoots.Select(item => item.Id)).ToHashSet();
+        ProjectPresentationMonitoringV4 monitoring = state.Monitoring;
+        _mutedTrackIds.UnionWith(monitoring.MutedTrackIds.Where(trackIds.Contains));
+        _soloTrackIds.UnionWith(monitoring.SoloTrackIds.Where(trackIds.Contains));
+        _mutedSharedGroupIds.UnionWith(monitoring.MutedGroupIds.Where(groupIds.Contains));
+        _soloSharedGroupIds.UnionWith(monitoring.SoloGroupIds.Where(groupIds.Contains));
+
+        if (context.Playback is not { } playback) return;
+        foreach (MidoraId trackId in _mutedTrackIds) playback.SetTrackMuted(trackId, true);
+        foreach (MidoraId trackId in _soloTrackIds) playback.SetTrackSolo(trackId, true);
+        foreach (MidoraId groupId in _mutedSharedGroupIds) playback.SetSharedGroupMuted(groupId, true);
+        foreach (MidoraId groupId in _soloSharedGroupIds) playback.SetSharedGroupSolo(groupId, true);
     }
 }

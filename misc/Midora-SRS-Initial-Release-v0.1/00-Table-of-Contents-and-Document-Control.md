@@ -50,9 +50,13 @@
 - `v0.x` 表示整合和审查阶段；成为正式开发基线后可升级为 `v1.0`。
 - 后续修订必须说明受影响章节，避免在实现中静默改变需求。
 
+## 2026-09-20 修订摘要
+
+- B2 工作区状态持久化的 UAT-B2-01～06 已获用户全部验收通过。确认范围为 presentation schema 3、分区 Save/Save Copy、损坏 section 隔离与 recovery-dirty、运行期 Mute/Solo 恢复及 Format 1/2/3 迁移边界；B3 的 Tabs/活动页自动恢复仍未实施。详细实施与人工验收记录见 [B2 执行记录](../Midora-Next-Development-Requirements-2026-09-11/execution/06-Workspace-State-Persistence-B2.md)。本次不改变 Project Format 4、音乐 source、canonical、Undo 或正式 MIDI/WAV/音频语义。
+
 ## 2026-09-18 修订摘要
 
-- B1 按已确认 D-STATE01/03 实施会话内 Track profile、Segment/SubVoice 局部记忆及 owner 生命周期；同步 §17.2.3、§18.2/4、§20.1.4/6、INV-123。仅共享用户偏好，保留各 owner 的时间解析上下文；不增加 Format 4 / presentation schema 2 字段，不提前实施 B2/B3。设计及验证见 [B1 实施记录](../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
+- B1 按已确认 D-STATE01/03 实施会话内 Track profile、Segment/SubVoice 局部记忆及 owner 生命周期；同步 §17.2.3、§18.2/4、§20.1.4/6、INV-123。B2 已将批准的 workspace 分区写入独立 presentation schema 3，外层 Format 4 不变；B3 尚未实施。设计及验证见 [B1 实施记录](../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 与 [B2 执行记录](../Midora-Next-Development-Requirements-2026-09-11/execution/06-Workspace-State-Persistence-B2.md)。
 
 - 按用户明确追加需求，§18.4.4 在 SubVoice 模板尾手柄旁显示同色蓝字 `Template <Tick>`，拖动同步预览；复用既有标签合并，不改变命中、音乐数据或持久化。上一轮标记编辑与编译提示已获用户验收，记录见 [追加记录](../Midora-A4b-Marker-Editing-Followup-2026-09-17.md)。
 - Template 标签及追加的 §18.4.4 四种手柄圆角矩形局部抗锯齿均已获用户明确验收；保持 Tick、命中及其他内容的像素规则，验证与验收记录沿用上述追加记录。

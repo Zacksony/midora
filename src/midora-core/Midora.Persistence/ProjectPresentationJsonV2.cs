@@ -16,7 +16,7 @@ internal static class ProjectPresentationCodecV2
         _ => throw new InvalidDataException("Invalid onion source mode.")
     };
 
-    private static OnionSourceMode ParseMode(string mode) => mode switch
+    internal static OnionSourceMode ParseModeForCodec(string mode) => mode switch
     {
         "custom" => OnionSourceMode.Custom,
         "previous" => OnionSourceMode.Previous,
@@ -40,13 +40,13 @@ internal static class ProjectPresentationCodecV2
             ? throw new InvalidDataException("A Track onion preset cannot be null.")
             : new TrackOnionPresetV3(value.TargetTrackId.ToDomain(), value.Enabled, value.Opacity,
                 (value.SourceTrackIds ?? throw new InvalidDataException("Track onion sources are required."))
-                    .Select(id => id.ToDomain()).ToArray(), ParseMode(value.SourceMode))).ToArray(),
+                    .Select(id => id.ToDomain()).ToArray(), ParseModeForCodec(value.SourceMode))).ToArray(),
             dto.SubVoiceOnionPresets.Select(value => value is null
                 ? throw new InvalidDataException("A SubVoice onion preset cannot be null.")
                 : new SubVoiceOnionPresetV3(value.EventInstrumentId.ToDomain(), value.TargetSubVoiceId.ToDomain(),
                     value.Enabled, value.Opacity,
                     (value.SourceSubVoiceIds ?? throw new InvalidDataException("SubVoice onion sources are required."))
-                        .Select(id => id.ToDomain()).ToArray(), ParseMode(value.SourceMode))).ToArray());
+                        .Select(id => id.ToDomain()).ToArray(), ParseModeForCodec(value.SourceMode))).ToArray());
         return ProjectPresentationCodecV3.ValidateAndCanonicalize(state, project);
     }
 }

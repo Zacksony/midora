@@ -37,6 +37,48 @@ public sealed class ProjectPersistenceCoordinatorTests
     }
 
     [Fact]
+    public async Task SaveKeepsPresentationDirtyWhenASectionIsOmitted()
+    {
+        using TemporaryDirectory temporary = new();
+        MidoraProject project = new(192, CreatedAt);
+        using ProjectCompilationSession compilation = new(project);
+        ProjectDocumentSession document = new(compilation, ProjectDocumentOrigin.Unsaved);
+        ProjectPersistenceCoordinator persistence = new(document, new MidoraProjectPackageV1("1.0.0"));
+        ProjectPresentationEditorSettingsV4 settings = new(
+            new(1, 4, "1/4"),
+            Snap: true,
+            Grid: true,
+            Length: 192,
+            Velocity: 100);
+        persistence.Presentation.Replace(ProjectPresentationStateV3.Empty with
+        {
+            WorkspaceState = new(
+                [new(
+                    new(ProjectPresentationWorkspaceOwnerKindV4.Segment, new MidoraId(1)),
+                    settings,
+                    settings,
+                    TickSpan: 1024,
+                    KeyHeight: 4,
+                    Tool: 0,
+                    Shape: 0,
+                    LanesVisible: true,
+                    LanesHeight: 220,
+                    ListVisible: false,
+                    ListWidth: 300)],
+                [],
+                [],
+                ProjectPresentationMonitoringV4.Empty)
+        });
+
+        MidoraProjectSaveResultV1 result = await persistence.SaveProjectAsync(
+            temporary.PathFor("omitted-presentation.midora"));
+
+        Assert.Contains("workspaceState.profiles", result.OmittedPresentationSections ?? []);
+        Assert.True(persistence.Presentation.IsModified);
+        Assert.False(document.IsModified);
+    }
+
+    [Fact]
     public async Task FirstSaveRequiresTargetAndExplicitOverwriteAuthorization()
     {
         using TemporaryDirectory temporary = new();

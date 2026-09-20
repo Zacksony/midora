@@ -53,7 +53,7 @@ Raw 和 Compiled 都显示播放指针，遵守全局 **Follow Playback**。中�
 
 ## 保存与对象生命周期
 
-- 手选来源、Custom/Previous/Next 显示模式、启用状态、透明度及默认 Raw/Compiled 写入 Format 3 的独立 presentation schema 2；音乐文件格式仍为 3，软件版本不变。旧 presentation v1 继续可读，来源按 Custom 恢复。
+- 手选来源、Custom/Previous/Next 显示模式、启用状态、透明度及默认 Raw/Compiled 写入 Format 4 的独立 presentation schema 3；schema 2 仍可读，缺少 B2 workspace 时以默认状态运行。旧 presentation v1 继续可读，来源按 Custom 恢复。presentation 损坏或超出保存预算时，音乐及仍可表达的完整分区仍可保存，并通过诊断列出省略分区。
 - 这些设置不进入 Undo、不产生音乐 Modified 星号、不主动弹未保存提示。**需要保留时请显式 Save / Save Copy。**
 - 关闭未保存的项目可能直接丢弃本次视图配置。Save Copy 不改变音乐保存语义。
 - 删除来源后引用在会话内休眠；Undo 恢复相同对象时洋葱皮也恢复。保存副本时过滤仍不存在的对象，不把悬空引用写进文件。

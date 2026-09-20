@@ -89,7 +89,8 @@ public sealed record MidoraProjectSaveResultV1(
     string TargetPath,
     MidoraProjectFileInformationV1 FileInformation,
     IReadOnlyList<MidoraPackageDiagnosticV1> Diagnostics,
-    string? PermanentLegacyBackupPath = null);
+    string? PermanentLegacyBackupPath = null,
+    IReadOnlyList<string>? OmittedPresentationSections = null);
 
 public class MidoraPackageExceptionV1 : IOException
 {
@@ -412,10 +413,21 @@ public sealed class MidoraProjectPackageV1
             fileInformation?.CreatedWithSoftwareVersion ?? _softwareVersion,
             _softwareVersion);
 
+        ProjectPresentationSerializationResultV4 preparedPresentation;
+        List<MidoraPackageDiagnosticV1> saveDiagnostics = [];
         try
         {
             ValidateSupportedProject(project, cancellationToken);
-            _ = ProjectPresentationCodecV3.ValidateAndCanonicalize(presentation, project);
+            preparedPresentation = ProjectPresentationCodecV4.PrepareForSave(presentation, project);
+            if (preparedPresentation.OmittedSections.Count != 0)
+            {
+                saveDiagnostics.Add(new(
+                    MidoraPackageDiagnosticSeverityV1.Warning,
+                    MidoraPackageDiagnosticCategoryV1.Resource,
+                    "MIDORA-PERSIST-PRESENTATION-SECTION-OMITTED",
+                    $"Some presentation sections were omitted while saving because they were invalid or exceeded the presentation byte budget: {string.Join(", ", preparedPresentation.OmittedSections)}.",
+                    MidoraPackagePathsV1.ProjectPresentation));
+            }
         }
         catch (Exception exception) when (exception is InvalidDataException
             or ArgumentException
@@ -488,12 +500,13 @@ public sealed class MidoraProjectPackageV1
                 {
                     content = BuildContent(
                         project,
-                        presentation,
+                        preparedPresentation.State,
                         metadata,
                         outputFileInformation,
                         temporaryDirectory,
                         knownPureMidiPackEntries: null,
-                        cancellationToken);
+                        cancellationToken,
+                        precomputedPresentationBytes: preparedPresentation.Bytes);
                 }
                 catch (Exception exception) when (exception is InvalidDataException
                     or ArgumentException
@@ -632,8 +645,9 @@ public sealed class MidoraProjectPackageV1
             return new MidoraProjectSaveResultV1(
                 target,
                 outputFileInformation,
-                cleanupDiagnostics,
-                permanentLegacyBackupPath);
+                saveDiagnostics.Concat(cleanupDiagnostics).ToArray(),
+                permanentLegacyBackupPath,
+                preparedPresentation.OmittedSections);
         }
         catch
         {
@@ -931,8 +945,22 @@ public sealed class MidoraProjectPackageV1
                     {
                         throw new InvalidDataException("project-presentation.json is missing.");
                     }
-                    presentation = ProjectPresentationCodecV3.Parse(presentationBytes, project,
-                        index[MidoraPackagePathsV1.ProjectPresentation].SchemaVersion);
+                    ProjectPresentationParseResultV4 parsedPresentation =
+                        ProjectPresentationCodecV3.ParseWithRecovery(
+                            presentationBytes,
+                            project,
+                            index[MidoraPackagePathsV1.ProjectPresentation].SchemaVersion);
+                    presentation = parsedPresentation.State;
+                    if (parsedPresentation.Recovered)
+                    {
+                        diagnostics.Add(new(
+                            MidoraPackageDiagnosticSeverityV1.Warning,
+                            MidoraPackageDiagnosticCategoryV1.FileDamage,
+                            "MIDORA-PERSIST-PRESENTATION-SECTION-RECOVERED",
+                            $"Some project presentation sections were reset to defaults: {string.Join(", ", parsedPresentation.RecoveredSections)}.",
+                            MidoraPackagePathsV1.ProjectPresentation));
+                        presentationModified = true;
+                    }
                 }
                 catch (Exception exception) when (exception is InvalidDataException
                     or System.Text.Json.JsonException
@@ -978,7 +1006,8 @@ public sealed class MidoraProjectPackageV1
         string contentRoot,
         IReadOnlyList<ManifestFileEntryJsonV1>? knownPureMidiPackEntries,
         CancellationToken cancellationToken,
-        bool compareStagedContent = false)
+        bool compareStagedContent = false,
+        byte[]? precomputedPresentationBytes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
         Dictionary<string, StructuralFileV1> content = new(StringComparer.Ordinal);
@@ -991,7 +1020,7 @@ public sealed class MidoraProjectPackageV1
             () => GlobalResetDefaultsCodecV1.Serialize(project.GlobalResetDefaults));
         AddBytes(MidoraPackagePathsV1.GlobalEventScopeDefaults, GlobalEventScopeDefaultsCodecV1.Serialize);
         AddBytes(MidoraPackagePathsV1.ProjectPresentation,
-            () => ProjectPresentationCodecV3.Serialize(presentation, project));
+            () => precomputedPresentationBytes ?? ProjectPresentationCodecV3.Serialize(presentation, project));
         Add(PersistenceContractV4.InstrumentChangesPath,
             stream => InstrumentChangesProtobufCodecV1.Serialize(project, stream, cancellationToken, _instrumentChangeStorage));
         foreach (EventInstrument instrument in project.EventInstruments)

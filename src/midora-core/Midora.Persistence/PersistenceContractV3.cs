@@ -4,7 +4,7 @@ public static class PersistenceContractV3
 {
     public const int FileFormatVersion = 3;
     public const int ManifestSchemaVersion = 3;
-    public const int ProjectPresentationSchemaVersion = 2;
+    public const int ProjectPresentationSchemaVersion = 3;
     public const int EventInstrumentSchemaVersion = PersistenceContractV2.EventInstrumentSchemaVersion;
     public const int ReusedComponentSchemaVersion = PersistenceContractV2.ReusedComponentSchemaVersion;
 
