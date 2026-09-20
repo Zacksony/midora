@@ -1,6 +1,6 @@
 # 工作区恢复、同轨道共享与 Tracks 导航：B1 详细计划及 B2/B3 边界
 
-初稿：2026-09-14；B1/B2 实施：2026-09-18；B2 人工验收归档：2026-09-20。实施前源码基线：`caf8cec81e8d5b019df870fa871a46e464522d01`。状态：**B1、B2 已实施并通过用户验收；B3 与 TRACK 未实施** 。B2 的独立任务、UAT-B2-01～06 及证据见 [06-B2 执行文档](06-Workspace-State-Persistence-B2.md)。详见 [B1 实施记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
+初稿：2026-09-14；B1/B2 实施：2026-09-18；B2 人工验收归档：2026-09-20；B3 任务细化：2026-09-20。实施前源码基线：`caf8cec81e8d5b019df870fa871a46e464522d01`。状态：**B1、B2 已实施并通过用户验收；B3 已完成计划细化但未实施；TRACK 未实施** 。B2 的独立任务、UAT-B2-01～06 及证据见 [06-B2 执行文档](06-Workspace-State-Persistence-B2.md)；B3 的任务、决策项、自动门和 UAT 见 [06b-B3 执行文档](06b-Workspace-State-Restore-B3.md)。详见 [B1 实施记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
 
 入口：[执行总计划](00-Execution-Plan.md)。需求／源码依据：[03](../03-Multi-Instance-and-Workspace-State.md)、[01 的 R30](../01-Interaction-and-Display.md)；唯一决定与原答：[04](../04-Decisions-and-Preparation.md) D-STATE01～03、D-TRACK01，包含 Q2 D-STATE03.d/e。本文件不重复问答，不改变已经批准的白名单。
 
@@ -37,8 +37,8 @@ B1→B2→B3 是本专题依赖。C 多实例、TRACK 侧栏不作为 B1 前置�
 | T-STATE-04 | T-STATE-01；D-STATE02 | 独立版本化 presentation codec、section 校验与 B2 文件/读取预算；子项 04a～04e 见 [06 §4.1](06-Workspace-State-Persistence-B2.md#41-t-state-04codec-schema-与预算) | 旧音乐格式读取、新旧 presentation golden、损坏/未知字段/超限隔离；预算实测，不凭经验猜上限 | B2a Codec/预算 |
 | T-STATE-05 | T-STATE-04；D-STATE02.a/c | Save/Save Copy 冻结轻量描述、并发 revision、staging/atomic publish 与迁移保护；子项 05a～05f 见 [06 §4.2](06-Workspace-State-Persistence-B2.md#42-t-state-05save-save-copy-与原子发布) | 保存期间新视图变化、取消、写入失败、旧格式升级副本和 source identity 竞争；无部分覆盖 | B2b Save/Copy |
 | T-STATE-06 | T-STATE-05；D-STATE01.b/c | section 隔离读取、B1 registry 导入、静止指针边界、Track/group Mute/Solo 初值；子项 06a～06e 见 [06 §4.3](06-Workspace-State-Persistence-B2.md#43-t-state-06读取隔离恢复与监听初值) | 首次播放过滤正确、两级 Mute/Solo 独立；canonical 与 SMF/WAV 不受 presentation 污染 | B2c Read/Monitor |
-| T-STATE-07 | T-STATE-02～06 | Tabs顺序、活动子页／owner、局部viewport、面板状态懒恢复；显式Arrangement打开保留定位编辑指针优先级 | 隐藏Tab不提前扫描／编译；活动Compiled正常后台准备；关闭/切换不串状态 | B3 |
-| T-STATE-08 | T-STATE-07 | 长会话、批量打开关闭及音乐编辑后的状态回归 | 订阅数、managed/native/WPF及任务持有释放证据；同音乐Full/Incremental与成品等价 | B3 |
+| T-STATE-07 | T-STATE-02～06 | Tabs顺序、活动子页／owner、局部viewport、面板状态懒恢复；显式Arrangement打开保留定位编辑指针优先级 | 隐藏Tab不提前扫描／编译；活动Compiled正常后台准备；关闭/切换不串状态 | B3；细分 07a～07g 见 [06b §3](06b-Workspace-State-Restore-B3.md#3-b3-子任务分解) |
+| T-STATE-08 | T-STATE-07 | 长会话、批量打开关闭及音乐编辑后的状态回归 | 订阅数、managed/native/WPF及任务持有释放证据；同音乐Full/Incremental与成品等价 | B3；细分 08a～08c 见 [06b §3](06b-Workspace-State-Restore-B3.md#3-b3-子任务分解) |
 | T-TRACK-01 | R30、D-TRACK01.a～d | 两类Segment左侧Tracks默认隐藏，复用Arrangement头及命令，不创建第二套轨道顺序 | 当前owner与操作选中态可区分；各命令路由及音符选择不被误清 | TRACK |
 | T-TRACK-02 | T-TRACK-01 | 双击含编辑指针的Segment，否则最近者等距取前；无Segment不创建；接入轻量状态 | 转轨／删除当前owner／共享组／MuteSolo／关闭面板的自动回归；B已交付时补profile扩展 | TRACK |
 
@@ -241,7 +241,7 @@ Tracks 面板开关/尺寸已获后续批准，但 R30 尚未实现：只预留�
 
 - UAT-B2-01：只改已接入视图/两级 Mute/Solo，不加音乐星，显式 Save 后手动打开可恢复、始终 Stopped；未保存的纯视图变化关闭不提示。
 - UAT-B2-02：提供损坏 presentation 的测试副本，合法分区和音乐仍可用，坏区有提示并回退；加上 Save Copy/保存失败/迁移副本的代表性场景。
-- UAT-B3-01：多个 Tabs/顺序/活动子页/侧栏/位置自动恢复，后台页懒加载；切页焦点正确；长会话/性能由自动证据支撑。
+- UAT-B3-01～06：多个 Tabs/顺序/活动子页/侧栏/位置自动恢复，后台页懒加载；切页焦点正确；失效 owner、损坏 section、兼容、长会话和性能由自动证据与人工批次共同覆盖，具体步骤见 [06b §7](06b-Workspace-State-Restore-B3.md#7-人工验收批次)。
 - UAT-TRACK-01/02：R30 Tracks 侧栏仍独立，不为了状态专题提前实施；沿用原单击/双击导航与轨头命令范围。
 
 ## 10. 进入门与前序文档验证（历史记录）
@@ -258,4 +258,8 @@ T-STATE-01a～01c、02a～02c、03a～03d 已实施并通过用户整体验收�
 
 ## 12. B2 细化入口
 
-B2 不再沿用“临近再细化”的旧状态。其四个工程切片、T-STATE-04a～06e、B2-CODEC/PERSIST/RESTORE/MONITOR/RESOURCE/COMPAT 验证门、UAT-B2-01～06 及六项实施前决策，统一维护在 [06-Workspace-State-Persistence-B2.md](06-Workspace-State-Persistence-B2.md)。本文件继续作为专题总边界和 B1 的字段/生命周期依据；若 B2 实施方案改变既有外部语义，必须先回到 04 决策问答和 SRS/ADR 更新。
+B2 不再沿用“临近再细化”的旧状态。其四个工程切片、T-STATE-04a～06e、B2-CODEC/PERSIST/RESTORE/MONITOR/RESOURCE/COMPAT 验证门、UAT-B2-01～06 及六项实施前决策，统一维护在 [06-Workspace-State-Persistence-B2.md](06-Workspace-State-Persistence-B2.md)。B3 的 T-STATE-07a～08c、B3 自动门、UAT-B3-01～06 和进入实现前决策统一维护在 [06b-Workspace-State-Restore-B3.md](06b-Workspace-State-Restore-B3.md)。本文件继续作为专题总边界和 B1 的字段/生命周期依据；若 B3 需要改变既有外部语义，必须先回到 04 决策问答和 SRS/ADR 更新。
+
+## 13. B3 细化入口
+
+B3 本轮仅完成任务细化，未改代码、SRS、ADR、版本或发布产物。具体的 T-STATE-07a～08c、Workspace 恢复时序、懒激活与焦点优先级、B3-SCHEMA～RESOURCE 自动门、UAT-B3-01～06 及 B3-D01～D07 进入实现前决策，统一维护在 [06b-Workspace-State-Restore-B3.md](06b-Workspace-State-Restore-B3.md)。B3 实施前仍须冻结 schema/section 版本策略和恢复资源预算；不得把本计划或未运行的矩阵当成产品已支持的恢复行为。

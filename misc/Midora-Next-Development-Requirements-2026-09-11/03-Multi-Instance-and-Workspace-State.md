@@ -1,10 +1,10 @@
 # 多实例、跨项目剪贴板与工作区恢复
 
-覆盖R01、R06、R07（均P2）以及文件打开R04（P3）。这两个大型专题应分别分阶段，不与几处UI小修合并成不可验收的大提交。本文区分 Q1/Q2 已决定的产品方向和仍待验证的实现设计；B1/B2 已实施，B3 与多实例仍未开始。
+覆盖R01、R06、R07（均P2）以及文件打开R04（P3）。这两个大型专题应分别分阶段，不与几处UI小修合并成不可验收的大提交。本文区分 Q1/Q2 已决定的产品方向和仍待验证的实现设计；B1/B2 已实施，B3 已完成任务细化但未实施，多实例仍未开始。
 
 共同入口：[需求总表](00-Overview-and-Delivery-Plan.md)、[决策与问答主文档](04-Decisions-and-Preparation.md)。源码行号基于 `0bb9670`。
 
-2026-09-20 补充入口：[主题05](execution/05-Workspace-State-and-Track-Navigation.md) 的 B1 已实施并通过用户验收，提交 `a6ac12a` 已推送；[实施证据](../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 记录资源预算与验证。[B2 执行文档](execution/06-Workspace-State-Persistence-B2.md) 记录 schema 3 codec、Save/Copy、损坏隔离、Mute/Solo、保存省略诊断及 UAT-B2-01～06 全部通过。以下旧基线源码线索保留历史上下文；B1/B2 已交付会话与批准白名单持久化，B3 完整懒恢复仍未实施。
+2026-09-20 补充入口：[主题05](execution/05-Workspace-State-and-Track-Navigation.md) 的 B1 已实施并通过用户验收，提交 `a6ac12a` 已推送；[实施证据](../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 记录资源预算与验证。[B2 执行文档](execution/06-Workspace-State-Persistence-B2.md) 记录 schema 3 codec、Save/Copy、损坏隔离、Mute/Solo、保存省略诊断及 UAT-B2-01～06 全部通过。[B3 细化执行文档](execution/06b-Workspace-State-Restore-B3.md) 记录完整导航恢复、懒激活、焦点/竞态、自动门、UAT-B3-01～06 和待确认的版本/预算选择。以下旧基线源码线索保留历史上下文；B1/B2 已交付会话与批准白名单持久化，B3 代码仍未实施。
 
 2026-09-14 Q1/Q2 答复归并：用户已经逐项填写 Q1/Q2，并明确“同意”表示同意对应推荐；原回答保留在 `04`，本文不改写、不另建第二套回答。Q2 的用户修正优先于此前推荐，当前工具按 D-UI01.d 的最终共享 Draw 方案解释。相关产品边界已定，不再以旧 Q2 待答项阻塞实施规划；方向获批不等于协议/schema 已冻结、SRS 已更新、代码已实施或测试已通过。原答与前轮归并已提交推送至 `7227090`；本轮仅归并文档，不提交／推送，不运行发布。
 

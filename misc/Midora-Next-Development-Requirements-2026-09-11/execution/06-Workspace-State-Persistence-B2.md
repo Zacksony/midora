@@ -4,7 +4,7 @@
 
 本文件是 B2 的执行计划与实施记录，不替代用户在 [04 决策问答](../04-Decisions-and-Preparation.md) 中已经给出的原答。B2 只处理独立 presentation 的保存、读取、损坏隔离、Save/Save Copy 和运行期 Mute/Solo 恢复；B3 才接通全部 Tabs、子页和隐藏 Workspace 的自动激活恢复。
 
-入口：[总执行计划](00-Execution-Plan.md)、[B1 与 B2/B3 边界](05-Workspace-State-and-Track-Navigation.md)、[R06/R07 源码与需求调查](../03-Multi-Instance-and-Workspace-State.md)、[presentation 历史 ADR](../../Midora-Project-Presentation-and-Format-3-Architecture-Decisions.md)。
+入口：[总执行计划](00-Execution-Plan.md)、[B1 与 B2/B3 边界](05-Workspace-State-and-Track-Navigation.md)、[B3 完整恢复计划](06b-Workspace-State-Restore-B3.md)、[R06/R07 源码与需求调查](../03-Multi-Instance-and-Workspace-State.md)、[presentation 历史 ADR](../../Midora-Project-Presentation-and-Format-3-Architecture-Decisions.md)。
 
 ## 1. 目标、输入、输出和非目标
 
@@ -122,7 +122,7 @@ schema 3 已将 schema 2 的 Onion/All Tracks 语义无损搬入，并新增 B1 
 
 ### 4.4 T-STATE-07/08 的边界（本轮不实施）
 
-T-STATE-07（B3）才把保存的 Workspace descriptor 懒创建为 Tabs、恢复顺序/活动项、Event Instrument 子页、Arrangement/Conductor/All Tracks 的 viewport 和焦点。T-STATE-08（B3）才做几十/数百隐藏页、长会话、懒加载并发、WPF/native/后台任务释放和真实冷启动时间门。本 B2 不通过“DTO 已含字段”宣称 B3 完成，也不为 B3 预建 VM 或索引。
+T-STATE-07（B3）才把保存的 Workspace descriptor 懒创建为 Tabs、恢复顺序/活动项、Event Instrument 子页、Arrangement/Conductor/All Tracks 的 viewport 和焦点。T-STATE-08（B3）才做几十/数百隐藏页、长会话、懒加载并发、WPF/native/后台任务释放和真实冷启动时间门。本 B2 不通过“DTO 已含字段”宣称 B3 完成，也不为 B3 预建 VM 或索引。B3 的具体子任务、恢复时序、自动门、UAT 和进入实现前决策见 [06b-Workspace-State-Restore-B3.md](06b-Workspace-State-Restore-B3.md)。
 
 ## 5. 失败、损坏与资源边界
 

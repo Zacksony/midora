@@ -1,6 +1,6 @@
 # 下一批开发：主题执行计划与验收批次总索引
 
-更新：2026-09-20。状态：**A1～A4b 及已归档追加修订均获验收；B1、B2 已实施并通过人工验收；B3 未实施；逻辑参数写入约束继续延期** 。A2b/A3/A4a/A4b 实际工程门分别见 §10/§11/§12/§13；B1 见 §15；B2 见 [06](06-Workspace-State-Persistence-B2.md)。B2 的 UAT-B2-01～06 已全部通过，但未运行的压力/互操作工程门仍按 B2 记录保留。
+更新：2026-09-20。状态：**A1～A4b 及已归档追加修订均获验收；B1、B2 已实施并通过人工验收；B3 已完成任务细化但未实施；逻辑参数写入约束继续延期** 。A2b/A3/A4a/A4b 实际工程门分别见 §10/§11/§12/§13；B1 见 §15；B2 见 [06](06-Workspace-State-Persistence-B2.md)；B3 见 [06b](06b-Workspace-State-Restore-B3.md)。B2 的 UAT-B2-01～06 已全部通过，但未运行的压力/互操作工程门仍按 B2 记录保留。
 
 本目录按用户要求将32项需求拆为9份主题执行文档，临近实施时补齐具体代码落点、样本、验证入口及预算冻结方式。**工程子任务数不等于用户验收轮数** 。A1～A4b 的归档见 §8～13；B1 的前序文档细化见 §14，实施交接见 §15。本轮不提交、推送、发布或使用 computer-use。
 
@@ -24,7 +24,7 @@
 | [02 乐器变化点与统一选择器](02-Instrument-Changes.md) | R27 | P0 | A2a、A2b 全编辑／List 及 Inst. 交互返修人工通过；保留未跑工程门 |
 | [03 Lane Tabs与事件显示](03-Lane-Tabs-and-Event-Display.md) | R28、R12、R29 | P1/P2 | R28/A2b 全部人工通过；A4a 原清单大体通过，Lines 范围／开关返修验收通过；样例已自动验证，逻辑参数约束强化延期，证据/缺测见 §12 |
 | [04 手势与浮动工具](04-Gestures-and-Selection-Tools.md) | R18、R19、R20、R21 | P1；R20为P2 | A3 主清单及局部返修全部验收通过，见 04 §5。R20因关联而合并，不改变优先级 |
-| [05 工作区状态与轨道导航](05-Workspace-State-and-Track-Navigation.md) | R06、R07、R30 | P2；R30为P3 | B1、B2 已验收；B2 任务记录见 [06](06-Workspace-State-Persistence-B2.md)；B3 接口后置；R30 独立 TRACK |
+| [05 工作区状态与轨道导航](05-Workspace-State-and-Track-Navigation.md) | R06、R07、R30 | P2；R30为P3 | B1、B2 已验收；B2 任务记录见 [06](06-Workspace-State-Persistence-B2.md)；B3 细化见 [06b](06b-Workspace-State-Restore-B3.md)；R30 独立 TRACK |
 | [06 多实例与共享剪贴板](06-Multi-Instance-and-Clipboard.md) | R01、R04 | P2；R04为P3 | 后续轮廓；C1～C4，R04独立OPEN |
 | [07 模板、标尺与编译反馈](07-Template-Timeline-and-Compile-Feedback.md) | R15、R22、R31、R32 | P2；R22为P3 | A4b 及新增手柄/编译提示、Template 标签/圆角柔化全部验收通过，见 §13 |
 | [08 连续跟随与琴键染色](08-Playback-Follow-and-Key-Highlights.md) | R10、R11 | P3 | 后续独立性能门；FOLLOW、KEYCOLOR |
@@ -61,7 +61,7 @@
 | A4a数值显示/阶梯线 | R28目标身份/目录、既有有界编辑；R12显示/raw分层合同 | 不改Project Mapping/raw语义；与A4b可独立验收。 |
 | A4b模板/标尺/Fit/进度 | 各自共享基础稳定、相应性能基线 | R22低优先级可顺带，不拖住P2；R31性能不合格可按已批准条件暂缓。 |
 | B1状态所有权 | R28的target/显隐/轴归属、A3工具字段合同，现已具备 | 见主题05 §3～8的源码复核、字段表、10子项/6检查；不必等R30，先会话共享/释放，不提前写新格式。 |
-| B2/B3保存与恢复 | B1；B2 的 schema 3 codec、预算、原子保存合同；B3 的懒激活与导航恢复 | 不能持久化 runtime 资源；音乐加载不被坏视图区阻塞；回归现有迁移副本保护。B2 已实施并完成 UAT；B3 细化见 [06](06-Workspace-State-Persistence-B2.md)。 |
+| B2/B3保存与恢复 | B1；B2 的 schema 3 codec、预算、原子保存合同；B3 的懒激活与导航恢复 | 不能持久化 runtime 资源；音乐加载不被坏视图区阻塞；回归现有迁移副本保护。B2 已实施并完成 UAT；B3 任务细化见 [06b](06b-Workspace-State-Restore-B3.md)。 |
 | C1多实例基础 | R01决定、当前启动/保存/共享文件与清理审计 | 可独立于B推进，保存/同文件写保护接口须协调；绝不能只删Mutex。 |
 | C2基础共享/C3复杂对象 | C1协议/lease/权限/预算门；复杂包装接口接R27 | 各步都做真实并发/故障测试，不能把安全验证全推迟到C4。 |
 | C4综合稳定性 | C2/C3能力完整 | 长会话/跨进程/大规模最终组合，不代替前面切片测试。 |
@@ -69,7 +69,7 @@
 | FOLLOW、KEYCOLOR | 各自冷/热对照性能门 | 五类跟随与三类琴键矩阵分开，组合再测；性能不合格可暂缓。 |
 | WINDOW、MENU、HOTKEY、FX | OS能力、用户其余图标、命令键表、正式发布稳定等各自条件 | 不阻塞近期音乐编辑。新按钮涉及的既有焦点/快捷键回归不能等HOTKEY才测。 |
 
-不预先固定整个大需求必须几阶段完成。后续主题进入前在其文档内补“实际文件/测试入口、每轮清单、资源预算与证据路径”，再更新本索引的轮次数。B1 已完成展开、实施并通过人工验收；B2 已完成 schema 3、分区 Save/Restore、坏 section 隔离和保存省略诊断，实际测试及未测项见 [06](06-Workspace-State-Persistence-B2.md)；B3 的恢复并发预算仍待对应实验冻结，不能把待测矩阵当成实测。用户已确认的需求不因计划细化重新提问；工程参数不能甩给用户估算。
+不预先固定整个大需求必须几阶段完成。后续主题进入前在其文档内补“实际文件/测试入口、每轮清单、资源预算与证据路径”，再更新本索引的轮次数。B1 已完成展开、实施并通过人工验收；B2 已完成 schema 3、分区 Save/Restore、坏 section 隔离和保存省略诊断，实际测试及未测项见 [06](06-Workspace-State-Persistence-B2.md)；B3 的任务、恢复顺序、懒激活、自动门和 UAT 已细化在 [06b](06b-Workspace-State-Restore-B3.md)，恢复并发预算仍待对应实验冻结，不能把待测矩阵当成实测。用户已确认的需求不因计划细化重新提问；工程参数不能甩给用户估算。
 
 ## 5. 每个子任务的共同工程验证门
 
@@ -178,7 +178,7 @@ Event 工具 profile/numeric contract 升至 v2，Mapping ABI、Project Format�
 
 - 原 `T-STATE-01～03` 展开为10个稳定子项：01a～01c、02a～02c、03a～03d；B1 仍一次整体人工验收，保留 UAT-B1-01/02 并补齐到06。
 - 明确 Track 共用与 Segment/SubVoice 局部状态、无记忆默认、关闭与删除的区别；共享偏好不共享拍号上下文，普通视图 revision 不连带使 Onion/All Tracks 内容失效。
-- 给出 B2 Freeze/Restore/保存基线、B3 懒激活及未来 C 同文件协调边界；B2 实施后 writer 已升为 schema 3，B3 仍未落地。
+- 给出 B2 Freeze/Restore/保存基线、B3 懒激活及未来 C 同文件协调边界；B2 实施后 writer 已升为 schema 3，B3 任务已在 [06b](06b-Workspace-State-Restore-B3.md) 细化但仍未落地。
 - 自动正确性、真实 WPF、资源释放与冷暖性能门分列；预算按实验冻结，不把工程数值变成用户问卷，也不为了轻量记忆保留 VM/source/页/位图。
 - R30/其他低优先级任务及 DEFER-LPARAM-01 不夹带实施。本轮无产品测试或性能结果，不提交、推送、本地发布。
 
@@ -186,4 +186,4 @@ Event 工具 profile/numeric contract 升至 v2，Mapping ABI、Project Format�
 
 用户随后明确授权“实施 B1”。[主题05](05-Workspace-State-and-Track-Navigation.md) 的 T-STATE-01～03 共10个子项已实现并通过用户整体验收，新增会话轻量状态、同轨通用设置/每 Segment 局部状态、SubVoice 隔离、关闭/删除/转轨与正式转换 ID 衔接。SRS 会话条款与 Onion 目标删除边界同步；音乐文件 Format 4 保持不变，B2 后 presentation writer 为 schema 3。提交 `a6ac12a` 已推送。
 
-[B1 实施记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 集中列出自动验证、同机 `caf8cec` 对照、状态预算与 UAT 工程；人工 UAT-B1-01～06 已全部通过。B2 已在 [06-B2 执行文档](06-Workspace-State-Persistence-B2.md) 中实施并记录自动测试，且 UAT-B2-01～06 已全部通过；B3/C 尚未开始，不自动发布。
+[B1 实施记录](../../Midora-B1-Workspace-State-Implementation-2026-09-18.md) 集中列出自动验证、同机 `caf8cec` 对照、状态预算与 UAT 工程；人工 UAT-B1-01～06 已全部通过。B2 已在 [06-B2 执行文档](06-Workspace-State-Persistence-B2.md) 中实施并记录自动测试，且 UAT-B2-01～06 已全部通过；B3 仅完成任务细化，代码实施和 UAT 尚未开始，不自动发布。
