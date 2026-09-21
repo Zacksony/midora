@@ -30,8 +30,9 @@ public sealed class AllTracksWorkspaceViewModel : WorkspaceViewModel, IPlaybackT
     private long _extent = 3072;
     private long _rawExtent = 3072;
     private long? _playbackCursorTick;
-    private int _firstLane = 48;
+    private int _firstLane;
     private double _laneHeight = 15;
+    private bool _verticalViewInitialized;
     private IReadOnlyList<TimelineOnionTrack> _tracks = [];
     private HashSet<MidoraId> _rawMidiTrackIds = [];
     private IReadOnlyList<TimelineOnionTrack>? _publishedTracks;
@@ -72,8 +73,33 @@ public sealed class AllTracksWorkspaceViewModel : WorkspaceViewModel, IPlaybackT
     }
     public long TickSpan { get => _tickSpan; set => Set(ref _tickSpan, Math.Clamp(value, 16, 1L << 50)); }
     public long ExtentEndTick { get => _extent; private set => Set(ref _extent, Math.Max(1, value)); }
-    public int FirstLane { get => _firstLane; set => Set(ref _firstLane, Math.Clamp(value, 0, 127)); }
-    public double LaneHeight { get => _laneHeight; set => Set(ref _laneHeight, Math.Clamp(value, 3, 128)); }
+    public int FirstLane
+    {
+        get => _firstLane;
+        set => Set(ref _firstLane, Math.Clamp(value, 0, 127));
+    }
+    public double LaneHeight
+    {
+        get => _laneHeight;
+        // TimelineSurface enforces the integer *device* pixel limit; 3 DIP here
+        // would incorrectly override the initial fit at 125/150/200% DPI.
+        set { if (double.IsFinite(value)) Set(ref _laneHeight, Math.Clamp(value, 0.01, 128)); }
+    }
+    internal void RestoreVerticalView(int firstLane, double laneHeight)
+    {
+        if (!double.IsFinite(laneHeight) || laneHeight <= 0) return;
+        _verticalViewInitialized = true;
+        FirstLane = firstLane;
+        LaneHeight = laneHeight;
+    }
+    internal bool TryInitializeVerticalView(double laneHeight)
+    {
+        if (_verticalViewInitialized || IsDisposed || !double.IsFinite(laneHeight) || laneHeight <= 0) return false;
+        _verticalViewInitialized = true;
+        FirstLane = 0;
+        LaneHeight = laneHeight;
+        return true;
+    }
     public override void Rebuild(MidoraProject project, long revision)
     {
         if (IsDisposed || IsPresentationSuspended) return;

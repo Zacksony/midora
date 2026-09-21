@@ -110,6 +110,27 @@ internal sealed class PureMidiPointOverlayIndex<TValue>
     public IEnumerable<TValue> QueryAtTick(long tick) =>
         tick == long.MaxValue ? [] : Query(tick, tick + 1);
 
+    /// <summary>Same immutable tick/order traversal, with O(tree height) scratch rather than an all-match list.</summary>
+    public IEnumerable<TValue> EnumerateRange(long startTick, long endTick)
+    {
+        if (endTick <= startTick || _tickRoot is null) yield break;
+        Stack<TickNode> stack = new(_tickRoot.Height);
+        TickNode? current = _tickRoot;
+        while (current is not null || stack.Count != 0)
+        {
+            while (current is not null)
+            {
+                if (current.MaximumTick < startTick || current.MinimumTick >= endTick) { current = null; break; }
+                stack.Push(current); current = current.Left;
+            }
+            if (stack.Count == 0) break;
+            current = stack.Pop();
+            long tick = _getTick(current.Value);
+            if (tick >= startTick && tick < endTick) yield return current.Value;
+            current = current.Right;
+        }
+    }
+
     public IEnumerable<TValue> ResolveByIds(IReadOnlySet<MidoraId> ids)
     {
         foreach (MidoraId id in ids)

@@ -55,7 +55,7 @@ public partial class InstrumentChangeLane : UserControl
         Points.MouseLeftButtonUp += OnPointClick;
         Points.MouseMove += OnPointMove;
         Points.MouseLeave += (_, _) => { _hoverPoint = null; GestureOverlay.InvalidateVisual(); if (!Points.IsMouseCaptured) PointerPositionText = ""; };
-        Points.LostMouseCapture += (_, _) => { if (!_releasing) ResetGesture(); };
+        Points.LostMouseCapture += (_, _) => { if (!_releasing) { ResetInteractionLifetime(); ResetGesture(); } };
         Points.MouseRightButtonUp += OnContextClick;
         SizeChanged += (_, _) => { Backdrop.LaneHeight = Math.Max(20, Backdrop.ActualHeight - 24); Refresh(); };
         DataContextChanged += (_, _) => { Attach(); Refresh(); };
@@ -65,6 +65,8 @@ public partial class InstrumentChangeLane : UserControl
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         Detach(); Points.Clear(); _pending = null; _latest = null; _reading?.Cancel(); _interaction.Cancel(); _hoverPoint = null; ResetGesture();
+        if (_instrumentToolbarSession is not null) _instrumentToolbarSession.PropertyChanged -= OnToolbarSessionChanged;
+        _instrumentToolbarSession = null;
         _selectedValue = null; _selectTick = null;
         if (ContextMenu is { } menu) menu.IsOpen = false;
         ContextMenu = null;
@@ -94,6 +96,7 @@ public partial class InstrumentChangeLane : UserControl
     { if (_workspace is not null) _workspace.PropertyChanged -= OnWorkspaceChanged; _workspace = null; }
     private void OnWorkspaceChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (_instrumentToolbar is not null) UpdateInstrumentToolbar();
         if (e.PropertyName is "Snapshot" or "SubVoiceSnapshot" or "SubVoiceEventSnapshot" or "ActiveSubVoiceId"
             or "StartTick" or "TickSpan" or "TimelineStartTick" or "TimelineTickSpan") Refresh();
         else if (_workspace?.Selection.Revision != _latest?.SelectionRevision) Refresh();
@@ -169,15 +172,20 @@ public partial class InstrumentChangeLane : UserControl
                         long selectedStart = (long)Math.Clamp((decimal)request.Start - request.PreviewDelta, 0, long.MaxValue);
                         long selectedEnd = (long)Math.Clamp((decimal)request.End - request.PreviewDelta, 0, long.MaxValue);
                         var selectedValues = _selectionIndex.ReadVisible(selectedStart, selectedEnd, request.Pixels, cancel.Token);
+                        InstrumentChangeValue? firstSelected = _selectionIndex.ReadRange(0, long.MaxValue, cancel.Token)
+                            .Select(static value => (InstrumentChangeValue?)value).FirstOrDefault();
                         InstrumentChangeValue? selected = request.SelectTick is { } tick
                             ? _index.ReadAtTick(tick, cancel.Token)
                             : request.SelectedId is { } id && request.Root.TryGet(id, out var group) ? request.Read(group) : null;
-                        return (visible, selected, selectedValues);
+                        return (visible, selected, selectedValues, firstSelected);
                         }
                     });
                     if (!cancel.IsCancellationRequested && IsLoaded)
                     {
                         Points.SetValues(result.visible, result.selectedValues);
+                        _floatingAnchor = result.firstSelected;
+                        _floatingSelectionRevision = request.SelectionRevision;
+                        UpdateInstrumentToolbar();
                         if (request.SelectTick is not null && _selectTick == request.SelectTick)
                         { Select(result.selected); _selectTick = null; }
 

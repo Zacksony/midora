@@ -140,7 +140,7 @@ internal static partial class ObjectPropertiesProjection
             var tick = PropertySummary<DirectMidiChannelEventValue>.Create("batch.midiEvent.tick", "TICK", static x => x.Tick);
             var kind = PropertySummary<DirectMidiChannelEventValue>.Create("batch.midiEvent.kind", "EVENT TYPE", static x => x.Kind, editable: false);
             var data1 = PropertySummary<DirectMidiChannelEventValue>.Create("", "", static x => x.Data1);
-            var data2 = PropertySummary<DirectMidiChannelEventValue>.Create("", "", static x => x.Data2);
+            var data2 = PropertySummary<DirectMidiChannelEventValue>.Create("", "", static x => x.Data2 + MidiEditingValueDomain.Offset(x.Kind, x.Data1));
             var bend = PropertySummary<DirectMidiChannelEventValue>.Create("batch.midiEvent.pitchBend", "PITCH BEND (0–16383)", static x => x.Data1 | x.Data2 << 7);
             if (Allows(WorkspaceTimelineSelectionKind.DirectMidiEventPoint, midi.Segment.Id)
                 && SummarizePropertyOwner(project, midi.Segment.ChannelEvents.CreateObjectSource(), ids,
@@ -182,7 +182,7 @@ internal static partial class ObjectPropertiesProjection
             {
                 PropertySummary<CurvePointSnapshotValue>[] points =
                 [PropertySummary<CurvePointSnapshotValue>.Create("batch.valueCurvePoint.tick", "TICK", static x => x.Tick),
-                 PropertySummary<CurvePointSnapshotValue>.Create("batch.valueCurvePoint.value", "VALUE", static x => x.Value),
+                 PropertySummary<CurvePointSnapshotValue>.Create("batch.valueCurvePoint.value", "VALUE", x => x.Value + MidiEditingValueDomain.Offset(curve.Target)),
                  PropertySummary<CurvePointSnapshotValue>.Create("batch.valueCurvePoint.interpolation", "INTERPOLATION", static x => x.Interpolation)];
                 if (!SummarizePropertyOwner(project, curve.Points.CreateQuerySnapshot(), ids, points)) continue;
                 Replace($"{ids.Count} Value Curve Points", "All selected points share one SubVoice, target, value domain, and curve.", points);

@@ -29,7 +29,6 @@ public sealed partial class InstrumentChangeTests
     public async Task WriteAcceptanceSampleWhenExplicitlyRequested()
     {
         string? directory = Environment.GetEnvironmentVariable("MIDORA_A2B_UAT_DIR");
-        if (string.IsNullOrWhiteSpace(directory)) return;
         using var project = new MidoraProject(192);
         project.Metadata.ProjectName = "A2b — Instrument Changes and Lane Tabs";
         var midiId = AddMidi(project); var midi = Midi(project); midi.LengthTicks = 4096;
@@ -48,7 +47,7 @@ public sealed partial class InstrumentChangeTests
             midi.Notes.Add(new(project) { StartTick = tick, LengthTicks = 192, Key = 60 + i, NoteOnVelocity = 100 });
             logical.Notes.Add(new(project) { StartTick = tick, LengthTicks = 192, Note = 60 + i, Velocity = 100 });
             voice.Events.Add(TemplateEvent.Note(project, tick, 192, 60 + i, 100));
-            lane.Points.Add(new CurvePoint(project, tick, 30 + i * 10));
+            lane.Points.Add(new CurvePoint(project, tick, 30 + i * 10, CurveInterpolation.Step));
         }
         foreach (int controller in new[] { 1, 7, 10, 11, 64 })
         {
@@ -62,6 +61,13 @@ public sealed partial class InstrumentChangeTests
                 .Select(i => new InstrumentChangeValue(new(i + 1), i * 768, 0, 0, i))).Prepare(project);
             edit.Apply(project); (edit as IDisposable)?.Dispose();
         }
+        // Exercise the fixture in ordinary tests too, before optional publication.
+        // A package round-trip alone does not prove semantic compilability.
+        using var compiler = new Midora.Compiler.MidoraCompiler();
+        var compiled = compiler.CompileFull(project);
+        Assert.True(compiled.IsConsumable, string.Join("\n", compiled.Diagnostics));
+        Assert.All(lane.Points, point => Assert.Equal(CurveInterpolation.Step, point.Interpolation));
+        if (string.IsNullOrWhiteSpace(directory)) return;
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, "A2b-Lanes-and-Instruments.midora");
         var package = new Midora.Persistence.MidoraProjectPackageV1("1.0.0-dev", instrumentChangeStorage: BoundedInstrumentChangeStorageLoader.Instance);
@@ -72,6 +78,7 @@ public sealed partial class InstrumentChangeTests
             Assert.Equal(4, Midi(reopened.Project).InstrumentChanges.Count);
             Assert.Equal(4, Voice(reopened.Project).InstrumentChanges.Count);
             Assert.Single(reopened.Project.Tracks);
+            Assert.True(compiler.CompileFull(reopened.Project).IsConsumable);
         }
     }
 

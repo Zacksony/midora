@@ -397,11 +397,13 @@ public static partial class ProjectObjectClipboard
         public IReadOnlyList<MidoraId> ResultSelectionIds => selection.ResultSelectionIds;
     }
     private class ClipboardPrepared(IPreparedProjectEdit prepared, IDisposable lease, IDisposable metadata)
-        : IPreparedProjectEdit, IPreparedProjectEditPublicationGate, IDisposable
+        : IPreparedProjectEdit, IPreparedProjectEditPublicationGate, IPreparedSegmentIdentityTransfers, IDisposable
     {
         private IDisposable? _lease = lease;
         public bool HasChanges => prepared.HasChanges;
         public ProjectChangeSet Changes => prepared.Changes;
+        public IReadOnlyList<SegmentIdentityTransfer> SegmentIdentityTransfers =>
+            (prepared as IPreparedSegmentIdentityTransfers)?.SegmentIdentityTransfers ?? [];
         public void Apply(MidoraProject project) => prepared.Apply(project);
         public void Undo(MidoraProject project) => prepared.Undo(project);
         public void ValidateForPublication(MidoraProject project)

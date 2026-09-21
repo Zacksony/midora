@@ -587,7 +587,9 @@ public static partial class ProjectDomainEditCommands
                 return PrepareBoundedDirectMidiNoteAppend(project, segmentId, firstId => ReadCopies(firstId), noteIds);
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectNoteSelection[] selected = SelectDirectNotes(location.Segment, noteIds);
-            DirectNoteValue[] values = selected.Select(value => SnapshotDirectNote(value.Note) with
+            DirectNoteValue[] values = selected
+                .Where(value => (long)value.Note.Key + keyDelta is >= 0 and <= 127)
+                .Select(value => SnapshotDirectNote(value.Note) with
             {
                 StartTick = checked(value.Note.StartTick + tickDelta),
                 Key = checked(value.Note.Key + keyDelta)
@@ -596,7 +598,7 @@ public static partial class ProjectDomainEditCommands
                 ValidateDirectMidiNote(value.StartTick, value.LengthTicks, value.Key, value.NoteOnVelocity, value.NoteOffVelocity);
             DirectMidiNote[]? copies = null;
             return ResolveTargetedExactDirectMidiCollisions(Prepared(
-                true,
+                values.Length != 0,
                 PureMidiTrackChange(location.Track.Id),
                 owner =>
                 {
@@ -625,6 +627,8 @@ public static partial class ProjectDomainEditCommands
                     if (value.Id == previous)
                         throw new ArgumentOutOfRangeException(nameof(noteIds));
                     previous = value.Id;
+                    scope.Token.ThrowIfCancellationRequested();
+                    if ((long)value.Key + keyDelta is < 0 or > 127) continue;
                     yield return value with { Id = new MidoraId(nextId++), StartTick = checked(value.StartTick + tickDelta),
                         Key = checked(value.Key + keyDelta) };
                 }
@@ -937,12 +941,21 @@ public static partial class ProjectDomainEditCommands
         long? tick = null,
         DirectMidiChannelEventKind? kind = null,
         int? data1 = null,
-        int? data2 = null) =>
+        int? data2 = null,
+        int? controllerDisplayValue = null) =>
         Command("Update Direct MIDI Event properties", project =>
         {
+            int EncodeControllerValue(DirectMidiChannelEventKind targetKind, int controller, int display)
+            {
+                if (targetKind != DirectMidiChannelEventKind.ControlChange || data2.HasValue)
+                    throw new ArgumentException("A display value requires a CC target and cannot be combined with a raw value.", nameof(controllerDisplayValue));
+                return MidiEditingValueDomain.ControllerRaw(controller, display);
+            }
             if (eventIds.Count > 4096 || FindMidiSegment(project, segmentId).Segment.ChannelEvents.Count > 4096)
                 return PrepareBoundedDirectMidiEventTransform(project, segmentId, eventIds, _ => value => value with
-                { Tick = tick ?? value.Tick, Kind = kind ?? value.Kind, Data1 = data1 ?? value.Data1, Data2 = data2 ?? value.Data2 });
+                { Tick = tick ?? value.Tick, Kind = kind ?? value.Kind, Data1 = data1 ?? value.Data1,
+                    Data2 = controllerDisplayValue is int display
+                        ? EncodeControllerValue(kind ?? value.Kind, data1 ?? value.Data1, display) : data2 ?? value.Data2 });
             MidiSegmentLocation location = FindMidiSegment(project, segmentId);
             DirectEventSelection[] selected = SelectDirectEvents(location.Segment, eventIds);
             DirectMidiEventValue[] replacement = selected.Select(value => value.Original with
@@ -950,7 +963,8 @@ public static partial class ProjectDomainEditCommands
                 Tick = tick ?? value.Original.Tick,
                 Kind = kind ?? value.Original.Kind,
                 Data1 = data1 ?? value.Original.Data1,
-                Data2 = data2 ?? value.Original.Data2
+                Data2 = controllerDisplayValue is int display
+                    ? EncodeControllerValue(kind ?? value.Original.Kind, data1 ?? value.Original.Data1, display) : data2 ?? value.Original.Data2
             }).ToArray();
             foreach (DirectMidiEventValue value in replacement)
             {

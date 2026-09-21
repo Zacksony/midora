@@ -79,7 +79,6 @@ public sealed class TimelineEventContextGestureTests
                 // must not reinterpret the already frozen physical right click.
                 Set(surface, "_valueViewMinimum", .5);
                 Set(surface, "_valueViewMaximum", 1d);
-                surface.SelectionSnapshot = new(2, [], null);
                 source.Release.Set();
                 PumpUntil(() => (bool)Field(surface, "_delayedContextMenuQueryReady")!);
                 Assert.Empty(invoked);
@@ -125,7 +124,7 @@ public sealed class TimelineEventContextGestureTests
     }
 
     [Fact]
-    public void RightDragCancelsThePendingMenuAndRetainsShiftHorizontalTrace()
+    public void RightDragCancelsThePendingMenuAndUsesAddMarqueeWithoutDrawing()
     {
         OnSta(() =>
         {
@@ -139,12 +138,11 @@ public sealed class TimelineEventContextGestureTests
                 Invoke(surface, "BeginPendingRightGesture", new Point(152, 248), ModifierKeys.Shift);
                 // These are exactly the two actions of the committed drag branch
                 // in OnMouseMove; no physical cursor or global input is injected.
-                Invoke(surface, "CancelDelayedContextMenu");
-                Invoke(surface, "BeginRightButtonEventTrace", new Point(152, 248), new Point(172, 56));
+                Invoke(surface, "BeginRightButtonMarquee", new Point(152, 248), new Point(172, 56));
                 Invoke(surface, "OnMouseUp", new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
                     { RoutedEvent = Mouse.MouseUpEvent });
-                Assert.NotNull(trace);
-                Assert.All(trace.Sample(), sample => Assert.Equal(.125, sample.NormalizedValue, 6));
+                Assert.Null(trace);
+                Assert.Equal(ModifierKeys.Shift, Field(surface, "_marqueeModifiers"));
                 Assert.Equal(0, invoked);
                 Assert.Null(Field(surface, "_delayedContextMenuQueryCancellation"));
             }

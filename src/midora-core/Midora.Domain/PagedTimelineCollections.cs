@@ -317,6 +317,10 @@ public sealed class TemplateEventQuerySnapshot : ITimelineObjectSource<TemplateE
         _values.Query(startTick, endTick, minimumNote, maximumNote, NoteCategory)
             .Where(static value => value.Kind == TemplateEventKind.Note);
 
+    /// <summary>Unsorted, bounded-block candidates for non-interactive raster aggregation.</summary>
+    public IEnumerable<TemplateEventSnapshotValue> QuerySignalCandidates(long startTick, long endTick) =>
+        _values.EnumerateRangeValues(startTick, endTick, int.MinValue, int.MaxValue, EventCategory);
+
     public IEnumerable<TemplateEventSnapshotValue> QueryEvents(
         long startTick,
         long endTick) =>
@@ -471,6 +475,10 @@ public sealed class CurvePointQuerySnapshot : ITimelineObjectSource<CurvePointSn
     public ulong ContentFingerprint => _values.ContentFingerprint;
     public long SourceRevision => Generation;
     public int PageCapacity => PagedTimelineObjectList<CurvePoint, CurvePointSnapshotValue>.DefaultPageCapacity;
+
+    /// <summary>Unsorted, bounded-block candidates; does not allocate an all-match array.</summary>
+    public IEnumerable<CurvePointSnapshotValue> QuerySignalCandidates(long startTick, long endTick) =>
+        _values.EnumerateRangeValues(startTick, endTick, 0, 0);
 
     public IEnumerable<CurvePointSnapshotValue> QueryValues(long startTick, long endTick) =>
         _values.Query(startTick, endTick, 0, 0);

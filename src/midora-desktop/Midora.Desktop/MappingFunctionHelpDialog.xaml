@@ -32,7 +32,7 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <TextBlock FontFamily="{StaticResource Font.Mono}" Text="value"/>
-            <TextBlock Grid.Column="1" Style="{StaticResource Text.Caption}" Text="The value entering this Mapping Step." TextWrapping="Wrap"/>
+            <TextBlock Grid.Column="1" Style="{StaticResource Text.Caption}" Text="The data-domain value entering this Mapping Step (not the friendly editor value). CC10/71–78 remain MIDI 0–127 here. Example: MIDI 96 is shown as 32; value*0.5 returns MIDI 48 (shown as -16). Batch Edit =p0*0.5 instead halves display 32 to 16." TextWrapping="Wrap"/>
             <TextBlock Grid.Row="1" FontFamily="{StaticResource Font.Mono}" Text="context"/>
             <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource Text.Caption}" Text="The bounded MappingContextV2 snapshot. Type context. and press Ctrl+Space to inspect its legal fields." TextWrapping="Wrap"/>
             <TextBlock Grid.Row="2" FontFamily="{StaticResource Font.Mono}" Text="Math"/>

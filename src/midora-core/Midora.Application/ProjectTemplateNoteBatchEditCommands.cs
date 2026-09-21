@@ -32,6 +32,7 @@ public static partial class ProjectDomainEditCommands
 
             long earliest = notes.Min(item => item.Tick);
             long tickDelta = checked(newEarliestTick - earliest);
+            notes = notes.Where(item => (long)item.Number + pitchDelta is >= 0 and <= 127).ToArray();
             TemplateEventValue[] replacements = notes
                 .Select(item => CaptureTemplateEvent(item) with
                 {
@@ -45,12 +46,13 @@ public static partial class ProjectDomainEditCommands
             }
 
             long oldTemplateLength = instrument.TemplateLengthTicks;
-            long requiredBoundary = replacements.Max(value => checked(value.Tick + value.LengthTicks));
+            long requiredBoundary = replacements.Select(value => checked(value.Tick + value.LengthTicks))
+                .DefaultIfEmpty(oldTemplateLength).Max();
             long replacementTemplateLength = Math.Max(oldTemplateLength, requiredBoundary);
             int insertionIndex = voice.Events.Count;
             TemplateEvent[]? copies = null;
             return ResolveTargetedExactTemplateNoteCollisions(Prepared(
-                hasChanges: true,
+                hasChanges: replacements.Length != 0,
                 EventInstrumentChange(eventInstrumentId),
                 owner =>
                 {

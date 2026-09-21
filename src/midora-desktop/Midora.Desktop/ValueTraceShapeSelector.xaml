@@ -1,0 +1,18 @@
+<UserControl x:Class="Midora.Desktop.ValueTraceShapeSelector"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:ui="clr-namespace:Midora.Desktop.Presentation.Controls;assembly=Midora.Desktop.Presentation"
+ x:Name="Root" Focusable="False" IsEnabled="{Binding IsDrawTool}">
+ <UserControl.Resources>
+  <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+   <Setter Property="Width" Value="24"/><Setter Property="MinWidth" Value="0"/><Setter Property="Height" Value="24"/>
+   <Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="1,0"/>
+   <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+  </Style>
+ </UserControl.Resources>
+ <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="2,0,4,0">
+  <ToggleButton x:Name="Free" Tag="Free" Click="OnShapeClick" ToolTip="Free draw (Alt+drag forces the selected shape)"><ui:FluentIcon Width="16" Height="16" Data="{DynamicResource Fluent.Pen20Regular}"/></ToggleButton>
+  <ToggleButton x:Name="Line" Tag="Line" Click="OnShapeClick" ToolTip="Draw a straight line"><ui:FluentIcon Width="16" Height="16" Data="{DynamicResource Fluent.Line20Filled}"/></ToggleButton>
+  <ToggleButton x:Name="Horizontal" Tag="Horizontal" Click="OnShapeClick" ToolTip="Draw a horizontal line at the starting value"><ui:FluentIcon Width="16" Height="16" Data="{DynamicResource Fluent.Subtract20Filled}"/></ToggleButton>
+ </StackPanel>
+</UserControl>

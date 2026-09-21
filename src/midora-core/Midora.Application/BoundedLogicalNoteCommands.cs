@@ -21,6 +21,13 @@ public static partial class ProjectDomainEditCommands
             key => targetSource.EnumerateExactStart(key.Tick, key.Key), scope.Resources, scope.Token, static v => v.Id);
         try
         {
+            if (appended.Count == 0)
+            {
+                var unchanged = ProjectTimelineOwnerRootReplacement.PrepareLogicalSegmentRevisionGate(
+                    project, target.Track, target.Segment, TrackChange(target.Track.Id), targetStamp);
+                appended.Dispose();
+                return PublishBoundedNoteSelection(unchanged, selected.Select(v => v.Value.Id), [], static values => values, scope);
+            }
             var result = ProjectTimelineOwnerRootClone.CloneLogicalSegment(project, target.Segment, scope.Token);
             result.Notes.Clear();
             result.Notes.AdoptEditedSnapshot(project, targetSource, EmptyBoundedChanges<LogicalNoteSnapshotValue>(scope), appended, scope.Token);
@@ -37,6 +44,8 @@ public static partial class ProjectDomainEditCommands
             foreach (var selectedValue in selected)
             {
                 var value = selectedValue.Value;
+                scope.Token.ThrowIfCancellationRequested();
+                if ((long)value.Note + pitchDelta is < 0 or > 127) continue;
                 long tick = checked(value.StartTick + delta);
                 int pitch = checked(value.Note + pitchDelta);
                 ValidateLogicalNote(tick, value.LengthTicks, pitch, value.Velocity);
@@ -62,6 +71,13 @@ public static partial class ProjectDomainEditCommands
             key => source.EnumerateNoteExactStart(key.Tick, key.Key), scope.Resources, scope.Token, static v => v.Id);
         try
         {
+            if (appended.Count == 0)
+            {
+                var unchanged = ProjectTimelineOwnerRootReplacement.PrepareSubVoiceRevisionGate(
+                    project, instrument, voice, EventInstrumentChange(instrument.Id), sourceStamp);
+                appended.Dispose();
+                return PublishBoundedNoteSelection(unchanged, selected.Select(v => v.Value.Id), [], static values => values, scope);
+            }
             var result = ProjectTimelineOwnerRootClone.CloneSubVoice(project, voice, scope.Token);
             result.Events.Clear();
             result.Events.AdoptEditedSnapshot(project, source, EmptyBoundedChanges<TemplateEventSnapshotValue>(scope), appended, scope.Token);
@@ -79,6 +95,8 @@ public static partial class ProjectDomainEditCommands
             foreach (var selectedValue in selected)
             {
                 var value = selectedValue.Value;
+                scope.Token.ThrowIfCancellationRequested();
+                if ((long)value.Number + pitchDelta is < 0 or > 127) continue;
                 long tick = checked(value.Tick + delta);
                 int pitch = checked(value.Number + pitchDelta);
                 ValidateLogicalNote(tick, value.LengthTicks, pitch, value.Value);

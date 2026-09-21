@@ -19,7 +19,7 @@ public sealed class TimelineGenerationPresetStoreTests
         Assert.Equal(notes ? "NoteGenerationPresets" : "EventGenerationPresets", Directory.GetParent(saved.Path)!.Name);
         Assert.Equal(preset, Assert.Single(store.Load()).Preset);
         JsonObject json = JsonNode.Parse(File.ReadAllText(saved.Path))!.AsObject();
-        Assert.Equal(1, json["numericContractVersion"]!.GetValue<int>());
+        Assert.Equal(notes ? 1 : MidiEditingValueDomain.NumericContractVersion, json["numericContractVersion"]!.GetValue<int>());
         Assert.True(json["createFirstFromInitialValues"]!.GetValue<bool>());
         Assert.Equal(100, json["maximumCandidates"]!.GetValue<int>());
         Assert.Equal(2048, json["maximumRelativeStartTick"]!.GetValue<long>());

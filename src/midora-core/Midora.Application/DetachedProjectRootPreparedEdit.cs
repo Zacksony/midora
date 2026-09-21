@@ -7,7 +7,7 @@ namespace Midora.Application;
 /// the affected catalog roots. Intermediate edits never touch the live Project.
 /// </summary>
 internal sealed class DetachedProjectRootPreparedEdit : IPreparedProjectEdit,
-    IPreparedProjectEditPublicationGate, IPreparedTimelineSelectionEdit, IDisposable
+    IPreparedProjectEditPublicationGate, IPreparedTimelineSelectionEdit, IPreparedSegmentIdentityTransfers, IDisposable
 {
     private readonly MidoraProject _project;
     private MidoraProject? _draft;
@@ -33,6 +33,8 @@ internal sealed class DetachedProjectRootPreparedEdit : IPreparedProjectEdit,
         _oldNextId = project.NextStableId;
         _newNextId = draft.NextStableId;
         _intermediate = [.. intermediate];
+        SegmentIdentityTransfers = _intermediate.OfType<IPreparedSegmentIdentityTransfers>()
+            .SelectMany(static edit => edit.SegmentIdentityTransfers).ToArray();
         PreparedTimelineSelection[] selections = _intermediate
             .OfType<IPreparedTimelineSelectionEdit>().Where(static e => e.HasPreparedSelection)
             .Select(static e => e.PreparedSelection).ToArray();
@@ -87,6 +89,7 @@ internal sealed class DetachedProjectRootPreparedEdit : IPreparedProjectEdit,
 
     public bool HasChanges { get; }
     public ProjectChangeSet Changes { get; }
+    public IReadOnlyList<SegmentIdentityTransfer> SegmentIdentityTransfers { get; }
     private readonly PreparedTimelineSelection? _selection;
     private readonly List<IDisposable> _selectionResources = [];
     public bool HasPreparedSelection => _selection is not null;

@@ -214,7 +214,9 @@ public sealed class WorkspaceLifecycleTests
                 Assert.Equal(new GridLength(460), logicalWorkspace.ObjectList.ColumnWidth);
                 Assert.Equal(37, logicalWorkspace.ObjectList.FirstRow);
                 Assert.False(logicalWorkspace.IsPresentationSuspended);
-                Assert.Equal(2, CountWorkspaceSubscribers(session.PianoRollEditorSettings));
+                Assert.NotSame(logicalWorkspace.EditorSettings, midiWorkspace.EditorSettings);
+                Assert.Equal(1, CountWorkspaceSubscribers(logicalWorkspace.EditorSettings));
+                Assert.Equal(1, session.EditorStates.SubscriberCount);
                 WorkspaceViewModel diagnostics = session.OpenWorkspace(session.ProjectTree.Single(x => x.Kind == ProjectTreeNodeKind.Diagnostics));
                 session.CloseWorkspace(logicalWorkspace);
                 Assert.Null(typeof(DesktopSessionController).GetField("_diagnosticScopeWorkspace", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(session));
@@ -225,7 +227,7 @@ public sealed class WorkspaceLifecycleTests
                 }
                 session.ActiveWorkspace = logicalWorkspace;
                 Assert.NotSame(logicalWorkspace, session.ActiveWorkspace);
-                Assert.Equal(0, CountWorkspaceSubscribers(session.PianoRollEditorSettings));
+                Assert.Equal(0, session.EditorStates.SubscriberCount);
                 Assert.Equal(1, CountWorkspaceSubscribers(session.ArrangementEditorSettings));
                 Assert.Single(session.Workspaces);
                 Assert.Equal(historyCount, session.Document.History.Count);
@@ -234,9 +236,9 @@ public sealed class WorkspaceLifecycleTests
         await session.CloseProjectAsync();
         Assert.True(previousArrangement!.IsDisposed);
         Assert.Equal(0, CountWorkspaceSubscribers(session.ArrangementEditorSettings));
-        Assert.Equal(0, CountWorkspaceSubscribers(session.PianoRollEditorSettings));
+        Assert.Equal(0, session.EditorStates.SubscriberCount);
         Assert.Null(session.ArrangementEditorSettings.TimeSignatureMap);
-        Assert.Null(session.PianoRollEditorSettings.TimeSignatureMap);
+        Assert.True(session.EditorStates.IsDisposed);
     }
 
     private static int CountWorkspaceSubscribers(TimelineEditorSettings settings) =>

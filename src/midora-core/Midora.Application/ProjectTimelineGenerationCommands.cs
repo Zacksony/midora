@@ -130,7 +130,7 @@ public static partial class ProjectDomainEditCommands
             return PublishBoundedTemplatePoints(project, instrument, voice, stamp, plan, expectedId, nextId, static ids => ids);
             IEnumerable<TemplateEventSnapshotValue> Values()
             {
-                foreach (var value in GeneratePoints(options, program, value => NormalizeGeneratedInteger(value, minimum, maximum), generation))
+                foreach (var value in GeneratePoints(options, program, value => NormalizeGeneratedInteger(value, minimum + MidiEditingValueDomain.Offset(target), maximum + MidiEditingValueDomain.Offset(target)), generation))
                 {
                     var initial = new TemplateEventSnapshotValue(default, default, value.Tick, 0, 0, 0, 0, false, false, true);
                     // Bank and Pitch Bend Range have two scalar lane components
@@ -144,7 +144,7 @@ public static partial class ProjectDomainEditCommands
                         foreach (var old in source.EnumerateEventExactTick(value.Tick))
                             if (old.Kind == kind) initial = old with { Id = default };
                     }
-                    yield return AssignBoundedTemplateTarget(initial, target, checked((int)value.Value));
+                    yield return AssignBoundedTemplateTarget(initial, target, checked((int)value.Value - MidiEditingValueDomain.Offset(target)));
                 }
             }
         });
@@ -163,9 +163,10 @@ public static partial class ProjectDomainEditCommands
             IEnumerable<DirectMidiChannelEventValue> Values(long nextId)
             {
                 foreach (var point in GeneratePoints(options, program,
-                    value => NormalizeGeneratedInteger(value, 0, kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127), generation))
+                    value => NormalizeGeneratedInteger(value, MidiEditingValueDomain.Offset(kind, laneData1),
+                        (kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127) + MidiEditingValueDomain.Offset(kind, laneData1)), generation))
                 {
-                    int value = checked((int)point.Value);
+                    int value = checked((int)point.Value - MidiEditingValueDomain.Offset(kind, laneData1));
                     int first = kind switch
                     {
                         DirectMidiChannelEventKind.ProgramChange or DirectMidiChannelEventKind.ChannelPressure => value,

@@ -304,7 +304,10 @@ public sealed class OnionWorkspaceTests
         session.ActivateSubVoiceEditor(workspace, copy.Id);
         Assert.Equal(b.Id, Assert.Single(Assert.Single(workspace.OnionSnapshot!.Blocks)).Id);
         session.Undo(); session.Redo();
-        Assert.Equal(2, session.Persistence.Presentation.Current.SubVoiceOnionPresets.Count);
+        // B1: deleting the duplicate (including Undo of creation) releases its
+        // own presentation. Redo restores music, not the deleted view profile.
+        Assert.Single(session.Persistence.Presentation.Current.SubVoiceOnionPresets);
+        Assert.DoesNotContain(session.Persistence.Presentation.Current.SubVoiceOnionPresets, p => p.TargetSubVoiceId == copy.Id);
     }
     [Fact]
     public void RawProjectionUsesSourceExposureAndTargetContentOffsetAcrossTrackTypes()

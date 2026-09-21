@@ -1,11 +1,18 @@
 using System.Windows;
+using System.Windows.Data;
 using System.Windows.Input;
+using Midora.Desktop.Presentation.Controls;
 using Midora.Domain;
 
 namespace Midora.Desktop;
 
 public partial class MainWindow
 {
+    internal void BindEventLaneLines(TimelineSurface surface) =>
+        surface.SetBinding(TimelineSurface.ShowStepSignalProperty,
+            new Binding(nameof(DesktopSessionController.ShowEventLaneLines))
+            { Source = _session, Mode = BindingMode.OneWay });
+
     internal (MidoraId Owner, IReadOnlyList<LaneTabDescriptor> Descriptors)? GetLaneTabDescriptors(WorkspaceViewModel workspace)
     {
         if (_session.Project is not { } project || workspace.ObjectId is not { } owner) return null;

@@ -40,7 +40,8 @@ public static partial class ProjectDomainEditCommands
             {
                 ArgumentNullException.ThrowIfNull(program); ValidatePointBatchProgram(program);
                 var range = MidiEventTargetRange(target!.Value);
-                ValidateDirectRange(program, BatchEditField.PointValue, range.Minimum, range.Maximum);
+                int offset = MidiEditingValueDomain.Offset(target.Value);
+                ValidateDirectRange(program, BatchEditField.PointValue, range.Minimum + offset, range.Maximum + offset);
             }
             long expectedId = project.NextStableId, nextId = expectedId;
             using var plan = BoundedTemplatePointPlan.Transform(voice.Events.CreateQuerySnapshot(), ids,
@@ -66,12 +67,13 @@ public static partial class ProjectDomainEditCommands
                                 checked(GetBoundedTemplatePointValue(old, target.Value) + valueDelta));
                         if (operation == BoundedPointOperation.Batch)
                         {
-                            var calculated = program!.Evaluate(new(0, GetBoundedTemplatePointValue(old, target!.Value),
+                            int offset = MidiEditingValueDomain.Offset(target!.Value);
+                            var calculated = program!.Evaluate(new(0, GetBoundedTemplatePointValue(old, target.Value) + offset,
                                 0, 0, old.Tick, checked(old.Tick - left)), clock, BatchExpressionTimeout);
                             if (RoundTickOrDiscard(calculated.Tick) is not long tick) return null;
                             var (minimum, maximum) = MidiEventTargetRange(target.Value);
                             value = SetBoundedTemplatePointValue(old with { Tick = tick }, target.Value,
-                                checked((int)RoundAndClamp(calculated.PointValue, minimum, maximum)));
+                                checked((int)RoundAndClamp(calculated.PointValue, minimum + offset, maximum + offset) - offset));
                         }
                         return value;
                     };

@@ -88,6 +88,7 @@ public enum CompilationFailureStage
 
 public sealed class CompilationRequest
 {
+    public CompilationProgress? Progress { get; init; }
     public CompilationPurpose Purpose { get; init; } = CompilationPurpose.FullProject;
     public long StartTick { get; init; }
     public long? EndTick { get; init; }

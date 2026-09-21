@@ -106,6 +106,7 @@ public static partial class TimelineObjectListIntegrationTests
         var overlay = Assert.IsType<InstrumentChangeGestureVisual>(lane.FindName("GestureOverlay"));
         Assert.False(overlay.IsHitTestVisible);
         var selection = workspace.Selection.SharedIds;
+        VerifyInstrumentToolbarLayout(lane, workspace);
         var settings = lane.Settings!;
         bool snap = settings.SnapEnabled;
         TimelineToolMode tool = workspace is TimelineWorkspaceViewModel t ? t.ToolMode : ((InstrumentWorkspaceViewModel)workspace).ToolMode;
@@ -166,6 +167,7 @@ public static partial class TimelineObjectListIntegrationTests
         else ((InstrumentWorkspaceViewModel)workspace).TimelineStartTick = savedStart;
         settings.SnapEnabled = snap; SetTool(tool); Set(lane, "_hoverPoint", null);
         Assert.Same(selection, workspace.Selection.SharedIds);
+        VerifyInstrumentBlankSelectionMenu(content, workspace, lane);
         state.Show(LaneTabKey.Velocity); header.Refresh(); Layout(content);
         lane.CommandHost = null;
     }

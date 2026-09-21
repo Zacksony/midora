@@ -631,7 +631,9 @@ public sealed class DesktopSessionControllerTests
         Assert.False(type.IsEditable);
         Assert.Equal("EVENT TYPE", type.Label);
         Assert.True(controller.IsMixed);
-        Assert.True(eventValue.IsMixed);
+        // CC11 raw32 and CC74 raw96 now share the same editor display value.
+        Assert.False(eventValue.IsMixed);
+        Assert.Equal("32", eventValue.Value);
         Assert.DoesNotContain(properties.Fields, item => item.Label is "DATA 1" or "DATA 2");
 
         int historyCount = session.Document!.History.Count;

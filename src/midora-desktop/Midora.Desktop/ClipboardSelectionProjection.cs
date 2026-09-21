@@ -48,7 +48,8 @@ internal static class ClipboardSelectionProjection
                     if (kinds.DirectMidiEventKind is DirectMidiChannelEventKind kind)
                         source = new(WorkspaceTimelineSelectionKind.DirectMidiEventPoint,
                             target.OwnerId, DirectMidiEventKind: kind, DirectMidiData1: kinds.DirectMidiData1,
-                            PointMaximum: kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127);
+                            PointMinimum: MidiEditingValueDomain.Offset(kind, kinds.DirectMidiData1),
+                PointMaximum: (kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127) + MidiEditingValueDomain.Offset(kind, kinds.DirectMidiData1));
                     break;
                 }
                 case ProjectObjectClipboardKind.SubVoiceTimelineEvents:
@@ -63,7 +64,7 @@ internal static class ClipboardSelectionProjection
                             target.OwnerId, target.SecondaryOwnerId);
                         if (kinds.MidiTarget is MidiValueTarget midiTarget)
                         {
-                            (double minimum, double maximum) = InstrumentWorkspaceViewModel.MidiValueRange(midiTarget);
+                            (double minimum, double maximum) = InstrumentWorkspaceViewModel.MidiEditingRange(midiTarget);
                             source = new(WorkspaceTimelineSelectionKind.SubVoiceEventPoint,
                                 target.OwnerId, target.SecondaryOwnerId, midiTarget,
                                 PointMinimum: minimum, PointMaximum: maximum);

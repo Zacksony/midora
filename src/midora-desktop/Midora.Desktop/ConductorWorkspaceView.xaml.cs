@@ -6,6 +6,7 @@ namespace Midora.Desktop;
 public partial class ConductorWorkspaceView : UserControl
 {
     public ConductorWorkspaceView() => InitializeComponent();
+    private void OnShapeChosen(object? sender, EventArgs e) => TempoTimeline.Focus();
     public event EventHandler<string>? CommandRequested;
     internal bool HandlersAttached { get; set; }
     internal void ResetTempoView()

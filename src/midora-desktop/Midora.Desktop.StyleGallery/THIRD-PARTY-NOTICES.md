@@ -2,12 +2,43 @@
 
 ## Fluent System Icons
 
-This style gallery contains WPF Geometry conversions of selected 20 px SVG paths from
+This style gallery contains WPF Geometry conversions of selected 16 px and 20 px SVG paths from
 Microsoft's Fluent System Icons repository at revision
 `0a92ff83f03fa5319edaf0e2b2a09e460b69091a`.
 
 Assets used:
 
+- `ic_fluent_pin_16_regular.svg`
+- `ic_fluent_arrow_export_rtl_16_regular.svg`
+- `ic_fluent_arrow_export_ltr_16_regular.svg`
+- `ic_fluent_copy_16_regular.svg`
+- `ic_fluent_cut_16_regular.svg`
+- `ic_fluent_delete_16_regular.svg`
+- `ic_fluent_flip_horizontal_16_regular.svg`
+- `ic_fluent_flip_vertical_16_regular.svg`
+- `ic_fluent_scale_fit_16_regular.svg`
+- `ic_fluent_document_settings_16_regular.svg`
+- `ic_fluent_animal_paw_print_16_regular.svg`
+- `ic_fluent_split_vertical_16_regular.svg`
+- `ic_fluent_square_dovetail_joint_16_regular.svg`
+- `ic_fluent_table_move_left_16_regular.svg`
+- `ic_fluent_select_object_skew_dismiss_20_regular.svg`
+- `ic_fluent_pin_20_regular.svg`
+- `ic_fluent_arrow_move_20_regular.svg`
+- `ic_fluent_animal_paw_print_20_regular.svg`
+- `ic_fluent_arrow_maximize_vertical_20_regular.svg`
+- `ic_fluent_copy_20_regular.svg`
+- `ic_fluent_cut_20_regular.svg`
+- `ic_fluent_delete_20_regular.svg`
+- `ic_fluent_document_settings_20_regular.svg`
+- `ic_fluent_flip_horizontal_20_regular.svg`
+- `ic_fluent_flip_vertical_20_regular.svg`
+- `ic_fluent_scale_fit_20_regular.svg`
+- `ic_fluent_square_dovetail_joint_20_regular.svg`
+- `ic_fluent_table_move_left_20_regular.svg`
+- `ic_fluent_settings_cog_multiple_20_regular.svg`
+- `ic_fluent_line_20_filled.svg`
+- `ic_fluent_subtract_20_filled.svg`
 - `ic_fluent_layer_diagonal_20_regular.svg`
 - `ic_fluent_add_20_regular.svg`
 - `ic_fluent_zoom_in_20_regular.svg`

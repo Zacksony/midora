@@ -13,7 +13,7 @@ public sealed class GeneratorExpressionProgramTests
     public void GeneratorProfilesAreDistinctAndDoNotExpandBatchVariables()
     {
         Assert.Equal("midora.tool.generate-note/v1", NumericExpressionProfiles.GenerateNote.Id);
-        Assert.Equal("midora.tool.generate-event/v1", NumericExpressionProfiles.GenerateEvent.Id);
+        Assert.Equal("midora.tool.generate-event/v2", NumericExpressionProfiles.GenerateEvent.Id);
         Assert.Equal(10, NumericExpressionProfiles.GenerateNote.VariableCount);
         Assert.Equal(6, NumericExpressionProfiles.GenerateEvent.VariableCount);
         Assert.Throws<ArgumentException>(() => BatchEditExpressionProgram.Compile(Note(t: "=i")));

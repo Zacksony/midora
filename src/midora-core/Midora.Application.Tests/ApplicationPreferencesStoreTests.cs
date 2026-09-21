@@ -8,6 +8,27 @@ namespace Midora.Application.Tests;
 public sealed class ApplicationPreferencesStoreTests
 {
     [Fact]
+    public void EventLaneLinesRoundTripAndOldPreferencesDefaultToEnabled()
+    {
+        using TemporaryDirectory directory = new();
+        string path = Path.Combine(directory.Path, "preferences.json");
+        var store = new ApplicationPreferencesStore(path);
+        Assert.True(AppearancePreferences.Default.ShowEventLaneLines);
+        var preferences = ApplicationPreferences.Default with
+        { Appearance = AppearancePreferences.Default with { ShowEventLaneLines = false } };
+        Assert.True(store.Save(preferences).Succeeded);
+        var loaded = store.Load();
+        Assert.Null(loaded.Notice); Assert.False(loaded.Preferences.Appearance.ShowEventLaneLines);
+        Assert.Equal(preferences.Playback, loaded.Preferences.Playback);
+        Assert.Equal(preferences.RealtimeAudio, loaded.Preferences.RealtimeAudio);
+        var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        Assert.True(json.Remove("showEventLaneLines"));
+        File.WriteAllText(path, json.ToJsonString());
+        loaded = store.Load();
+        Assert.Null(loaded.Notice); Assert.True(loaded.Preferences.Appearance.ShowEventLaneLines);
+    }
+
+    [Fact]
     public void InstrumentAuditionRoundTripsIndependentlyAndOldPreferencesUseDefaults()
     {
         using TemporaryDirectory directory = new();

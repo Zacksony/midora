@@ -5,6 +5,19 @@ namespace Midora.Compiler.Tests;
 
 public sealed class MappingEngineTests
 {
+    [Fact]
+    public void FriendlyCcEditingDoesNotChangeMappingCurrentValueOrContextDomain()
+    {
+        using var project = new MidoraProject(480);
+        var step = new ValueMappingStep(project)
+        { Source = MappingSource.Constant, Constant = .5, Operation = MappingOperation.Multiply };
+        Assert.Equal(48, Apply(step, 96, Context() with { TargetOriginalValue = 96 }));
+        var function = new CSharpMappingFunction(project) { Name = "Half", Body = "value * 0.5" };
+        using MappingExpressionCompiler compiler = new();
+        var context = Context() with { CurrentValue = 96, TargetOriginalValue = 96 };
+        Assert.Equal(48, compiler.GetOrCompile(function)(96, in context));
+    }
+
     [Theory]
     [InlineData(MappingOperation.Override, 4)]
     [InlineData(MappingOperation.Add, 14)]

@@ -12,6 +12,49 @@ public readonly record struct TimelineGridLine(long Tick, TimelineGridLineKind K
 
 public static class TimelineGridPresentation
 {
+    /// <summary>Labels use a global bar ordinal phase, never the viewport's left edge.</summary>
+    public static void BuildBarRulerLines(long startTick, long endTick,
+        ProjectTimeSignatureMap map, List<TimelineGridLine> destination,
+        long minimumTickSpacing, long projectTickOffset = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(startTick);
+        ArgumentOutOfRangeException.ThrowIfLessThan(minimumTickSpacing, 1);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(destination);
+        destination.Clear();
+        Int128 first = Int128.Max(0, (Int128)startTick + projectTickOffset);
+        Int128 end = Int128.Min((Int128)long.MaxValue + 1, (Int128)endTick + projectTickOffset);
+        if (endTick <= startTick || end <= first) return;
+        ulong lastBar = map.GetBarBounds((long)(end - 1)).Bar;
+        // A map-wide stride remains stable while panning across a time-signature
+        // boundary. Powers of two also preserve existing labels while zooming out.
+        ulong wanted = (ulong)(1 + (minimumTickSpacing - 1) / map.MinimumFullBarLengthTicks);
+        ulong stride = 1;
+        while (stride < wanted) stride <<= 1;
+        // Abrupt signature changes can create arbitrarily short partial bars.
+        // Retain at most the first eligible ordinal in each globally anchored
+        // tick bucket. This bounds work by visible label slots without making
+        // one short bar suppress labels throughout the entire project.
+        Int128 bucketStart = first / minimumTickSpacing * minimumTickSpacing;
+        while (bucketStart < end)
+        {
+            ulong firstBar = map.GetBarBounds((long)bucketStart).Bar;
+            UInt128 ordinal = ((UInt128)firstBar - 1 + stride - 1) / stride * stride + 1;
+            if (ordinal > lastBar) break;
+            long projectTick = map.GetTick(new((ulong)ordinal, 1, 0));
+            if (projectTick < bucketStart)
+            {
+                ordinal += stride;
+                if (ordinal > lastBar) break;
+                projectTick = map.GetTick(new((ulong)ordinal, 1, 0));
+            }
+            Int128 local = (Int128)projectTick - projectTickOffset;
+            if (local >= startTick && local < endTick)
+                destination.Add(new((long)local, TimelineGridLineKind.Bar));
+            bucketStart = ((Int128)projectTick / minimumTickSpacing + 1) * minimumTickSpacing;
+        }
+    }
+
     public static void BuildArrangementBarGridLines(
         long startTick,
         long endTick,

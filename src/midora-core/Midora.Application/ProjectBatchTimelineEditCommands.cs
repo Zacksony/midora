@@ -502,6 +502,7 @@ public static partial class ProjectDomainEditCommands
             long earliest = selected.Min(value => value.Note.StartTick);
             long delta = checked(newEarliestStartTick - earliest);
             LogicalNoteValue[] snapshots = selected
+                .Where(value => (long)value.Note.Note + pitchDelta is >= 0 and <= 127)
                 .Select(value => Snapshot(value.Note) with
                 {
                     StartTick = checked(value.Note.StartTick + delta),
@@ -512,7 +513,7 @@ public static partial class ProjectDomainEditCommands
             LogicalNote[]? copies = null;
             int insertionIndex = target.Segment.Notes.Count;
             return ResolveTargetedExactLogicalNoteCollisions(Prepared(
-                hasChanges: true,
+                hasChanges: snapshots.Length != 0,
                 TrackChange(source.Track.Id, target.Track.Id),
                 owner =>
                 {

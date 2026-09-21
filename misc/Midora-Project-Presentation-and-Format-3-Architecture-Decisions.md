@@ -2,6 +2,8 @@
 
 状态：Accepted and implemented in stage 1（2026-08-31）；Onion UI 尚未实现
 
+2026-09-18 B1 补充：以下 Format 3 初始决定保留历史语境；当前 writer 为 Format 4、Onion presentation 为 schema 2。按已确认 D-STATE03.d，删除目标自身立即清除其自身配置；仍存活目标的 dormant 来源 ID 则保留至会话结束/显式修改，以支持音乐 Undo 恢复来源。B1 新增的 Track/Segment/SubVoice 编辑器状态只在会话中记忆，不扩展现行文件 schema。实现与资源门见 [B1 记录](Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
+
 上位规范：SRS §3.11、§16.7.5、§16.24、§16.33、INV-088、INV-090～092。本文是实现决策；冲突时以 SRS 为准。
 
 ## ADR-FORMAT3-001：只增加 presentation entry

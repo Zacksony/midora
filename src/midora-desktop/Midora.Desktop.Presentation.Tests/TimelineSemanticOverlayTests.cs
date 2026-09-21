@@ -107,7 +107,8 @@ public sealed class TimelineSemanticOverlayTests
             Assert.False(overlay.IsHitTestVisible);
             Assert.False(overlay.Focusable);
             foreach (DependencyProperty property in new[]
-                { TimelineSemanticOverlay.PreRollTicksProperty, TimelineSemanticOverlay.LoopStartTickProperty, TimelineSemanticOverlay.LoopEndTickProperty })
+                { TimelineSemanticOverlay.PreRollTicksProperty, TimelineSemanticOverlay.LoopStartTickProperty,
+                    TimelineSemanticOverlay.LoopEndTickProperty, TimelineSemanticOverlay.TemplateEndTickProperty })
             {
                 var metadata = Assert.IsType<FrameworkPropertyMetadata>(property.GetMetadata(typeof(TimelineSemanticOverlay)));
                 Assert.True(metadata.AffectsRender);
@@ -167,16 +168,17 @@ public sealed class TimelineSemanticOverlayTests
     [InlineData(100, 10, 40, 80)]
     [InlineData(1000, 20, 15, 21)]
     [InlineData(10000, 100, 100, 101)]
-    public void PreRollTextIsPurpleWithoutRecoloringSeparateOrMergedLoopLabels(
+    public void TemplateAndPreRollKeepTheirColorsWithoutRecoloringSeparateOrMergedLoopLabels(
         long span, long preRoll, long loopStart, long loopEnd)
     {
         OnSta(() =>
         {
             TimelineSemanticOverlay overlay = new()
-            { TickSpan = span, PreRollTicks = preRoll, LoopStartTick = loopStart, LoopEndTick = loopEnd };
+            { TickSpan = span, PreRollTicks = preRoll, LoopStartTick = loopStart, LoopEndTick = loopEnd, TemplateEndTick = loopEnd };
             SolidColorBrush purple = new(Color.FromRgb(199, 138, 255));
             overlay.Resources["Brush.Timeline.PreRoll"] = purple;
             overlay.Resources["Brush.Warning"] = Brushes.Yellow;
+            overlay.Resources["Brush.Info"] = Brushes.CornflowerBlue;
             overlay.Measure(new Size(852, 124));
             overlay.Arrange(new Rect(0, 0, 852, 124));
             RenderTargetBitmap bitmap = new(852, 124, 96, 96, PixelFormats.Pbgra32);
@@ -184,10 +186,12 @@ public sealed class TimelineSemanticOverlayTests
 
             GlyphRunDrawing[] runs = Glyphs(VisualTreeHelper.GetDrawing(overlay)).ToArray();
             Assert.Equal($"Pre-Roll {preRoll}", Text(purple.Color));
+            Assert.Equal($"Template {loopEnd}", Text(Colors.CornflowerBlue));
             string loopText = Text(Colors.Yellow);
             Assert.Contains($"Start {loopStart}", loopText);
             Assert.Contains($"End {loopEnd}", loopText);
             Assert.DoesNotContain("Pre-Roll", loopText);
+            Assert.DoesNotContain("Template", loopText);
 
             string Text(Color color) => string.Concat(runs
                 .Where(run => run.ForegroundBrush is SolidColorBrush brush && brush.Color == color)
@@ -202,6 +206,42 @@ public sealed class TimelineSemanticOverlayTests
                     foreach (GlyphRunDrawing nested in Glyphs(child)) yield return nested;
         }
     }
+
+    [Fact]
+    public void TemplateCaptionTracksValueAndViewportWithoutAddingInputOrLowerRulerLabels() => OnSta(() =>
+    {
+        TimelineSemanticOverlay overlay = new() { TickSpan = 192, TemplateEndTick = 192 };
+        overlay.Resources["Brush.Info"] = Brushes.CornflowerBlue;
+        overlay.Measure(new Size(852, 124)); overlay.Arrange(new Rect(0, 0, 852, 124));
+        Assert.Equal(852, overlay.GetLayout(852, 124, 1, 1).TemplateEndX);
+        AssertCaption("Template 192"); // The cap is still visible at the exact right viewport edge.
+        overlay.TemplateEndTick = 96;
+        AssertCaption("Template 96");
+        overlay.TemplateEndTick = 193;
+        AssertCaption("");
+        overlay.TemplateEndTick = 192; overlay.StartTick = 193;
+        AssertCaption("");
+        overlay.StartTick = 0; overlay.ShowRulerLabels = false;
+        AssertCaption("");
+        Assert.False(overlay.IsHitTestVisible);
+
+        void AssertCaption(string expected)
+        {
+            overlay.UpdateLayout();
+            var bitmap = new RenderTargetBitmap(852, 124, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(overlay);
+            Assert.Equal(expected, string.Concat(Glyphs(VisualTreeHelper.GetDrawing(overlay))
+                .Where(run => run.ForegroundBrush is SolidColorBrush brush && brush.Color == Colors.CornflowerBlue)
+                .Select(run => new string(run.GlyphRun.Characters.ToArray()))));
+        }
+        static IEnumerable<GlyphRunDrawing> Glyphs(Drawing drawing)
+        {
+            if (drawing is GlyphRunDrawing glyph) yield return glyph;
+            if (drawing is DrawingGroup group)
+                foreach (Drawing child in group.Children)
+                    foreach (GlyphRunDrawing nested in Glyphs(child)) yield return nested;
+        }
+    });
 
     private static void OnSta(Action action)
     {

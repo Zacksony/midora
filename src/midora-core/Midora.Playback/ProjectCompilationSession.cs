@@ -45,6 +45,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
     private long _playbackRangeCompilationCount;
     private Task? _compileWorker;
     private CancellationTokenSource? _activeCompilationCancellation;
+    private CompilationProgress? _activeCompilationProgress;
     private TaskCompletionSource<bool> _compilationStateChanged = CreateStatePulse();
     private ProjectChangeSet _pendingChanges = new();
     private ProjectCompilationState _compilationState = ProjectCompilationState.NotCompiled;
@@ -184,6 +185,10 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
         }
     }
     public CompilerRunTelemetry LastCompilationTelemetry => _compiler.LastTelemetry;
+    public CompilationProgressSnapshot? CurrentCompilationProgress
+    {
+        get { lock (_sync) return !_disposed && _compilationState == ProjectCompilationState.Compiling ? _activeCompilationProgress?.Current : null; }
+    }
     public string? DiagnosticCapacityFailureMessage
     {
         get
@@ -612,6 +617,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                 ProjectChangeSet changes;
                 bool forceFullRecovery;
                 CancellationTokenSource compilationCancellation;
+                CompilationProgress progress;
                 lock (_sync)
                 {
                     if (_disposed)
@@ -636,6 +642,8 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                         : CloneChanges(_pendingChanges);
                     compilationCancellation = CancellationTokenSource.CreateLinkedTokenSource(disposeToken);
                     _activeCompilationCancellation = compilationCancellation;
+                    progress = new();
+                    _activeCompilationProgress = progress;
                     SetCompilationStateLocked(ProjectCompilationState.Compiling);
                 }
                 CompilationChanged?.Invoke(this, EventArgs.Empty);
@@ -673,17 +681,22 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
                     result = forceFullRecovery
                         ? _compiler.CompileFull(
                             compilationProject,
+                            new CompilationRequest { Progress = progress },
                             cancellationToken: compilationCancellation.Token)
                         : _compiler.CompileIncremental(
                             compilationProject,
                             changes,
+                            new CompilationRequest { Progress = progress },
                             cancellationToken: compilationCancellation.Token);
                     // Prepare compact Logical audio descriptors while still on the compile
                     // worker, outside UI/project locks. Identical playback views share this
                     // result-owned shared cache; first Play does not rescan a distant Logical suffix.
                     if (result.IsConsumable && result.HasPagedLogicalEvents)
+                    {
+                        progress.Report(CompilationPhase.PreparingAudio);
                         CanonicalAudioUnitProjection.Create(result,
                             cancellationToken: compilationCancellation.Token);
+                    }
                     // The mirror revision becomes observable to later attempts only
                     // after the compiler transaction has also completed. A failed
                     // or canceled candidate is never published here.
@@ -785,6 +798,7 @@ public sealed class ProjectCompilationSession : IDisposable, IRealtimePlaybackCa
     private void SetCompilationStateLocked(ProjectCompilationState state)
     {
         _compilationState = state;
+        if (state != ProjectCompilationState.Compiling) _activeCompilationProgress = null;
         TaskCompletionSource<bool> previous = _compilationStateChanged;
         _compilationStateChanged = CreateStatePulse();
         previous.TrySetResult(true);

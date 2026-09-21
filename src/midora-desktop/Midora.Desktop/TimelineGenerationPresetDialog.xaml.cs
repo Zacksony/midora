@@ -41,6 +41,8 @@ public partial class TimelineGenerationPresetDialog : Window
         DeleteButton.IsEnabled = ApplyButton.IsEnabled = hasSelection;
         PreviewText.Text = PresetList.SelectedItem is TimelineGenerationPresetInfo selected
             ? selected.Preview : Presets.Count == 0 ? "No presets are stored for this generation tool." : "Select a preset to preview it.";
+        if (_store.OmittedPresetCount != 0)
+            PreviewText.Text += $"\n\n{_store.OmittedPresetCount} obsolete, invalid or unavailable preset file(s) were omitted and left unchanged. Event presets now use the CC editor display domain (numeric contract 2).";
     }
     private void OnApplyClick(object sender, RoutedEventArgs e)
     {

@@ -330,19 +330,19 @@ public partial class MainWindow
     }
 
     private async Task PopulateObjectListMenuAsync(ContextMenu menu, WorkspaceViewModel workspace,
-        TimelineObjectListRow? hitRow = null)
+        TimelineObjectListRow? hitRow = null, bool requireOpen = true, CancellationToken cancellationToken = default)
     {
         long revision = workspace.Selection.Revision;
         long documentRevision = _session.Document?.PublicationRevision ?? -1;
         menu.Items.Clear();
         menu.Items.Add(new MenuItem { Header = "Reading selection…", IsEnabled = false });
-        using CancellationTokenSource cancellation = new();
+        using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         RoutedEventHandler closed = (_, _) => cancellation.Cancel();
         menu.Closed += closed;
         try
         {
             var selection = await ReadObjectListSelectionAsync(workspace, cancellation.Token);
-            if (!menu.IsOpen || selection is null || !Current()) return;
+            if (requireOpen && !menu.IsOpen || selection is null || !Current()) return;
             menu.Items.Clear();
             bool canEdit = _session.CanEditProject;
             if (selection.InstrumentMembers.Count != 0)
@@ -465,6 +465,7 @@ public partial class MainWindow
             void Add(ItemCollection items, string text, Action action, bool enabled = true, string? gesture = null)
             {
                 MenuItem item = new() { Header = text, IsEnabled = enabled, InputGestureText = gesture ?? "" };
+                SetTimelineCommandIcon(item);
                 item.Click += (_, _) =>
                 {
                     if (!Current()) return;

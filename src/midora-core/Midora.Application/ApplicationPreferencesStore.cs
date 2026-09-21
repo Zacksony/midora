@@ -114,7 +114,10 @@ public sealed class ApplicationPreferencesStore
                     dto.LimiterEnabled ?? PlaybackPreferences.Default.LimiterEnabled,
                     ParseStopCursorBehavior(dto.StopCursorBehavior)),
                 Appearance = new AppearancePreferences(
-                    dto.Language ?? AppearancePreferences.Default.Language),
+                    dto.Language ?? AppearancePreferences.Default.Language)
+                {
+                    ShowEventLaneLines = dto.ShowEventLaneLines ?? AppearancePreferences.Default.ShowEventLaneLines
+                },
                 InstrumentAudition = dto.InstrumentAudition ?? InstrumentAuditionPreferences.Default
             };
             preferences.Validate();
@@ -169,6 +172,7 @@ public sealed class ApplicationPreferencesStore
                 LimiterEnabled = preferences.Playback.LimiterEnabled,
                 StopCursorBehavior = preferences.Playback.StopCursorBehavior.ToString(),
                 Language = preferences.Appearance.Language,
+                ShowEventLaneLines = preferences.Appearance.ShowEventLaneLines,
                 InstrumentAudition = preferences.InstrumentAudition,
                 SoundFonts = preferences.SoundFonts
                     .Select(value => new ApplicationSoundFontPreferenceJsonV1
@@ -328,6 +332,9 @@ public sealed class ApplicationPreferencesStore
 
 internal sealed class ApplicationPreferencesJsonV1
 {
+    [JsonPropertyOrder(21)]
+    public bool? ShowEventLaneLines { get; set; }
+
     [JsonPropertyOrder(20)]
     public InstrumentAuditionPreferences? InstrumentAudition { get; set; }
 

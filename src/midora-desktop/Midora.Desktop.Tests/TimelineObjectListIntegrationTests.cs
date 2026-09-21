@@ -25,6 +25,7 @@ namespace Midora.Desktop.Tests;
 /// </summary>
 public static partial class TimelineObjectListIntegrationTests
 {
+    internal static string CurrentTestStage = "not started";
     public static void VerifyActualMainWindowTemplatesAndHandlers()
     {
         SynchronizationContext? previous = SynchronizationContext.Current;
@@ -89,6 +90,9 @@ public static partial class TimelineObjectListIntegrationTests
             Assert.Empty(session.Document!.History);
             Assert.False(session.Document.IsModified);
             VerifyBlankPreRollInput(window, session, content, instrument);
+            VerifyTemplateMarkersAndCompileFeedback(window, session, content, instrument);
+            VerifyCopyPitchDesktopAdapters(window, session, content);
+            VerifyB1Restoration(window, session, content);
         }
         finally
         {
@@ -110,8 +114,10 @@ public static partial class TimelineObjectListIntegrationTests
     private static void VerifyWorkspace(MainWindow window, DesktopSessionController session,
         FrameworkElement content, WorkspaceViewModel workspace, TimelineObjectListOwnerKind expectedKind)
     {
+        CurrentTestStage = "workspace " + expectedKind;
         Layout(content);
         VerifyLaneHeader(window, content, workspace, expectedKind);
+        VerifyA3ShapeBindings(content, workspace);
         TimelineSurface piano = Descendants<TimelineSurface>(content).Single(surface => surface.IsVisible
             && ReferenceEquals(surface.DataContext, workspace) && surface.SurfaceMode == TimelineSurfaceMode.PianoRoll);
         Assert.Equal(expectedKind != TimelineObjectListOwnerKind.SubVoice, piano.IsTimeRangeSelectionEnabled);
@@ -150,6 +156,7 @@ public static partial class TimelineObjectListIntegrationTests
         Assert.Same(workspace.SelectionSnapshot, pane.Selection);
         Select(2, 2, System.Windows.Input.ModifierKeys.Control, rows[2]);
         Assert.True(workspace.Selection.IdSet.SetEquals([rows[1].Id, rows[2].Id]));
+        VerifyA3Commands(window, session, content, workspace, piano, mixed: false);
         Select(1, 1, System.Windows.Input.ModifierKeys.None, rows[1]);
         Assert.Equal([rows[1].Id], workspace.Selection.Ids);
         Select(2, 2, System.Windows.Input.ModifierKeys.Control, rows[2]);
@@ -157,6 +164,7 @@ public static partial class TimelineObjectListIntegrationTests
         Assert.Equal([rows[1].Id], workspace.Selection.Ids);
         Select(0, 2, System.Windows.Input.ModifierKeys.Shift, rows[2]);
         Assert.True(workspace.Selection.IdSet.SetEquals(rows.Take(3).Select(row => row.Id)));
+        VerifyA3Commands(window, session, content, workspace, piano, mixed: true);
 
         var mixedTask = (Task<TimelineObjectSelection?>)Invoke(window, "ReadObjectListSelectionAsync", workspace, CancellationToken.None)!;
         var mixed = Assert.IsType<TimelineObjectSelection>(Complete(mixedTask));

@@ -34,6 +34,7 @@
           <StackPanel VerticalAlignment="Center" Orientation="Horizontal"><TextBlock Text="TEMPO" Style="{DynamicResource Text.Overline}" VerticalAlignment="Center"/><TextBlock Margin="10,0,0,0" Text="BPM · discrete states" Style="{DynamicResource Text.Caption}" VerticalAlignment="Center"/></StackPanel>
           <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" VerticalAlignment="Center">
             <TextBlock Text="{Binding PointerPositionText, ElementName=TempoTimeline}" Style="{DynamicResource Text.Mono}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+            <local:ValueTraceShapeSelector Shape="{Binding ValueTraceShape, Mode=TwoWay}" ShapeChosen="OnShapeChosen"/>
             <Button Content="Fit" Height="23" Padding="8,0" ToolTip="Fit the BPM axis to visible Tempo states" Click="OnFitClick"/>
             <Button x:Name="ResetTempoViewButton" Content="Reset" Height="23" Margin="4,0,0,0" Padding="8,0" ToolTip="Reset the BPM axis to 0–240; keep horizontal position and zoom" Click="OnResetTempoViewClick"/>
             <Button Content="Axis…" Height="23" Margin="4,0,0,0" Padding="8,0" ToolTip="Set the displayed BPM range" Click="OnAxisClick"/>
@@ -46,7 +47,7 @@
             LaneHeaderWidthOverride="{x:Static ui:TimelineSurface.ConductorEditorLaneHeaderWidth}"
             Snapshot="{Binding ConductorTempoSnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}"
             StartTick="{Binding StartTick, Mode=TwoWay}" TickSpan="{Binding TickSpan, Mode=TwoWay}" FirstLane="0" LaneHeight="160"
-            ToolMode="{Binding ToolMode}" GridVisible="{Binding GridVisible}" GridStepTicks="{Binding GridStepTicks}"
+            ToolMode="{Binding ToolMode}" ValueTraceShape="{Binding ValueTraceShape}" GridVisible="{Binding GridVisible}" GridStepTicks="{Binding GridStepTicks}"
             OperationStepTicks="{Binding OperationStepTicks}" OperationUsesBars="{Binding EditorSettings.EffectiveOperationUsesBars}"
             DisplayGridUsesBars="True" TimeSignatureMap="{Binding EditorSettings.TimeSignatureMap}"
             ValueAxisMinimum="{Binding TempoAxisMinimum}" ValueAxisMaximum="{Binding TempoAxisMaximum}" ValueAxisIntegral="False"

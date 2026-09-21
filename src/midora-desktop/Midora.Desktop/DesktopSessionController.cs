@@ -214,6 +214,53 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         : Persistence?.CurrentProjectPath is null
             ? Document!.IsModified ? "Modified · Unsaved" : "Unsaved"
             : Document!.IsModified ? "Modified" : "Saved";
+    private long _nextCompilationProgressRefresh;
+    private string _compileButtonText = "Compile";
+    private bool _isCompiling;
+    public string CompileButtonText => _compileButtonText;
+    public bool IsCompiling => _isCompiling;
+    public void RefreshCompilationProgress(bool force = false)
+    {
+        long now = Environment.TickCount64;
+        if (!force && now < _nextCompilationProgressRefresh) return;
+        _nextCompilationProgressRefresh = now + 100;
+        CompilationProgressSnapshot? progress = _context?.Compilation.CurrentCompilationProgress;
+        if (_isCompiling != (progress is not null))
+        {
+            _isCompiling = progress is not null;
+            Raise(nameof(IsCompiling));
+        }
+        string text = FormatCompilationProgress(progress);
+        if (_compileButtonText == text) return;
+        _compileButtonText = text;
+        Raise(nameof(CompileButtonText));
+    }
+
+    internal static string FormatCompilationProgress(CompilationProgressSnapshot? progress)
+    {
+        if (progress is null) return "Compile";
+        string phase = progress.Phase switch
+        {
+            CompilationPhase.PreparingSnapshot => "Snapshot",
+            CompilationPhase.Validating => "Validating",
+            CompilationPhase.FreezingConductor => "Conductor",
+            CompilationPhase.LogicalTracks => "Logical tracks",
+            CompilationPhase.OverlapPolicies => "Overlap policies",
+            CompilationPhase.MidiRoots => "MIDI roots",
+            CompilationPhase.MidiMetadata => "MIDI metadata",
+            CompilationPhase.CheckingOverlaps => "Checking overlaps",
+            CompilationPhase.AllocatingChannels => "Allocating channels",
+            CompilationPhase.LogicalInstances => "Logical instances",
+            CompilationPhase.SortingLogicalEvents => "Sorting events",
+            CompilationPhase.ApplyingRange => "Applying range",
+            CompilationPhase.PublishingMidi => "MIDI projection",
+            CompilationPhase.Fingerprinting => "Fingerprint",
+            CompilationPhase.PreparingAudio => "Audio projection",
+            _ => "Working"
+        };
+        return progress.Percent is int percent ? $"Compile · {phase} {percent}%" : $"Compile · {phase}";
+    }
+
     public string CompileState => _context is null
         ? "Not Compiled"
         : _context.Compilation.CompilationState switch
@@ -347,7 +394,6 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
     public ObservableCollection<WorkspaceViewModel> Workspaces { get; } = [];
     public IReadOnlyList<DiagnosticRow> CompilerDiagnostics { get; private set; } = VirtualDiagnosticRows.Empty;
     public TimelineEditorSettings ArrangementEditorSettings { get; } = new();
-    public TimelineEditorSettings PianoRollEditorSettings { get; } = new();
     public string? StatusMessage
     {
         get => _statusMessage;
@@ -1631,6 +1677,8 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         Raise(nameof(CanUseContextMenus));
     }
 
+    public bool ShowEventLaneLines => _applicationPreferences.Appearance.ShowEventLaneLines;
+
     public bool RequiresAudioWorkerRebuild(ApplicationPreferences preferences)
     {
         ArgumentNullException.ThrowIfNull(preferences);
@@ -1656,6 +1704,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         }
 
         _applicationPreferences = preferences;
+        Raise(nameof(ShowEventLaneLines));
         if (!rebuildAudioWorker)
         {
             _context?.Playback?.ConfigurePlaybackPreferences(
@@ -2209,8 +2258,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             () => new TimelineWorkspaceViewModel(
                 WorkspaceKey.ForObject(WorkspaceKind.SegmentEditor, segmentId),
                 "Segment",
-                TimelineWorkspaceMode.Segment,
-                PianoRollEditorSettings));
+                TimelineWorkspaceMode.Segment));
         CenterSegmentEditorOnArrangementCursor(workspace, segmentId);
         ActiveWorkspace = workspace;
         return workspace;
@@ -2432,6 +2480,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         // Workspace must not skip the remaining tabs or the Project context.
         foreach (WorkspaceViewModel workspace in Workspaces.ToArray())
             Cleanup(workspace.Dispose);
+        Cleanup(EditorStates.Dispose);
         Cleanup(Workspaces.Clear);
         _backNavigation.Clear();
         _forwardNavigation.Clear();
@@ -2455,7 +2504,6 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         _revision = 0;
         _timeSignatureMap = null;
         Cleanup(() => ArrangementEditorSettings.Reset(arrangement: true));
-        Cleanup(() => PianoRollEditorSettings.Reset(arrangement: false));
         _displayCurrentTick = 0;
         _orderedTempoChanges = [];
         _activeTempoIndex = -1;
@@ -2517,6 +2565,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
                 _soloSharedGroupIds.Clear();
                 ProjectSegmentIndex.Warm(next.Compilation.Project);
                 _displayCurrentTick = next.Playback?.CurrentTick ?? 0;
+                StartEditorStateSession(next);
                 Subscribe(next);
             }
             finally
@@ -2537,9 +2586,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             _revision = 1;
             _timeSignatureMap = new(Project!);
             ArrangementEditorSettings.Reset(arrangement: true, Project!.TicksPerQuarterNote);
-            PianoRollEditorSettings.Reset(arrangement: false, Project.TicksPerQuarterNote);
             ArrangementEditorSettings.ConfigureProject(Project, referenceTick: 0);
-            PianoRollEditorSettings.ConfigureProject(Project, referenceTick: 0);
             SetStatusMessage(null);
             RefreshAll();
             OpenArrangement();
@@ -2571,6 +2618,8 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             return existing;
         }
         WorkspaceViewModel created = factory();
+        if (created is TimelineWorkspaceViewModel { IsSegment: true } or InstrumentWorkspaceViewModel)
+            created.EditorState = new(created, EditorStates);
         if (Project is not null)
         {
             PrepareWorkspaceRuntimeState(created);
@@ -2602,7 +2651,6 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         if (Project is not null)
         {
             ArrangementEditorSettings.ConfigureProject(Project, CurrentTick);
-            PianoRollEditorSettings.ConfigureProject(Project, CurrentTick);
         }
         RefreshDiagnostics();
         RefreshProjectTree();
@@ -2641,7 +2689,6 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             _timeSignatureMap = new ProjectTimeSignatureMap(Project);
             RebuildTempoLookup();
             ArrangementEditorSettings.ConfigureProject(Project, CurrentTick);
-            PianoRollEditorSettings.ConfigureProject(Project, CurrentTick);
         }
         RefreshProjectTreeIfChanged();
         HashSet<MidoraId> trackIds = changes.TrackIds;
@@ -3100,6 +3147,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
     private void RefreshCompilationProperties()
     {
         Raise(nameof(CompileState));
+        RefreshCompilationProgress(force: true);
         Raise(nameof(CanPlayback));
         Raise(nameof(CanTogglePlayback));
         Raise(nameof(PrimaryTransportAction));
@@ -3216,6 +3264,11 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
 
     private void Unsubscribe(ProjectContext context)
     {
+        if (_editorCloneSubscription is not null)
+            context.Document.PresentationObjectsCloned -= _editorCloneSubscription;
+        _editorCloneSubscription = null;
+        if (_editorTransferSubscription is not null) context.Document.SegmentIdentitiesTransferred -= _editorTransferSubscription;
+        _editorTransferSubscription = null;
         context.Persistence.Presentation.Changed -= OnPresentationChanged;
         context.Document.HistoryChanged -= OnDocumentHistoryChanged;
         context.Document.ContentChanged -= OnDocumentContentChanged;
@@ -3359,6 +3412,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             {
                 _revision++;
                 rebuilt = RefreshChanged(changes ?? ProjectChangeSet.Everything);
+                ReconcileEditorStates();
             }
             foreach (WorkspaceViewModel workspace in selectionChanged)
             {

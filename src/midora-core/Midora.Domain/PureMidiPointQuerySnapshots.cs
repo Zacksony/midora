@@ -90,7 +90,7 @@ public sealed class DirectMidiChannelEventQuerySnapshot
         else if (_source is not null)
             Add(ref result, HashText(_source.ContentFingerprint));
         AddRange(ref result, _excluded, startTick, endTick, exclusion: true);
-        AddRange(ref result, _overlayIndex.Query(startTick, endTick), exclusion: false);
+        AddRange(ref result, _overlayIndex.EnumerateRange(startTick, endTick), exclusion: false);
         return result;
     }
 
@@ -104,7 +104,7 @@ public sealed class DirectMidiChannelEventQuerySnapshot
                 if (_sourceExclusions?.Contains(value.Id) != true) yield return value;
             }
         }
-        foreach (DirectMidiChannelEventValue value in _overlayIndex.Query(startTick, endTick))
+        foreach (DirectMidiChannelEventValue value in _overlayIndex.EnumerateRange(startTick, endTick))
             yield return value;
     }
 
@@ -402,7 +402,7 @@ public sealed class OpaqueMidiEventQuerySnapshot
         else if (_source is not null)
             Add(ref result, HashText(_source.ContentFingerprint));
         AddRange(ref result, _excluded, startTick, endTick, exclusion: true);
-        AddRange(ref result, _overlayIndex.Query(startTick, endTick), exclusion: false);
+        AddRange(ref result, _overlayIndex.EnumerateRange(startTick, endTick), exclusion: false);
         return result;
     }
 
@@ -414,7 +414,7 @@ public sealed class OpaqueMidiEventQuerySnapshot
             foreach (OpaqueMidiEventValue value in _source.QueryOpaqueEvents(startTick, endTick))
                 if (_sourceExclusions?.Contains(value.Id) != true) yield return value;
         }
-        foreach (OpaqueMidiEventValue value in _overlayIndex.Query(startTick, endTick))
+        foreach (OpaqueMidiEventValue value in _overlayIndex.EnumerateRange(startTick, endTick))
             yield return value;
     }
 

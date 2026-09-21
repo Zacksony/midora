@@ -21,6 +21,7 @@ internal enum TimelineRasterLayer
     VelocityBars,
     EventPoints,
     EventPointSelection,
+    EventSignal,
     Onion
 }
 
@@ -3176,5 +3177,9 @@ public static class TimelineRasterCacheSession
     public static int ActiveSubscriptionCount => TimelineRasterCache.Shared.ActiveSubscriptionCount;
     public static int QueuedCompletionCount => TimelineRasterCache.Shared.QueuedCompletionCount;
     public static int RunningCount => TimelineRasterCache.Shared.RunningCount;
-    public static void Clear() => TimelineRasterCache.Shared.Clear();
+    public static void Clear()
+    {
+        TimelineRasterCache.Shared.Clear();
+        TimelineStepSignalSource.ClearSharedCache();
+    }
 }

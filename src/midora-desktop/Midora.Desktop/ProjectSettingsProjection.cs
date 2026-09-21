@@ -29,18 +29,21 @@ internal static class ProjectSettingsProjection
         {
             return ProjectDomainEditCommands.UpdateProjectInitialStateValue(
                 ParseStateTarget(field.Key["settings.initial.".Length..]),
-                NullableInt(value, field.Label));
+                DisplayValue(ParseStateTarget(field.Key["settings.initial.".Length..]), value, field.Label));
         }
 
         if (field.Key.StartsWith("settings.reset.", StringComparison.Ordinal))
         {
             return ProjectDomainEditCommands.UpdateProjectResetDefaultValue(
                 ParseStateTarget(field.Key["settings.reset.".Length..]),
-                NullableInt(value, field.Label));
+                DisplayValue(ParseStateTarget(field.Key["settings.reset.".Length..]), value, field.Label));
         }
 
         throw new InvalidOperationException("This Project Settings field is read-only.");
     }
+
+    private static int? DisplayValue(MidiValueTarget target, string value, string label) =>
+        NullableInt(value, label) is { } display ? MidiEditingValueDomain.ClampInitialState(target, display) : null;
 
     private static int? NullableInt(string value, string label)
     {

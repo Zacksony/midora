@@ -97,6 +97,7 @@ public partial class ApplicationPreferencesDialog : Window
         PlaybackLimiterBox.IsChecked = preferences.Playback.LimiterEnabled;
         StopCursorBox.SelectedItem = preferences.Playback.StopCursorBehavior;
         LanguageBox.SelectedItem = preferences.Appearance.Language;
+        EventLaneLinesBox.IsChecked = preferences.Appearance.ShowEventLaneLines;
         RealtimeAudioPreferences realtime = preferences.RealtimeAudio;
         DeviceChoice current = realtime.PlaybackOutputDeviceId is null
             ? DeviceChoice.SystemDefault
@@ -385,7 +386,10 @@ public partial class ApplicationPreferencesDialog : Window
                     stopCursorBehavior),
                 Appearance = new AppearancePreferences(
                     LanguageBox.SelectedItem as string
-                        ?? AppearancePreferences.EnglishLanguage),
+                        ?? AppearancePreferences.EnglishLanguage)
+                {
+                    ShowEventLaneLines = EventLaneLinesBox.IsChecked == true
+                },
                 SoundFonts = _soundFonts
                     .Select(value => value.ToPreference())
                     .ToArray()

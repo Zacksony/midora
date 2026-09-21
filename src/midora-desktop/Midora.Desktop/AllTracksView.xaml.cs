@@ -16,17 +16,25 @@ public partial class AllTracksView : UserControl
         Unloaded += OnUnloaded;
         IsVisibleChanged += OnVisibilityChanged;
         DataContextChanged += OnDataContextChanged;
+        Timeline.SizeChanged += (_, _) => InitializeVerticalView();
     }
     private void CancelPendingFocus()
     { _focusOperation?.Abort(); _focusOperation = null; }
-    private void OnLoaded(object sender, RoutedEventArgs e) => QueueTimelineFocus();
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    { InitializeVerticalView(); QueueTimelineFocus(); }
     private void OnUnloaded(object sender, RoutedEventArgs e) => CancelPendingFocus();
     private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (IsVisible) QueueTimelineFocus();
         else CancelPendingFocus();
     }
-    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => QueueTimelineFocus();
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    { InitializeVerticalView(); QueueTimelineFocus(); }
+    private void InitializeVerticalView()
+    {
+        if (DataContext is AllTracksWorkspaceViewModel vm && Timeline.TryGetPianoVerticalFit(out double height))
+            vm.TryInitializeVerticalView(height);
+    }
     public event EventHandler<TimelineRulerEventArgs>? PlaybackCursorRequested;
 
     internal bool TryNavigate(Point point, MouseButton button)
@@ -58,7 +66,11 @@ public partial class AllTracksView : UserControl
     private void OnZoomIn(object sender, RoutedEventArgs e)
     { if (DataContext is AllTracksWorkspaceViewModel vm) vm.TickSpan /= 2; }
     private void OnFit(object sender, RoutedEventArgs e)
-    { if (DataContext is AllTracksWorkspaceViewModel vm) { vm.StartTick = 0; vm.TickSpan = vm.ExtentEndTick; vm.FirstLane = 0; vm.LaneHeight = Math.Max(3, Timeline.ActualHeight / 128); } }
+    {
+        if (DataContext is not AllTracksWorkspaceViewModel vm) return;
+        vm.StartTick = 0; vm.TickSpan = vm.ExtentEndTick;
+        if (Timeline.TryGetPianoVerticalFit(out double height)) { vm.FirstLane = 0; vm.LaneHeight = height; }
+    }
     private void OnModeChanged(object sender, SelectionChangedEventArgs e)
         => QueueTimelineFocus();
     private void OnModeDropDownClosed(object sender, EventArgs e)

@@ -144,6 +144,7 @@ public readonly record struct ProjectTimeSignaturePoint(
 public sealed class ProjectTimeSignatureMap
 {
     private readonly Entry[] _entries;
+    public long MinimumFullBarLengthTicks { get; }
     private readonly ProjectTimeSignatureMap? _cachedOwner;
     private static readonly ConditionalWeakTable<ConductorQuerySnapshot<TimeSignatureChange>, MapCache> Cache = new();
     private static WarmHandoff? _warmHandoff;
@@ -261,6 +262,7 @@ public sealed class ProjectTimeSignatureMap
     {
         TicksPerQuarterNote = source.TicksPerQuarterNote;
         _entries = source._entries;
+        MinimumFullBarLengthTicks = source.MinimumFullBarLengthTicks;
         _cachedOwner = source;
     }
 
@@ -270,6 +272,7 @@ public sealed class ProjectTimeSignatureMap
         TicksPerQuarterNote = ticksPerQuarterNote;
         _entries = BuildEntries(ticksPerQuarterNote, source.Select(value =>
             new ProjectTimeSignaturePoint(value.Id, value.Tick, value.Numerator, value.Denominator)), source.Count, cancellationToken);
+        MinimumFullBarLengthTicks = GetMinimumFullBarLength(_entries);
     }
 
     public ProjectTimeSignatureMap(
@@ -302,6 +305,17 @@ public sealed class ProjectTimeSignatureMap
             .ThenBy(value => value.Id)
             .ToArray();
         _entries = BuildEntries(ticksPerQuarterNote, ordered, ordered.Length, CancellationToken.None);
+        MinimumFullBarLengthTicks = GetMinimumFullBarLength(_entries);
+    }
+
+    private static long GetMinimumFullBarLength(Entry[] entries)
+    {
+        long minimum = long.MaxValue;
+        for (int i = 0; i < entries.Length; i++)
+        {
+            minimum = Math.Min(minimum, entries[i].TicksPerBar);
+        }
+        return minimum;
     }
 
     private static Entry[] BuildEntries(int ticksPerQuarterNote, IEnumerable<ProjectTimeSignaturePoint> ordered,

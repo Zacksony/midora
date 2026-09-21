@@ -4,7 +4,7 @@
 > 日常简称：**《Midora SRS》**  
 > 规格版本：**v0.1**  
 > 生成日期：**2026-07-15**  
-> 最近修订日期：**2026-09-15**
+> 最近修订日期：**2026-09-18**
 > 文档形态：**按章节拆分的 Markdown 规格书**
 
 ## 文档定位
@@ -50,8 +50,33 @@
 - `v0.x` 表示整合和审查阶段；成为正式开发基线后可升级为 `v1.0`。
 - 后续修订必须说明受影响章节，避免在实现中静默改变需求。
 
+## 2026-09-18 修订摘要
+
+- B1 按已确认 D-STATE01/03 实施会话内 Track profile、Segment/SubVoice 局部记忆及 owner 生命周期；同步 §17.2.3、§18.2/4、§20.1.4/6、INV-123。仅共享用户偏好，保留各 owner 的时间解析上下文；不增加 Format 4 / presentation schema 2 字段，不提前实施 B2/B3。设计及验证见 [B1 实施记录](../Midora-B1-Workspace-State-Implementation-2026-09-18.md)。
+
+- 按用户明确追加需求，§18.4.4 在 SubVoice 模板尾手柄旁显示同色蓝字 `Template <Tick>`，拖动同步预览；复用既有标签合并，不改变命中、音乐数据或持久化。上一轮标记编辑与编译提示已获用户验收，记录见 [追加记录](../Midora-A4b-Marker-Editing-Followup-2026-09-17.md)。
+- Template 标签及追加的 §18.4.4 四种手柄圆角矩形局部抗锯齿均已获用户明确验收；保持 Tick、命中及其他内容的像素规则，验证与验收记录沿用上述追加记录。
+
+## 2026-09-17 修订摘要
+
+- A4b 按已批准 R15/R22/R31/R32、D-UI05/06/07 落地 §18.4.4 模板长度手柄、§20.1.3 全局锚定小节标签、§17.7.1 编译阶段反馈与 §18.11.2 All Tracks 首次垂直适配。保持模板内容/Loop/Pre-Roll 下界、正式编译语义和格式不变；进度无可靠总量时只显示阶段，不额外全量计数。验证及人工验收入口见 [A4b 报告](../Midora-A4b-Template-Timeline-Feedback-2026-09-17.md)。
+- 2026-09-17 用户确认 UAT-A4b 全部通过，并新增 §18.4.4 的 Loop/Pre-Roll 手柄及右键增删/精确设值、§17.7.1 的编译中旋转图标与黄色文案，同步 INV-113。只扩 UI 编辑入口，既有字段、合法范围、Undo 与编译语义不变；设计和新增验收见 [追加记录](../Midora-A4b-Marker-Editing-Followup-2026-09-17.md)。
+- 按 A4a 验收后的明确需求改动，§18.2.10／INV-122 的辅助 Lines 扩大为三宿主除 Vel.／Inst. 外的所有 Lane，包含 Bank、Program、协议命令 CC 和 Imported Meta／SysEx；辅助线用于位置和自身前驱提示，不代表 MIDI 状态持续，也不解释 opaque payload。
+- 删除逐 Lane 工具栏 Lines 开关，改为 §17.2.2 Application Preferences → Appearance 的全局 `Show event lane lines`，默认启用，保存后更新当前及后续 Lane；不进入 Project／Undo／Modified，不因此重建音频 Worker。原始数值、曲线插值和编译语义保持不变。实施与样例修正见 [验收后修订记录](../Midora-A4a-Acceptance-Followup-2026-09-17.md)。
+
 ## 2026-09-15 修订摘要
 
+- A4a 按已确认 R12/R29、D-VAL01.a～d／D-STEP01～04 落地指定 CC 的外侧友好域与三宿主可关闭辅助阶梯线；Project/Mapping/raw/canonical/音频和 Format 4 不变。Event Batch/Generator profile 与 numeric contract 升至 v2，旧 Event Preset 不静默重解释。见 §8.54.4、§18.2.9/10、§20.4.13、INV-104/121/122 及 [A4a 实施记录](../Midora-A4a-Event-Display-Implementation-2026-09-15.md)。
+
+- A3 后续用户明确修订：浮动图标 15 DIP 居中、27 DIP 按钮；Timeline 内容空白右击在有有效选区时提供完整选区菜单，无选择才使用容器菜单，混合类型仍显式分组。修复内容菜单与标尺原生菜单复用造成的坐标偏移。见 §20.3.7、§20.4.12、§20.7.3/4/9.1、INV-097/098、A3 记录 §8；不改变格式或音乐语义。
+
+- A3 后续视觉反馈：共享菜单图标列扩至 28 DIP，确保图标本体空间与图文间距分离；浮动工具保留 16 DIP 图标与三行分组，按钮收紧至 28 DIP、行距 2 DIP、外边距 4 DIP，并隔离时间线 Aliased 设置以平滑绘制图标，不改变音符/网格或操作语义。见 §20.4.12、§20.15.4、INV-098 与 A3 记录 §7。
+
+- A3 浮动工具视觉再次按用户要求修订：16 DIP 图标、优先同款原生 16px 资源，Pin 单一图标保留背景状态；左右边界改 ArrowExportRtl/Ltr，Move 改 ArrowMove；按钮区最多三行，Deselect All 移至第一行末尾。取代下述首次返修的较大图标与独立末行布局，编辑行为不变。见 §20.4.12、INV-098 与 ADR-UI-045 紧凑布局修订。
+
+- A3 首轮验收后明确 Note Copy+Move 的 pitch 规则：不再整组 Clamp，越过 0–127 的副本丢弃，源音符保留；三种钢琴卷帘的普通/浮动 Ctrl / Ctrl+Alt 一致，事件 value Clamp 不变。浮动工具固定分组多行、较大图标、常驻即时名称栏，新增独立末行 Deselect All。见 §20.4.12、§20.5.5/6、INV-098 与 ADR-UI-045 验收修订。
+
+- A3 按已确认 D-UI01/02/04/09 同步 §18.2/4/7、§20.1/3/4/5/7、INV-097/098：取消右键双击，右拖框选，未拖松开立即冻结目标菜单；绘线改为共享 Draw 下独立左键 Free/Line/Horizontal。增加 Ctrl+ruler 编辑指针、跨模式 13 命令浮动工具及捕获出界持续滚屏。原框选 Ctrl 表按 ADR-UI-023 更正为 Add，Ctrl+Alt 为 Toggle；音乐、编译、格式不变，工具 profile 持久化后置 B。实现/已跑与未跑证据见 [A3 记录](../Midora-A3-Gestures-Implementation-2026-09-15.md)。
 - A2b 验收返修按用户明确要求补充 §18.2.5/§18.4.3：所有 Lane 的 `+` 统一 Add Lane，整块 Tab 头参与本 owner 重排；Inst. 补齐固定 y 创建预览、共用蓝色框选和中键水平平移。仅涉及会话 UI，不改变包装 source、编译或格式。
 - A2b 按已确认 R27/R28、D-IN02、D-LANE01 同步 §8.55.4、§18.2.5/7/8、§18.4.2 和 INV-120：完整 Instrument Change 的水平批量编辑、List 合并与 raw 成员选择；三宿主 target Tabs、隐藏目录、精确摘要、独立纵轴和显式导航。Lane 状态只属于会话，不升级 Format 4 或 presentation schema，不改变编译/音频语义。实现及已跑/未跑验证见 [A2b 记录](../Midora-A2b-Instrument-Changes-and-Lane-Tabs-Implementation-2026-09-14.md)。
 

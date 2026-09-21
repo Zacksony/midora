@@ -175,6 +175,8 @@ D-VAL01.b 已要求编辑表达式采用显示值，并明确不要求兼容旧�
 
 ## 7. R29：事件点 + 阶梯线
 
+2026-09-17 后续明确修订：[D-STEP05](04-Decisions-and-Preparation.md#d-step05--全-lane-位置辅助线与程序级开关) 取代下面原 Q1 的适用范围／开关位置。现在除 Vel.／Inst. 外全部 Lane 均有位置辅助线（含 Bank／PC、命令 CC、opaque），opaque 使用既有固定 y、不解释 payload；开关统一放在程序级 Appearance、默认开启。不跨 owner、不补默认值、曲线不改等边界保留。下面内容保留原需求收敛的历史上下文；当前实施／复验见 [跟进记录](../Midora-A4a-Acceptance-Followup-2026-09-17.md)。
+
 视觉形式为点、前值水平保持、变化Tick竖跳；不允许在两点间做线性声音插值。建议抽共享阶梯tile provider，复用Tempo的设备列first/last/min/max、前驱查询与后台取消思想，但不复制其特定Conductor模型。
 
 范围与限制：

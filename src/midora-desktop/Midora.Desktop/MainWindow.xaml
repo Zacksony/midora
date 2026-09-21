@@ -75,6 +75,11 @@
         </DataTrigger>
       </Style.Triggers>
     </Style>
+    <Style x:Key="Text.CompileCommandBarButton" TargetType="TextBlock" BasedOn="{StaticResource Text.CommandBarButton}">
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsCompiling}" Value="True"><Setter Property="Foreground" Value="#FFFFC400"/></DataTrigger>
+      </Style.Triggers>
+    </Style>
     <Style x:Key="DiagnosticSeverityText" TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="{StaticResource Brush.Info}"/>
@@ -667,6 +672,9 @@
           <TabItem Header="Vel.">
             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <ui:TimelineSurface x:Name="SegmentVelocityTimeline" Tag="Velocity" Snapshot="{Binding VelocitySnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}" SurfaceMode="Velocity" ContextMenu="{StaticResource TimelineContextMenu}"
+                                ToolMode="{Binding ToolMode}" ValueTraceShape="{Binding ValueTraceShape}"
+                                ItemInvoked="OnTimelineItemInvoked" BackgroundInvoked="OnTimelineBackgroundInvoked" RulerClicked="OnTimelineRulerClicked"
+                                SelectionReplacementStarted="OnTimelineSelectionReplacementStarted" MarqueeCompleted="OnTimelineMarqueeCompleted"
                                 CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                 StartTick="{Binding StartTick, Mode=TwoWay}" TickSpan="{Binding TickSpan, Mode=TwoWay}"
                                 FirstLane="0" LaneHeight="160" GridStepTicks="{Binding GridStepTicks}" GridVisible="{Binding GridVisible}"
@@ -693,6 +701,7 @@
               <GroupBox Style="{StaticResource RenderedSurfaceHost}" AutomationProperties.Name="Logical Parameter lane" AutomationProperties.AutomationId="LogicalParameterTimelineSurface">
                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <ui:TimelineSurface x:Name="SegmentParameterTimeline" Tag="ParameterLanes" Snapshot="{Binding ParameterSnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}" ContextMenu="{StaticResource TimelineContextMenu}"
+                                    ValueTraceShape="{Binding ValueTraceShape}"
                                     CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                     StartTick="{Binding StartTick, Mode=TwoWay}" TickSpan="{Binding TickSpan, Mode=TwoWay}"
                                     FirstLane="0" LaneHeight="160" GridStepTicks="{Binding GridStepTicks}" OperationStepTicks="{Binding LaneEditorSettings.EffectiveOperationStepTicks}"
@@ -879,6 +888,11 @@
                       <GroupBox Style="{StaticResource RenderedSurfaceHost}" AutomationProperties.Name="SubVoice note piano roll" AutomationProperties.AutomationId="SubVoiceNoteTimelineSurface">
                         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <ui:TimelineSurface x:Name="SubVoiceNoteTimeline" Tag="SubVoiceNotes" Snapshot="{Binding SubVoiceNoteSnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}" OnionSnapshot="{Binding OnionSnapshot}"
+                                            MinimumTemplateLength="{Binding MinimumTemplateLength}" TemplateEditRevision="{Binding TemplateEditRevision}"
+                                            TemplateLoopStartTick="{Binding LoopStartTick}" TemplateLoopEndTick="{Binding LoopEndTick}"
+                                            TemplatePreRollTicks="{Binding PreRollTicks}" TemplateLoopEditingEnabled="{Binding RequiresChannelIsolation}"
+                                            TemplateMarkerEditCompleted="OnTemplateMarkerEditCompleted"
+                                            RulerClicked="OnTimelineRulerClicked"
                                             ContextMenu="{StaticResource TimelineContextMenu}"
                                             IsTimeRangeSelectionEnabled="False"
                                             CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
@@ -902,7 +916,8 @@
                                             NotePlacementStarted="OnTimelineNotePlacementStarted" NotePlacementCompleted="OnTimelineNotePlacementCompleted" NotePlacementCancelled="OnTimelineNotePlacementCancelled"
                                             SelectionReplacementStarted="OnTimelineSelectionReplacementStarted" MarqueeCompleted="OnTimelineMarqueeCompleted"/>
                         <ui:TimelineSemanticOverlay StartTick="{Binding StartTick, ElementName=SubVoiceNoteTimeline}" TickSpan="{Binding TickSpan, ElementName=SubVoiceNoteTimeline}"
-                            PreRollTicks="{Binding PreRollTicks}" LoopStartTick="{Binding LoopStartTick}" LoopEndTick="{Binding LoopEndTick}"/>
+                            TemplateEndTick="{Binding TemplatePreviewEndTick, ElementName=SubVoiceNoteTimeline}"
+                            PreRollTicks="{Binding TemplatePreviewPreRollTicks, ElementName=SubVoiceNoteTimeline}" LoopStartTick="{Binding TemplatePreviewLoopStartTick, ElementName=SubVoiceNoteTimeline}" LoopEndTick="{Binding TemplatePreviewLoopEndTick, ElementName=SubVoiceNoteTimeline}"/>
                         <Grid Width="52" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top" Panel.ZIndex="20"
                               Background="{StaticResource Brush.Surface.1}">
                           <Grid.ColumnDefinitions><ColumnDefinition Width="3"/><ColumnDefinition Width="22"/><ColumnDefinition Width="2"/><ColumnDefinition Width="22"/><ColumnDefinition Width="3"/></Grid.ColumnDefinitions>
@@ -926,30 +941,34 @@
                       <local:LaneTabHost Style="{StaticResource LaneTabs}" Grid.Row="3" Grid.Column="2" SelectedIndex="{Binding ActiveLowerEditorIndex, Mode=TwoWay}" SelectionChanged="OnSubVoiceLowerEditorSelectionChanged"
                                   Visibility="{Binding IsLowerEditorVisible, Converter={StaticResource BooleanToVisibility}}">
                         <TabItem Header="Vel."><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ui:TimelineSurface x:Name="SubVoiceVelocityTimeline" Tag="SubVoiceVelocity" Snapshot="{Binding SubVoiceVelocitySnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}" SurfaceMode="Velocity" ContextMenu="{StaticResource TimelineContextMenu}" ValueScrollOffset="{Binding VelocityValueScrollOffset, Mode=TwoWay}" IsTimeRangeSelectionEnabled="False"
+                          ToolMode="{Binding ToolMode}" ValueTraceShape="{Binding ValueTraceShape}" RulerClicked="OnTimelineRulerClicked"
+                          ItemInvoked="OnTimelineItemInvoked" BackgroundInvoked="OnTimelineBackgroundInvoked"
+                          SelectionReplacementStarted="OnTimelineSelectionReplacementStarted" MarqueeCompleted="OnTimelineMarqueeCompleted"
                           CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                           StartTick="{Binding StartTick, ElementName=SubVoiceNoteTimeline, Mode=TwoWay}" TickSpan="{Binding TickSpan, ElementName=SubVoiceNoteTimeline, Mode=TwoWay}"
                           FirstLane="0" LaneHeight="128" GridStepTicks="{Binding EditorSettings.DisplayGridStepTicks}" GridVisible="{Binding EditorSettings.GridVisible}"
                           DisplayGridUsesBars="{Binding EditorSettings.DisplayGridUsesBars}" TimeSignatureMap="{Binding EditorSettings.TimeSignatureMap}"
                           VelocityEditCompleted="OnTimelineVelocityEditCompleted"/>
                           <ui:TimelineSemanticOverlay StartTick="{Binding StartTick, ElementName=SubVoiceVelocityTimeline}" TickSpan="{Binding TickSpan, ElementName=SubVoiceVelocityTimeline}" ShowRulerLabels="False"
-                              PreRollTicks="{Binding PreRollTicks}" LoopStartTick="{Binding LoopStartTick}" LoopEndTick="{Binding LoopEndTick}"/>
+                              PreRollTicks="{Binding TemplatePreviewPreRollTicks, ElementName=SubVoiceNoteTimeline}" LoopStartTick="{Binding TemplatePreviewLoopStartTick, ElementName=SubVoiceNoteTimeline}" LoopEndTick="{Binding TemplatePreviewLoopEndTick, ElementName=SubVoiceNoteTimeline}"/>
                           <ScrollBar Grid.Column="1" Width="12" Background="{StaticResource Brush.Surface.1}" Orientation="Vertical" IsEnabled="{Binding CanScrollValues, ElementName=SubVoiceVelocityTimeline}" Maximum="{Binding ValueScrollMaximum, ElementName=SubVoiceVelocityTimeline}" Value="{Binding VelocityValueScrollOffset, Mode=TwoWay}" ViewportSize="{Binding ValueScrollViewportSize, ElementName=SubVoiceVelocityTimeline}"/></Grid></TabItem>
                         <TabItem Header="Inst."><local:InstrumentChangeLane/></TabItem>
                         <TabItem Header="Event Lane"><Grid>
                           <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                           <ui:TimelineSurface x:Name="SubVoiceEventTimeline" Tag="SubVoiceEvents" Snapshot="{Binding SubVoiceEventSnapshot}" SelectionSnapshot="{Binding SelectionSnapshot}" ContextMenu="{StaticResource TimelineContextMenu}" ValueScrollOffset="{Binding EventValueScrollOffset, Mode=TwoWay}" IsTimeRangeSelectionEnabled="False"
+                                              ValueTraceShape="{Binding ValueTraceShape}" RulerClicked="OnTimelineRulerClicked"
                                               CanEdit="{Binding DataContext.CanEditProject, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" SurfaceMode="EventLanes" ToolMode="{Binding ToolMode}"
                                               StartTick="{Binding StartTick, ElementName=SubVoiceNoteTimeline, Mode=TwoWay}" TickSpan="{Binding TickSpan, ElementName=SubVoiceNoteTimeline, Mode=TwoWay}"
                                               LaneHeight="128" GridStepTicks="{Binding EditorSettings.DisplayGridStepTicks}" OperationStepTicks="{Binding EventLaneEditorSettings.EffectiveOperationStepTicks}" GridVisible="{Binding EditorSettings.GridVisible}"
                                               DisplayGridUsesBars="{Binding EditorSettings.DisplayGridUsesBars}" OperationUsesBars="{Binding EventLaneEditorSettings.EffectiveOperationUsesBars}" TimeSignatureMap="{Binding EditorSettings.TimeSignatureMap}"
-                                              ValueAxisMinimum="{Binding ActiveValueMinimum}" ValueAxisMaximum="{Binding ActiveValueMaximum}" ValueAxisIntegral="{Binding ActiveValueIntegral}"
+                                              ValueAxisMinimum="{Binding ActiveValueAxisMinimum}" ValueAxisMaximum="{Binding ActiveValueAxisMaximum}" ValueAxisIntegral="{Binding ActiveValueIntegral}"
                                               EditCursorTick="{Binding EditCursorTick}" RangeStartTick="0" RangeEndTick="{Binding TemplateLengthTicks}" CanExtendEventCreationRange="True"
                                               ItemInvoked="OnTimelineItemInvoked" ItemEditCompleted="OnTimelineItemEditCompleted" BackgroundInvoked="OnTimelineBackgroundInvoked" LaneHeaderInvoked="OnTimelineLaneHeaderInvoked"
                                               EventPointEditCompleted="OnTimelineEventPointEditCompleted"
                                               EventPointTraceCompleted="OnSubVoiceEventPointTraceCompleted"
                                               SelectionReplacementStarted="OnTimelineSelectionReplacementStarted" MarqueeCompleted="OnTimelineMarqueeCompleted"/>
                           <ui:TimelineSemanticOverlay StartTick="{Binding StartTick, ElementName=SubVoiceEventTimeline}" TickSpan="{Binding TickSpan, ElementName=SubVoiceEventTimeline}" ShowRulerLabels="False"
-                              PreRollTicks="{Binding PreRollTicks}" LoopStartTick="{Binding LoopStartTick}" LoopEndTick="{Binding LoopEndTick}"/>
+                              PreRollTicks="{Binding TemplatePreviewPreRollTicks, ElementName=SubVoiceNoteTimeline}" LoopStartTick="{Binding TemplatePreviewLoopStartTick, ElementName=SubVoiceNoteTimeline}" LoopEndTick="{Binding TemplatePreviewLoopEndTick, ElementName=SubVoiceNoteTimeline}"/>
                           <ScrollBar Grid.Column="1" Width="12" Background="{StaticResource Brush.Surface.1}" Orientation="Vertical" IsEnabled="{Binding CanScrollValues, ElementName=SubVoiceEventTimeline}" Maximum="{Binding ValueScrollMaximum, ElementName=SubVoiceEventTimeline}" Value="{Binding EventValueScrollOffset, Mode=TwoWay}" ViewportSize="{Binding ValueScrollViewportSize, ElementName=SubVoiceEventTimeline}"/>
                           </Grid>
                         </Grid></TabItem>
@@ -1290,7 +1309,23 @@
             <Border Height="32" Margin="9,0,0,0" Padding="9,0" Background="{StaticResource Brush.Surface.0}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="1" CornerRadius="3"><StackPanel VerticalAlignment="Center" Orientation="Horizontal"><TextBlock VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource Brush.Text.Primary}" Style="{StaticResource Text.Mono}" Text="{Binding PositionText}"/><Border Width="1" Height="14" Margin="8,0" Background="{StaticResource Brush.Border.Strong}"/><TextBlock VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource Brush.Text.Primary}" Style="{StaticResource Text.Mono}" Text="{Binding TempoText}"/></StackPanel></Border>
           </StackPanel>
           <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
-            <Button Margin="0,0,4,0" Style="{StaticResource Button.CommandBarText}" AutomationProperties.Name="Compile" Click="OnCompileClick" IsEnabled="{Binding CanRunProjectTask}"><TextBlock Style="{StaticResource Text.CommandBarButton}" Text="Compile"/></Button>
+            <Ellipse x:Name="CompilationSpinner" Width="15" Height="15" Margin="0,0,4,0" VerticalAlignment="Center"
+                     Stroke="#FFFFC400" StrokeThickness="2" StrokeDashArray="1.7 1.7" RenderTransformOrigin="0.5,0.5"
+                     IsHitTestVisible="False">
+              <Ellipse.RenderTransform><RotateTransform/></Ellipse.RenderTransform>
+              <Ellipse.Style><Style TargetType="Ellipse">
+                <Setter Property="Visibility" Value="Collapsed"/>
+                <Style.Triggers><DataTrigger Binding="{Binding IsCompiling}" Value="True">
+                  <Setter Property="Visibility" Value="Visible"/>
+                  <DataTrigger.EnterActions><BeginStoryboard x:Name="CompileSpin"><Storyboard>
+                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                     From="0" To="360" Duration="0:0:0.75" RepeatBehavior="Forever"/>
+                  </Storyboard></BeginStoryboard></DataTrigger.EnterActions>
+                  <DataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="CompileSpin"/></DataTrigger.ExitActions>
+                </DataTrigger></Style.Triggers>
+              </Style></Ellipse.Style>
+            </Ellipse>
+            <Button Margin="0,0,4,0" Style="{StaticResource Button.CommandBarText}" AutomationProperties.Name="Compile" Click="OnCompileClick" IsEnabled="{Binding CanRunProjectTask}" ToolTip="Compilation phase; percentages describe the named phase, not an estimated overall completion time."><TextBlock Style="{StaticResource Text.CompileCommandBarButton}" Text="{Binding CompileButtonText}"/></Button>
             <Button Margin="0,0,4,0" Style="{StaticResource Button.CommandBarText}" AutomationProperties.Name="MIDI Export" Click="OnMidiExportClick" IsEnabled="{Binding CanRunProjectTask}"><TextBlock Style="{StaticResource Text.CommandBarButton}" Text="MIDI Export"/></Button>
             <Button Style="{StaticResource Button.CommandBarText}" AutomationProperties.Name="Audio Export" Click="OnAudioRenderClick" IsEnabled="{Binding CanRunProjectTask}"><TextBlock Style="{StaticResource Text.CommandBarButton}" Text="Audio Export"/></Button>
           </StackPanel>

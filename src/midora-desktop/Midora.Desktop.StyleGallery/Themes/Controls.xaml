@@ -1412,16 +1412,19 @@
                     CornerRadius="{StaticResource Radius.Small}">
               <Grid>
                 <Grid.ColumnDefinitions>
-                  <ColumnDefinition x:Name="IconColumn" Width="18" />
+                  <!-- 20px icon slot + 8px gap; the gap must not consume the icon's width. -->
+                  <ColumnDefinition x:Name="IconColumn" Width="28" />
                   <ColumnDefinition Width="Auto" />
                   <ColumnDefinition x:Name="GestureColumn" Width="*" />
                   <ColumnDefinition x:Name="ArrowColumn" Width="18" />
                 </Grid.ColumnDefinitions>
                 <ContentPresenter x:Name="IconPresenter"
-                                  Margin="0,0,7,0"
+                                  Margin="0,0,8,0"
+                                  HorizontalAlignment="Center"
                                   VerticalAlignment="Center"
                                   ContentSource="Icon" />
                 <TextBlock x:Name="CheckMark"
+                           Margin="0,0,8,0"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            Foreground="{StaticResource Brush.Red.Hover}"

@@ -207,13 +207,13 @@ Hide 不删除 Project 数据；Delete Lane Data 删除该 Lane 的用户内容�
 
 Velocity 视图按 Note start tick 绘制固定窄柱，高度表示 velocity；柱宽不表达 Note 长度，柱顶必须显示明显大于柱宽的方形 onset marker，以同时明确 Note start tick 和 velocity 顶点。同 tick 存在多个 pitch 时，按 pitch 从低到高绘制，使高 pitch 对应柱位于最上层；pitch 相同时按稳定 ID 确定顺序。
 
-左键在空白处按下并拖动形成自由轨迹，右键拖动使用起止点直线轨迹；无选择时手势作用于轨迹经过的全部柱，存在选择时只作用于经过且已选择的柱。按住期间只显示轻量轨迹覆盖层，不逐柱重绘、不更新 Velocity tile，也不提交 Project；松开时根据完整轨迹一次性计算最终值、提交一次 Project Undo，并异步重建受影响 tile。单击而未移动仍以该点作为单点轨迹，包括 tick 0。Escape 或 mouse capture 丢失取消轨迹且不提交。
+Draw 下在空白处左拖执行当前 Free / Line / Horizontal 形态：分别为自由轨迹、起止点直线、原点力度的水平线；右拖只框选对应 Note。无选择时绘线作用于轨迹经过的全部柱，存在选择时只作用于经过且已选择的柱。按住期间只显示轻量轨迹覆盖层，不逐柱重绘、不更新 Velocity tile，也不提交 Project；松开时根据完整轨迹一次性计算最终值、提交一次 Project Undo，并异步重建受影响 tile。单击而未移动仍以该点作为单点轨迹，包括 tick 0。Escape 或 mouse capture 丢失取消轨迹且不提交。
 
 左键直接按住单柱或其 onset marker 上下拖动时，只调整命中的一个 Note，不显示轨迹；同 tick 重叠柱按上述最上层顺序命中。该单柱 transient 允许只覆盖一个柱，松开时提交。所有 Velocity 手势都不得改变 Note 的位置、长度或 pitch。
 
 Logical/MIDI Segment 与 SubVoice 的 Velocity ruler 不建立 Time Range Selection；从 Velocity 内容区向 ruler 或视图外拖动时，当前 velocity 手势继续按 pointer capture 完成或取消，不得被 ruler 的时间范围手势截获。Segment Logical Parameter / Direct MIDI Event Lane 与 SubVoice Event Lane 的 ruler 服从同一“无 Time Range”规则。
 
-`Alt + Left Drag` 必须强制使用自由轨迹手势：起点即使命中单柱或 onset marker，也不得进入单 Note 调整。该修饰键只覆盖 direct-hit 分流，不改变“存在选择时仅作用于已选择 Note”的过滤规则。
+`Alt + Left Drag` 强制使用当前绘线形态：起点即使命中单柱或 onset marker，也不得进入单 Note 调整。该修饰键只覆盖 direct-hit 分流，不改变“存在选择时仅作用于已选择 Note”的过滤规则。形态工具组和共享主 ToolMode 见 §20.4.12.2；非 Draw 禁用子组，D 不重置形态。
 
 单个参数 Lane 编辑器左侧显示值标尺，右侧显示对应水平参考线；Lane 具有独立于 piano roll 的纵向缩放。参考值密度随纵向缩放调整。纵向缩放、滚轮平移、中键平移和右侧滚动条必须操作同一有界数值视口，标尺随视口更新，不得越过参数合法范围；顶部与底部标签保持在可视区域内。Integer 参数由指针纵坐标得到的值必须先按 `AwayFromZero` 取到最近整数，再执行合法范围验证。
 ### 18.2.6 同步
@@ -245,17 +245,38 @@ Logical 与 Pure MIDI Segment Editor 的水平滚动 extent 必须同时覆盖�
 
 ### 18.2.8 三种钢琴卷帘的 Timeline 对象列表
 
-Logical Segment、MIDI Segment 与 SubVoice 共享左侧 owner-data 对象列表，开关位于 `Lanes` 左侧、默认隐藏。显隐、宽度与滚动位置仅属于 Workspace Session，不进入 Project、Undo、Modified 或文件格式。
+Logical Segment、MIDI Segment 与 SubVoice 共享左侧 owner-data 对象列表实现，开关位于 `Lanes` 左侧、默认隐藏。B1 的显隐/宽度按 Track 共享（SubVoice 独立），行位置按 Segment/SubVoice 局部记忆；只捕获标量，不保留 source/factory/分页请求，不进入音乐 Project、Undo、Modified 或新增文件字段。
 新建列表状态的默认宽度为 400 DIP；用户已经调整的宽度在同一会话隐藏/重开时保留，不因新默认值被覆盖，继续使用既有 240～700 DIP 范围。
 
 列表按 local tick 和确定性同 tick 顺序合并当前 owner 的所有音符和非音符事件：Logical 包含全部参数 Lane point，MIDI 包含 Channel Event 与 Opaque SysEx/Meta，SubVoice 包含 Template Note/MIDI Event。音符每个对象一行，不拆 NoteOn/NoteOff；展示 Tick、Gate/Length、Key、Velocity，内部 Stable ID 不显示。
 
 完整显式 Instrument Change 在 List 合并为一个特殊行，不再重复列出其 raw 成员。行选择映射到全部实际成员，原始 Lane 仍可独立编辑成员；解组后剩余 raw 恢复普通行。包装数与成员消息数是不同口径，不相加虚增事件总数。混合 Note/Event/Instrument Change 选择使用显式类型子菜单，不能将包装伪装成单 scalar Event 批量编辑。
-Value 列按正式事件类型显示数值，不拼接无意义的 `Number · Value` 前缀；CC、RPN/NRPN、Polyphonic Key Pressure 的目标编号必须在 Type/Target 中保留。Bank 的 MSB/LSB 存在性与 Pitch Bend Range 的复合值不得丢失。这里只调整格式，不改变 raw 值域或现行 Program 的显示编号。
+Value 列按正式事件类型显示数值，不拼接无意义的 `Number · Value` 前缀；CC、RPN/NRPN、Polyphonic Key Pressure 的目标编号必须在 Type/Target 中保留。Bank 的 MSB/LSB 存在性与 Pitch Bend Range 的复合值不得丢失。指定 CC 的友好显示按 §18.2.9 执行；不改变 Project raw 值域或现行 Program 的显示编号。
 
 列表与图形共用 Selection。单击、Ctrl toggle、Shift 冻结 ordinal 范围及拖动范围遵循 §20.3；双击只针对被双击对象打开 `Properties...`。`Locate` 定位到对象，事件必须自动打开 Lanes 并选择对应 Lane。右键目标在打开时冻结；无效/旧修订后台结果不能恢复旧选区。Opaque payload 仅可读，不得作为普通数值点执行表达式工具。
 
 隐藏列表不得扫描或建立索引；显示时只创建可见行，排序/选区解析在可取消的有界后台任务完成。允许使用可回收的临时 scalar 排序目录，但不得建立百万项 WPF 控件、全量行字符串或第二份常驻对象数组。列表隐藏、Tab 卸载、owner 改变及 Project 关闭必须停止旧请求；图形编辑不得依赖列表目录是否已经生成。
+---
+### 18.2.9 指定 CC 的编辑显示域
+
+CC10 与 CC71～78 的外侧显示／数值编辑统一为 `display = raw - 64`，范围 `−64..63`，中性值为 0。适用图形标尺、坐标、值提示、对象列表、Properties、Initial State／Reset Defaults，以及该 target 的 Batch Edit／Batch Create；提交时恰好一次编码为 `raw = display + 64`。普通入口不额外显示 raw 数字，也不提供 raw/display 切换。
+
+绝对值和工具的初始／递推值使用显示域；移动 delta、比例 factor 本身不做偏移，factor 作用于显示值。Generator 反馈保留显示值，到正式写入才转换。混合 CC 属性编辑按每个对象的实际目标分别编码，不能以第一个目标替代全部对象。其他 CC、Bank/Program、Note、时间与目标身份不偏移，Logical Parameter 自有范围和 Pitch Bend 在 §18.2.7 定义的既有契约不变。
+
+Project、Value Curve 数据、Project Mapping Function／内置 Step／共享 accumulator／Context、canonical、MIDI 和音频保持 raw 域。CC Value Curve 属性的外侧数值遵循同一显示换算，但插值／离散化不变；Envelope 和 Mapping 不做友好域换算。原项目音乐继续原样读取。工具表达式／Preset 的新数值版本和旧契约拒绝见 §20.4.13。
+
+Help 必须给出同一 CC10 的对照：raw96 显示32，Batch `=p0*0.5` 得显示16／raw80；Project Mapping `value*0.5` 或 Multiply 0.5 得 raw48／显示−16。不能宣称两者使用相同值域。
+
+### 18.2.10 事件与参数辅助阶梯线
+
+MIDI Segment、Logical Segment、SubVoice 除 Vel.／Inst. 外的全部 Lane 默认显示可关闭的辅助线，线在点和选择图形下层；数值点之间水平延续前值，在事件 Tick 竖直跳变，不增加音乐事件、不线性插值声音、不参与命中／选择或编辑。线表达显式记录的位置及自身前驱，不能据此推断某命令或事件会持续影响发声。
+
+仅查询当前 owner、当前正式 target 的显式点；可见左界前有自身记录时接入最近前驱，否则从首个显式点起线。相同 Tick 的首末值遵循正式顺序，不用 Stable ID 或查询枚举次序替代。不得借用共享 Root／Usage 的其他 Track、相邻 Segment、Initial State 或 defaults。Segment crop 外的源记录可显示但须弱化，与可听范围区分；SubVoice 的辅助线显示止于 Template End。
+
+适用于 Logical Parameter Step、全部 CC（包括 Bank／RPN／NRPN selector、Data Entry、increment/decrement、CC120～127）、Bank／Program、Pitch Bend、pressure、SubVoice 的 typed RPN/NRPN 与 Pitch Bend Range，以及 Imported Meta／SysEx。无数值的 opaque 记录沿用其既有事件点的固定 y，辅助线不得解释 payload 或虚构 MIDI 状态。Vel. 保持原柱形展示，Inst. 保持包装点展示，二者不增加本辅助层。既有 Value Curve／Envelope 插值与绘制语义不改变。
+
+密集点可按设备列聚合 first/last/min/max，但原点、命中和正式顺序不得删改。使用范围指纹、前驱依赖及有界异步摘要／瓦片，不得在 UI 帧内扫描整个 owner 或另建全量点数组；仅改前驱时也须使依赖它的可见线更新。点／选择工作优先，开关不重建音乐索引；关闭线、换目标／修订、卸载时取消过期任务，迟到结果不得串 owner 或恢复旧线。开关统一保存于程序级 Appearance（§17.2.2），对当前及后续全部适用 Lane 生效，不提供逐 Lane 工具栏开关，不进入 Project、Undo、Modified 或 canonical。
+
 ---
 ## 18.3 Event Instrument Editor 总体框架
 ### 18.3.1 布局
@@ -349,7 +370,7 @@ Initial State
 - Bank/Program 使用程序级 Catalog 名称与数值回退；不得隐式扫描 SoundFont；
 - Program 统一显示 0～127，与正式 MIDI 值一致。
 
-SubVoice Timeline 与 Segment Editor 共用当前 Project 会话的 piano-roll Grid / Snap、默认 Note 长度和默认 velocity。下部编辑区同样使用 Velocity 与单个活动事件/曲线 Lane 切换，不保留多 Lane 垂直堆叠模式。
+SubVoice Timeline 按 Definition ID + SubVoice ID 独立记忆编辑偏好、缩放、位置、Lane/List；不与绑定的 Logical Track 或其他 SubVoice 共用 profile，具体归属按 §20.1.4。下部编辑区同样使用 Velocity 与单个活动事件/曲线 Lane 切换，不保留多 Lane 垂直堆叠模式。
 
 从 Velocity 切换到事件 target Tab 后，键盘焦点必须在布局更新后进入对应 Timeline Surface，不得停留在 Tab 头、目录或下拉框；因此 `D` / `S` / `E`、Space 及其他焦点敏感 Workspace 快捷键必须立即可用。Inst. 将焦点交给自身包装编辑区。
 SubVoice `Add Event` 成功后必须按稳定 MIDI target 显示并激活新 Lane、打开下部事件区，并在布局完成后把焦点交回对应 Surface；不得仅依赖列表下标，也不得在绑定列表尚未刷新时查找新 Lane 并放弃导航。此后 `A` 操作该事件视图的 Snap，不是上方 piano roll 的独立 Snap。取消、失败、旧 Workspace 或已失效导航不能改变当前 Lane/选择或抢回焦点。添加空 Lane 本身不延长模板。
@@ -373,10 +394,17 @@ A user event at tick 0 may override the corresponding Initial State.
 同一 SubVoice Section 的 `Initial State` 子页还必须提供该 SubVoice 的 Name、Root Note inherited/override 与全部现有 Initial State target 的精确编辑。添加新的 CC/RPN/NRPN target 使用显式选择器；空值表示删除该 Initial State override。提交失败恢复最后合法值。
 ### 18.4.4 Template 与 Root Note
 Template Length 属于 Event Instrument，不是每条 SubVoice 独立长度。
-可视模板末端不是 SubVoice 普通事件的创建上界。单击、Shift 单点、自由绘线、右键直线/水平线、批量创建、粘贴、复制拖动，以及已有事件 Move/Properties 等正式入口，创建或移到模板外的点必须在同一原子命令中把 Template Length 扩至至少 `tick + 1`；原有 Value Curve 点创建遵循同一边界但不转换为离散事件。所有打开的同 Definition 视图随成功提交刷新；一次 Undo 同时恢复内容与旧模板长度，Redo 恢复结果。负 tick、溢出、取消、过期 owner/revision 或资源失败不得部分发布。不要为扩模板重建已删除的可选 Mapping；Initial State 无 tick，不参与扩长。Logical/Pure MIDI Segment 的 crop 和合法编辑边界不由此改变。
+SubVoice 主钢琴卷帘的顶部时间尺在 Template Length 位置提供窄拖动手柄，并在旁边以同款蓝色显示 `Template <Tick>`（例如 `Template 192`）；标签复用 Loop/Pre-Roll 的低缩放合并布局，合并后仍保留各自颜色。按下时冻结原长度、Snap 和当前内容/Loop/Pre-Roll 的合法最小长度；只对 delta 吸附，新长度不得小于该下界。达到下界时停止缩短，显示实际生效的新长度和 delta，不因继续向左拖报错，不裁剪/删除事件，不移动 Loop/Pre-Roll。Template 标签在拖动时同步预览值，取消后恢复；下界摘要绑定当前修订，拖动期间不得全扫内容。松开时复用正式长度命令重新验证并一次提交，Undo/Redo 沿用正式历史。Escape、失捕获、切换 owner 或修订过期不提交。手柄优先于该命中区域的普通尺导航，不影响尺的其余区域；标签不增加命中区域。
+可视模板末端不是 SubVoice 普通事件的创建上界。单击、Shift 单点、左键 Free/Line/Horizontal 绘线、批量创建、粘贴、复制拖动，以及已有事件 Move/Properties 等正式入口，创建或移到模板外的点必须在同一原子命令中把 Template Length 扩至至少 `tick + 1`；原有 Value Curve 点创建遵循同一边界但不转换为离散事件。所有打开的同 Definition 视图随成功提交刷新；一次 Undo 同时恢复内容与旧模板长度，Redo 恢复结果。负 tick、溢出、取消、过期 owner/revision 或资源失败不得部分发布。不要为扩模板重建已删除的可选 Mapping；Initial State 无 tick，不参与扩长。Logical/Pure MIDI Segment 的 crop 和合法编辑边界不由此改变。
 Configurations 的 Template 区必须提供 `Pre-Roll Ticks` 非负整数编辑，显示范围 `0..当前 Template Length`、默认 0。Configuration 输入留空或仅含空白时，提交前静默将输入框及待提交值归为 `0`；原正式值已为 `0` 时不产生 History edit。提交只在 `0 <= value <= Template Length` 时通过一个正式原子 Definition 命令生效；非空非法输入仍拒绝并恢复打开/提交前的合法值，不进行 Clamp。Properties Dialog 同时修改 Template Length、Pre-Roll Ticks、Loop 边界与 Per-Note Instance Isolation 时，必须按最终 draft 一次验证并作为一个 History edit 提交。帮助文本须说明 Logical Note start 是 Gate anchor、模板 origin 会提前，并提示实例 origin 越过 Segment 左边界将导致编译 Error。
 SubVoice 显示 Root Note 的 inherited / override 状态和 Effective Value。
-Loop 区域可以只读显示，但在 Lifecycle Editor 中编辑。
+Loop 除 Lifecycle Editor 外，也可通过 SubVoice 主钢琴卷帘顶部时间尺编辑。
+
+顶部时间尺为 Loop Start、Loop End 和已启用的 Pre-Roll 各提供与模板尾同款的双向拖动手柄：Loop 为黄色，Pre-Roll 为紫色，模板尾保持蓝色。四种手柄的圆角矩形须平滑抗锯齿，平移和不同 DPI 下不得因逐边硬取整而丢失圆角像素；该显示处理不得改变 Tick、命中范围、竖线或其他 Timeline 内容的像素规则。拖动冻结 owner/revision/Snap，只量化 delta，不反复提交 Domain；Loop Start 不超过 End−1（缺 End 时为 Template Length−1），Loop End 不小于 Start+1（缺 Start 时为 1），两端均限制在模板内；Pre-Roll 为 `0..Template Length`。达到边界时饱和，预览同时更新三个 panel 的语义覆盖层，松开一次正式命令。取消或过期零提交。重合/低缩放相邻手柄仍须能分别命中，可错开 cap 并用连线指向准确 Tick；不得移动正式坐标。
+
+右键任意手柄使用通用主题菜单：`Delete`、`Set Value…`。模板尾 Delete 禁用；Pre-Roll Delete 还原为 0 并隐藏其手柄；Loop Delete 只清该端，另一端保留，沿用不完整 Loop 可编辑但编译 Error 的合同。Set Value 弹窗只有一个 Tick 输入框，初始化当前精确整数并全选，显式 OK/Cancel；OK 沿用正式字段验证，非法输入显示原因且保留弹窗和输入，不 Clamp、不部分提交。未开启 Per-Note Instance Isolation 时仍遵守 Loop 编辑限制。
+
+SubVoice 主钢琴卷帘顶部时间尺空处菜单增加 `Add Loop Start+End` 和 `Add Pre-Roll Point`。前者不弹配置窗，直接以一个原子命令置为 `[0, Template Length]`；即使未开启隔离仍显示为可用，点击后明确提示需先启用 Per-Note Instance Isolation，不隐式修改隔离。后者使用右键处实际 local tick（不额外 Snap），越出 `[0,L]` 时取合法模板中点（长度为 1 时取 1）。0 仍代表未启用 Pre-Roll，不引入新“存在”字段。操作失败必须显式报错，不崩溃或留下半完成状态。全局编辑锁仍适用。
 
 SubVoice piano roll、Velocity 与 Event Lane 使用同一 local tick 变换绘制只读语义覆盖层：`[0, Pre-Roll Ticks)` 压暗；Loop Start/End 各自为贯穿 panel 的黄色 device-pixel 对齐竖线。仅最上方 piano ruler 显示 Pre-Roll/Loop 的 Tick 标签和完整 Loop 范围带；Pre-Roll 文本为紫色，Loop 文本与范围带仍为黄色，低缩放合并标签时也必须保留各自颜色。单端 Loop 只画存在的端点，不虚构另一端或合法范围。覆盖层不截获输入，配置变化不得使 Note/Event 内容瓦片失效。
 ### 18.4.5 Lane 生命周期
@@ -536,7 +564,7 @@ Project End Marker
 ### 18.7.2 Tempo
 初版只支持离散 Tempo 事件，不支持 Tempo Ramp 或连续 Tempo Automation。
 Tempo 大于 0，允许小数，不设置 20～300 等经验型限制。
-Tempo 占独立较高区域，以水平保持线及变化 tick 的竖直跳变连接，不得画斜线暗示 Ramp。可见区域左界须恢复最近前驱状态。BPM 显示范围可缩放、平移或 Fit，不是合法值限制。自由绘线、右键直线、Shift+右键 `y=k`、Shift 固定 tick 改值及 Ctrl 复制均沿用 Event Lane 交互；Snap 开启按操作格点插点，关闭逐 tick 插点。所有生成值仍按第 4 章和 MIDI 表示边界验证。
+Tempo 占独立较高区域，以水平保持线及变化 tick 的竖直跳变连接，不得画斜线暗示 Ramp。可见区域左界须恢复最近前驱状态。BPM 显示范围可缩放、平移或 Fit，不是合法值限制。左键 Free/Line/Horizontal 绘制、Shift 固定 tick 改值、Ctrl 复制和右拖框选均沿用 Event Lane 交互；Snap 开启按操作格点插点，关闭逐 tick 插点。所有生成值仍按第 4 章和 MIDI 表示边界验证；绘制轨迹不会把 Tempo 变为连续 Ramp。
 
 密集 Tempo 按设备列保留 first/last/min/max 包络和末值保持；可分离点保持固定 device pixel 大小。LOD、阶梯缓存和标签只是展示，不替代正式对象命中或编译。其他正式事件 lane 同样使用有界密集点聚合和不重叠标签，不把任意 opaque Meta 提升为 Conductor 类型。
 ### 18.7.3 Time Signature 与 Key Signature
@@ -720,6 +748,8 @@ Segment 映射为 target local tick → Project absolute tick → source Segment
 
 Arrangement 在水平 Zoom In 右边、同组提供相同 LayerDiagonalRegular 图标按钮，直接打开独立 `All Tracks` Tab，不弹菜单。其顶部控件沿用钢琴卷帘工具栏的样式和高度。只有只读钢琴卷帘与导航控件，没有 Lanes；不得改变任何编辑工作区的选择。
 
+首次有效布局自动垂直适配：扣除时间尺等非内容区域，以 `N=max(3,floor(contentDeviceHeight/128))` 得到整数设备像素/key（仍遵守共同最大缩放），从最高键开始尽量展示完整 128 键；不足 384 device pixels 时保留 3px 下限并允许滚动。零高度布局等待，不将 DIP 当 device pixel 二次转换。初始化归属 Workspace，切 Tab、重建视图或 resize 不覆盖后续手调状态；将来存在有效恢复值时优先恢复，不执行初开默认。Raw/Compiled 共享这条规则。
+
 Raw 叠加 Project 暴露音符。按 2026-09-08 的用户更正，Compiled 是混合只读显示：Logical Track 从成功的完整 Canonical Compiled Result 展开；Pure MIDI Track 直接复用当前源音符快照、暴露范围和颜色，不为它重新建立整曲 FIFO 显示索引。Logical 展开仍按 Port/Channel/Key FIFO 配对 NoteOn/NoteOff，颜色使用 NoteOn 的正式 source Track identity，不从 Channel/名称反推。Pure MIDI 的源 Gate 不宣称等于跨轨道共享 Channel 的最终 MIDI 流配对时长；这只是显示投影，不改变 canonical、播放或导出。
 
 必须包含起点在可视范围之前而 Gate 延续到范围内的 Note。编译失败或音乐修订过期时保留 Logical 的最后成功展开并显著标记 `Logical stale`；不得显示为 Current。尚无成功结果时明确 Logical 不可用，但 Pure MIDI 源音符仍显示。逻辑索引准备在后台执行，可取消、重试；旧结果保持到新结果完整提交。被删除 Logical 来源的旧 canonical 音符仍属于 stale 结果，保留已知来源色；首次打开旧结果且来源元数据已不存在时可用中性外观。Pure MIDI 来源删除立即反映到混合视图，不保留旧 canonical MIDI 层。
@@ -730,5 +760,5 @@ All Tracks 在 Raw/Compiled 下均显示绝对播放指针，并遵守全局 Fol
 
 来源查询、分页读取、密集列聚合和 Logical compiled FIFO 索引均在有界后台执行；WPF 线程不得为绘制全量枚举音符。来源分块局部失效，洋葱皮使用独立缓存身份，不污染已验收的普通 Note/Selection/Velocity/Event 缓存。允许每 Key 一行的只读占用缓存，垂直缩放/滚动复用；不得使其成为领域数据或编辑命中来源。Raw/Compiled 可复用未改变的 Pure MIDI 来源快照与相同内容块缓存。缓存必须有明确预算及取消、Workspace/Project 关闭后的释放时机。
 
-配置复用 §16.7.5 的 Format 3 presentation schema 2：目标、手选来源、sourceMode、enable、opacity、默认 Raw/Compiled 随显式 Save / Save Copy 保存，不增加 Undo、不设置音乐 Modified、不引发关闭保存提示。来源顺序在保存快照中按当前正式顺序过滤、排序。删除引用在会话中 dormant，Undo 恢复同身份时重新生效；保存过滤仍悬空的引用但不破坏会话内 Undo 恢复。Duplicate Track/SubVoice 复制该目标配置，Definition 深复制重映射内部 SubVoice 引用；视图配置本身不随音乐 Undo 回退。损坏隔离沿用 §16.33，不阻止音乐加载。
+配置复用 §16.7.5 的 Format 3 presentation schema 2：目标、手选来源、sourceMode、enable、opacity、默认 Raw/Compiled 随显式 Save / Save Copy 保存，不增加 Undo、不设置音乐 Modified、不引发关闭保存提示。来源顺序在保存快照中按当前正式顺序过滤、排序。删除来源时，仍存活目标的来源引用在会话中 dormant，Undo 恢复同身份时重新生效；保存过滤仍悬空的来源引用但不破坏该会话恢复。删除目标自身时立即释放其配置，不保留目标自身的 dormant profile，音乐 Undo 不复活该配置或自动重开 Tab。Duplicate Track/SubVoice 复制该目标配置，Definition 深复制重映射内部 SubVoice 引用；视图配置本身不随音乐 Undo 回退。损坏隔离沿用 §16.33，不阻止音乐加载。
 ---

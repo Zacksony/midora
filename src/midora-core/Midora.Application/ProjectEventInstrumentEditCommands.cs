@@ -15,7 +15,6 @@ public static partial class ProjectDomainEditCommands
                 throw new ArgumentOutOfRangeException(nameof(templateLengthTicks));
             }
             long minimum = GetMinimumTemplateLength(instrument);
-            minimum = Math.Max(minimum, instrument.PreRollTicks);
             if (templateLengthTicks < minimum)
             {
                 throw new InvalidOperationException(
@@ -66,7 +65,7 @@ public static partial class ProjectDomainEditCommands
                     nameof(preRollTicks),
                     "Pre-Roll Ticks must be between zero and Template Length Ticks.");
             }
-            long minimum = GetMinimumTemplateLength(instrument);
+            long minimum = GetMinimumTemplateLength(instrument, preRollTicks);
             if (templateLengthTicks < minimum)
             {
                 throw new InvalidOperationException(
@@ -382,9 +381,15 @@ public static partial class ProjectDomainEditCommands
         instrument.SubVoices.SingleOrDefault(value => value.Id == subVoiceId)
         ?? throw new ArgumentOutOfRangeException(nameof(subVoiceId));
 
-    private static long GetMinimumTemplateLength(EventInstrument instrument)
+    public static long GetMinimumTemplateLength(EventInstrument instrument)
     {
-        long minimum = GetMinimumTemplateContentLength(instrument);
+        ArgumentNullException.ThrowIfNull(instrument);
+        return GetMinimumTemplateLength(instrument, instrument.PreRollTicks);
+    }
+
+    private static long GetMinimumTemplateLength(EventInstrument instrument, long preRollTicks)
+    {
+        long minimum = Math.Max(GetMinimumTemplateContentLength(instrument), preRollTicks);
         if (instrument.LoopStartTick.HasValue)
         {
             minimum = Math.Max(minimum, checked(instrument.LoopStartTick.Value + 1));
@@ -401,13 +406,24 @@ public static partial class ProjectDomainEditCommands
         long minimum = 1;
         foreach (SubVoice voice in instrument.SubVoices)
         {
-            foreach (TemplateEvent templateEvent in voice.Events)
+            TemplateEventQuerySnapshot events = voice.Events.CreateQuerySnapshot();
+            minimum = Math.Max(minimum, events.MaximumEndTick);
+            // The spatial index deliberately saturates extreme ends. Only this
+            // exceptional boundary needs exact validation; normal reads reuse
+            // the revision-bound aggregate without decoding any event pages.
+            if (events.MaximumEndTick == long.MaxValue)
             {
-                minimum = Math.Max(minimum, GetRequiredTemplateBoundary(templateEvent));
+                foreach (TemplateEventSnapshotValue value in events.EnumerateAll())
+                    minimum = Math.Max(minimum, GetRequiredTemplateBoundary(value.Tick, value.Kind, value.LengthTicks));
             }
-            foreach (CurvePoint point in voice.Curves.SelectMany(value => value.Points))
+            foreach (ValueCurve curve in voice.Curves)
             {
-                minimum = Math.Max(minimum, GetRequiredInstantBoundary(point.Tick, "Curve Point"));
+                CurvePointQuerySnapshot points = curve.Points.CreateQuerySnapshot();
+                if (points.Count == 0) continue;
+                minimum = Math.Max(minimum, GetRequiredInstantBoundary(points.MaximumTick, "Curve Point"));
+                if (points.MaximumTick == long.MaxValue - 1)
+                    foreach (CurvePointSnapshotValue point in points.EnumerateAll())
+                        minimum = Math.Max(minimum, GetRequiredInstantBoundary(point.Tick, "Curve Point"));
             }
         }
         return minimum;
@@ -527,22 +543,22 @@ public static partial class ProjectDomainEditCommands
         long? LoopEndTick,
         bool RequiresChannelIsolation);
 
-    private static long GetRequiredTemplateBoundary(TemplateEvent templateEvent)
+    private static long GetRequiredTemplateBoundary(long tick, TemplateEventKind kind, long length)
     {
-        if (templateEvent.Tick < 0)
+        if (tick < 0)
         {
             return 1;
         }
-        if (templateEvent.Kind == TemplateEventKind.Note && templateEvent.LengthTicks > 0)
+        if (kind == TemplateEventKind.Note && length > 0)
         {
-            if (templateEvent.Tick > long.MaxValue - templateEvent.LengthTicks)
+            if (tick > long.MaxValue - length)
             {
                 throw new InvalidOperationException(
                     "A Template Note end cannot be represented by Int64.");
             }
-            return templateEvent.Tick + templateEvent.LengthTicks;
+            return tick + length;
         }
-        return GetRequiredInstantBoundary(templateEvent.Tick, "Template Event");
+        return GetRequiredInstantBoundary(tick, "Template Event");
     }
 
     private static long GetRequiredInstantBoundary(long tick, string objectName)

@@ -281,6 +281,8 @@ public static partial class ProjectDomainEditCommands
             ArgumentNullException.ThrowIfNull(program);
             ValidatePointBatchProgram(program);
             (double minimum, double maximum) = MidiEventTargetRange(target);
+            int displayOffset = MidiEditingValueDomain.Offset(target);
+            minimum += displayOffset; maximum += displayOffset;
             ValidateDirectRange(program, BatchEditField.PointValue, minimum, maximum);
             EventInstrument instrument = FindEventInstrument(project, eventInstrumentId);
             SubVoice voice = FindSubVoice(instrument, subVoiceId);
@@ -310,7 +312,7 @@ public static partial class ProjectDomainEditCommands
                 BatchEditValues calculated = program.Evaluate(
                     new(
                         Velocity: 0,
-                        PointValue: oldPointValue,
+                        PointValue: oldPointValue + displayOffset,
                         KeyNumber: 0,
                         Gate: 0,
                         Tick: value.Old.Tick,
@@ -318,7 +320,7 @@ public static partial class ProjectDomainEditCommands
                     clock,
                     BatchExpressionTimeout);
                 long? tick = RoundTickOrDiscard(calculated.Tick);
-                int pointValue = checked((int)RoundAndClamp(calculated.PointValue, minimum, maximum));
+                int pointValue = checked((int)RoundAndClamp(calculated.PointValue, minimum, maximum) - displayOffset);
                 TemplateEventValue? replacement = tick is long resolvedTick
                     ? SetTemplateEventPointValue(
                         value.Old with { Tick = resolvedTick },

@@ -350,7 +350,39 @@
 - 决定：CPU 百分比按整机逻辑处理器总容量归一化，并在界面中明确说明；第一帧尚无时间差时显示 Measuring，而不是伪造 `0%`。
 - 边界：About 不持久化采样、不建立历史图表、不驱动任务、缓存或降级策略，也不承诺 Windows Task Manager 必然按同样方式折叠进程。
 
+## ADR-UI-045：A3 冻结手势、共用命令能力与有界浮动工具
+
+- 依据：2026-09-14 Q1/Q2 的 D-UI01.a～d、D-UI02、D-UI04、D-UI09；2026-09-15 用户要求实施 A3。保留用户原答，不采用已撤回的“删除 Draw/两套主工具”。
+- Right Down 仅冻结 source/selection revision、owner、位置和修饰键；后台流式命中不物化密集范围。Right Up 未拖立即菜单，冷命中禁用框架；右拖取消菜单并框选，不再保留双击计时或右键绘线。关闭请求按 IsOpen=false 取消，不依赖 WPF Popup 关闭动画的 Closed 延迟。
+- Free/Line/Horizontal 是既有共享 Draw 的会话子形态，共用采样和正式提交；Note/Segment/Inst. 不扩展数值绘制。Ctrl+ruler 只设置所在时间上下文 Edit Cursor，不清选或 Seek。原 Ctrl/Shift Add、Alt Remove、Ctrl+Alt Toggle 框选键义按 ADR-UI-023 保留。
+- 浮动工具新增 13 项命令，不复制业务实现：Desktop adapter 从同一菜单构建能力和执行目标；混合选择复用列表的类型子菜单及 retained-selection command。能力按 source/selection/权限修订缓存，hover/layout 不重读完整选择；布局常量数量，可换行/滚动。Inst. 复用其既有包装命令及选择投影。
+- Move/Resize 的 pointer tick/lane/value 取世界坐标；普通/浮动入口共用 preview/commit adapter。捕获内 33 ms UI timer 支持静止边缘滚屏，结束/失捕获/卸载/编辑锁/source或selection失效即停；不承担音频时序。发布中的同命令选择指标刷新仍可提升已准备 preview，不误取消自己的提交。
+- 归属：不修改 Domain、Compiler、canonical、音频、Project Format 或 presentation schema。当前形态按 Segment Workspace、SubVoice、Conductor 会话记忆；同 Track profile 共享与保存恢复交后续 B。正式规格见 §20.4.12/§20.7.9.1、INV-097/098。
+
+### ADR-UI-045 验收修订（2026-09-15）
+
+- 用户明确修订 Copy+Move：三种 Note 的 key delta 不再整组 Clamp，越界副本丢弃而源音符保留；预览、Desktop adapter、小集合和有界分页命令都执行相同规则。事件 value Clamp 不变。
+- 浮动工具固定分组多行、36 DIP 命中格与约 22 DIP 可见图标；常驻顶栏立即显示命中工具名，不创建 ToolTip Popup。独立末行 Deselect All 清空整个 Workspace 选择，只改变 Session 状态，不进 Undo。
+- 名称栏不随内部命令区滚动，取消选择独占末行并可内部滚动到达；布局、命中和能力均为常量规模，复用现有正式编辑命令与有限内存机制。
+
+### ADR-UI-045 紧凑布局修订（2026-09-15）
+
+- 依据：用户后续明确要求 16px 图标、Pin 不切换图标、指定左右边界与 Move 图标、按钮最多三行。此修订只替代上一节的 22 DIP / 五组布局；既有名称栏、编辑能力、命中面积、Pin 背景和预览均保持。
+- 共用 16 DIP 图标、36 DIP 命中格、六列/最多三行可见按钮区；第一行 Pin/适用的左右边界/Move/Properties/Deselect All，第二行剪贴板/删除/翻转/Scale，第三行其余批量工具。Inst. 去掉不适用的左右边界，其余分组相同。窄/矮视图通过内部滚动保留全部命令可达，不扩张为更多可见行。
+- Pin 使用 `Pin16Regular`，左右边界为 `ArrowExportRtl16Regular` / `ArrowExportLtr16Regular`，Move 为 `ArrowMove20Regular` 缩放至 16 DIP。沿用已固定 Fluent revision：新增其已有的十四个原生 16px Geometry；Move、Transpose、Properties、Deselect All 在该 revision 无 16px 版本，缩放既有同款 20px。菜单继续使用原图标尺寸，未全局替换。
+- 不引入 Domain/Compiler/格式/公共业务接口或并发变化；人工只复核图标与三行布局，原 Note Copy 越界修复不回退。
+
 ## 小决定审计
+
+### ADR-UI-045 空白菜单与定位修订（2026-09-15）
+
+- 用户最新要求明确取代 A3 原空白菜单隔离：Timeline 内容空白右击保留当前选择，有有效选择就展示其完整命令；混合选择继续显式分类型，无选择才提供容器/位置命令。原答保留作历史，当前以本修订和 SRS §20.7.3 为准；不改变专用轨头/brace/琴键交互。
+- 同一 ContextMenu 同时服务内容区的手动 RelativePoint 与 ruler/header 的 WPF 原生打开。原生打开前清除局部偏移及 rectangle，重新采用服务管理的鼠标/键盘定位；不二次叠加局部坐标，不改变冻结目标和异步取消门。
+- 图标调整为 15 DIP，按钮 27 DIP；仍使用既有 16px Regular 资源或同款 fallback，左右各 6 DIP 留白并居中。保留 §7 局部平滑缓存、三行、命令适用性与名称栏。只改会话 UI，不新增 Domain/格式/并发模型。
+
+以下为此前留白修订的历史依据：
+
+2026-09-15 A3 图标后续修订：用户要求菜单图标不裁切、浮动图标平滑且更紧凑。共用 MenuItem 的 18 DIP 列减去 7 DIP 间距后只有 11 DIP，改为 28 DIP（20+8）；CheckMark 同列对齐，顶级菜单零宽规则保持。浮动按钮改为 28 DIP，图标仍 16 DIP，行距 2 DIP/外边距 4 DIP，保持三行与原命中/编辑路线。Timeline 保留 Aliased/NearestNeighbor 的既有音符和网格策略；只对最多十八个工具图标独立按当前设备 DPI 以 WPF 默认抗锯齿栅格化，并在设备像素对齐后 1:1 绘制。每工具只留一个当前 DPI/资源版本，不随选区或缩放分层；资源变化失效，Unloaded 释放图标与事件监听。Inst. 沿用本来已平滑的原 FluentIcon 控件，不重复建立缓存。此记录替代上节 36 DIP 间距，不改音乐/格式/Undo/并发模型。
 
 以下均是局部、可替换且不改变可听结果/持久化/公共业务接口的小决定，按用户授权采用推荐方案：
 

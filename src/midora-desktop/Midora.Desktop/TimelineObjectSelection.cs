@@ -120,7 +120,8 @@ internal sealed record TimelineObjectSelection(
                 or DirectMidiChannelEventKind.NoteOn or DirectMidiChannelEventKind.NoteOff ? member.Number : 0;
             return new(WorkspaceTimelineSelectionKind.DirectMidiEventPoint, owner.OwnerId,
                 DirectMidiEventKind: kind, DirectMidiData1: number,
-                PointMaximum: kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127);
+                PointMinimum: MidiEditingValueDomain.Offset(kind, number),
+                PointMaximum: (kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127) + MidiEditingValueDomain.Offset(kind, number));
         }
         if (owner.Kind == ProjectTimelineOwnerKind.SubVoice)
         {
@@ -140,7 +141,7 @@ internal sealed record TimelineObjectSelection(
                 _ => null
             };
             if (target is null) return null;
-            var (minimum, maximum) = InstrumentWorkspaceViewModel.MidiValueRange(target.Value);
+            var (minimum, maximum) = InstrumentWorkspaceViewModel.MidiEditingRange(target.Value);
             return new(WorkspaceTimelineSelectionKind.SubVoiceEventPoint, owner.EventInstrumentId, owner.OwnerId,
                 target, PointMinimum: minimum, PointMaximum: maximum);
         }

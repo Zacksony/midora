@@ -8,7 +8,7 @@ public sealed class BoundedNumericExpressionCompilerTests
     public void ProfilesExposeOnlyTheirVersionedVariables()
     {
         Assert.Equal("midora.tool.batch-note/v1", NumericExpressionProfiles.BatchNote.Id);
-        Assert.Equal("midora.tool.batch-event/v1", NumericExpressionProfiles.BatchEvent.Id);
+        Assert.Equal("midora.tool.batch-event/v2", NumericExpressionProfiles.BatchEvent.Id);
         Assert.Equal("midora.tool.note-split/v1", NumericExpressionProfiles.NoteSplit.Id);
         Assert.Equal(["v0", "v1", "k0", "k1", "g0", "g1", "t0", "t1", "tr"],
             NumericExpressionProfiles.BatchNote.Variables.Select(static value => value.Name));

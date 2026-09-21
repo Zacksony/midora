@@ -18,6 +18,7 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
     public static readonly DependencyProperty PreRollTicksProperty = Register(nameof(PreRollTicks), typeof(long), 0L);
     public static readonly DependencyProperty LoopStartTickProperty = Register(nameof(LoopStartTick), typeof(long?), null);
     public static readonly DependencyProperty LoopEndTickProperty = Register(nameof(LoopEndTick), typeof(long?), null);
+    public static readonly DependencyProperty TemplateEndTickProperty = Register(nameof(TemplateEndTick), typeof(long?), null);
     public static readonly DependencyProperty LaneHeaderWidthProperty = Register(nameof(LaneHeaderWidth), typeof(double), 52d);
     public static readonly DependencyProperty RulerHeightProperty = Register(nameof(RulerHeight), typeof(double), 24d);
     public static readonly DependencyProperty ShowRulerLabelsProperty = Register(nameof(ShowRulerLabels), typeof(bool), true);
@@ -42,6 +43,7 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
     public long PreRollTicks { get => (long)GetValue(PreRollTicksProperty); set => SetValue(PreRollTicksProperty, value); }
     public long? LoopStartTick { get => (long?)GetValue(LoopStartTickProperty); set => SetValue(LoopStartTickProperty, value); }
     public long? LoopEndTick { get => (long?)GetValue(LoopEndTickProperty); set => SetValue(LoopEndTickProperty, value); }
+    public long? TemplateEndTick { get => (long?)GetValue(TemplateEndTickProperty); set => SetValue(TemplateEndTickProperty, value); }
     public double LaneHeaderWidth { get => (double)GetValue(LaneHeaderWidthProperty); set => SetValue(LaneHeaderWidthProperty, value); }
     public double RulerHeight { get => (double)GetValue(RulerHeightProperty); set => SetValue(RulerHeightProperty, value); }
     public bool ShowRulerLabels { get => (bool)GetValue(ShowRulerLabelsProperty); set => SetValue(ShowRulerLabelsProperty, value); }
@@ -58,6 +60,8 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
             ?? new SolidColorBrush(Color.FromRgb(232, 179, 75));
         Brush preRoll = TryFindResource("Brush.Timeline.PreRoll") as Brush
             ?? new SolidColorBrush(Color.FromRgb(199, 138, 255));
+        Brush template = TryFindResource("Brush.Info") as Brush
+            ?? new SolidColorBrush(Color.FromRgb(95, 166, 231));
 
         drawingContext.PushClip(new RectangleGeometry(layout.Content));
         // Match the existing outside-active-range tint without hiding notes or
@@ -83,30 +87,29 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
         }
         // At low zoom multiple endpoints can share one pixel. Combine colliding
         // labels rather than drawing text on top of other endpoint text.
-        List<(double X, string Text, bool IsPreRoll)> labels = [];
-        AddLabel(layout.PreRollEndX, $"Pre-Roll {PreRollTicks}", isPreRoll: true);
-        AddLabel(layout.LoopStartX, $"Start {LoopStartTick}");
-        AddLabel(layout.LoopEndX, $"End {LoopEndTick}");
+        List<(double X, string Text, Brush Foreground)> labels = [];
+        AddLabel(layout.PreRollEndX, $"Pre-Roll {PreRollTicks}", preRoll);
+        AddLabel(layout.LoopStartX, $"Start {LoopStartTick}", warning);
+        AddLabel(layout.LoopEndX, $"End {LoopEndTick}", warning);
+        AddLabel(layout.TemplateEndX, $"Template {TemplateEndTick}", template);
         labels.Sort(static (left, right) => left.X.CompareTo(right.X));
         for (int i = 0; i < labels.Count; i++)
         {
-            (double anchor, string text, bool isPreRoll) = labels[i];
-            int preRollStart = isPreRoll ? 0 : -1;
-            int preRollLength = isPreRoll ? text.Length : 0;
+            int first = i;
+            var (anchor, text, _) = labels[i];
             FormattedText formatted = Format(text);
             while (i + 1 < labels.Count && anchor + formatted.WidthIncludingTrailingWhitespace + 8 >= labels[i + 1].X)
             {
                 var next = labels[++i];
-                if (next.IsPreRoll)
-                {
-                    preRollStart = text.Length + 3;
-                    preRollLength = next.Text.Length;
-                }
                 text += " · " + next.Text;
                 formatted = Format(text);
             }
-            if (preRollStart >= 0)
-                formatted.SetForegroundBrush(preRoll, preRollStart, preRollLength);
+            int offset = 0;
+            for (int j = first; j <= i; j++)
+            {
+                formatted.SetForegroundBrush(labels[j].Foreground, offset, labels[j].Text.Length);
+                offset += labels[j].Text.Length + 3;
+            }
             DrawLabel(anchor, formatted);
         }
         drawingContext.Pop();
@@ -118,9 +121,9 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
                 new Rect(left, layout.Content.Top, 1 / dpi.DpiScaleX, layout.Content.Height));
         }
 
-        void AddLabel(double? x, string text, bool isPreRoll = false)
+        void AddLabel(double? x, string text, Brush foreground)
         {
-            if (x is double anchor) labels.Add((anchor, text, isPreRoll));
+            if (x is double anchor) labels.Add((anchor, text, foreground));
         }
 
         FormattedText Format(string text)
@@ -171,11 +174,12 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
             }
         }
         return new(content, shade, band, VisibleX(PreRollTicks > 0 ? PreRollTicks : null),
-            VisibleX(LoopStartTick), VisibleX(LoopEndTick));
+            VisibleX(LoopStartTick), VisibleX(LoopEndTick), VisibleX(TemplateEndTick, includeRightEdge: true));
 
         double X(long tick) => Math.Clamp(Math.Round((LaneHeaderWidth
             + (tick - StartTick) / (double)span * contentWidth) * dpiX) / dpiX, LaneHeaderWidth, width);
-        double? VisibleX(long? tick) => tick is long value && value >= StartTick && value < end ? X(value) : null;
+        double? VisibleX(long? tick, bool includeRightEdge = false) => tick is long value && value >= StartTick
+            && (value < end || includeRightEdge && value == end) ? X(value) : null;
     }
 
     private static DependencyProperty Register(string name, Type type, object? initial) =>
@@ -184,7 +188,7 @@ public sealed class TimelineSemanticOverlay : FrameworkElement
 }
 
 internal readonly record struct TimelineSemanticOverlayLayout(
-    Rect Content, Rect PreRollShade, Rect LoopBand, double? PreRollEndX, double? LoopStartX, double? LoopEndX)
+    Rect Content, Rect PreRollShade, Rect LoopBand, double? PreRollEndX, double? LoopStartX, double? LoopEndX, double? TemplateEndX)
 {
-    public static TimelineSemanticOverlayLayout Empty => new(Rect.Empty, Rect.Empty, Rect.Empty, null, null, null);
+    public static TimelineSemanticOverlayLayout Empty => new(Rect.Empty, Rect.Empty, Rect.Empty, null, null, null, null);
 }

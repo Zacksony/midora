@@ -550,7 +550,7 @@ internal static partial class ObjectPropertiesProjection
                     valueCurveBatch.Curve.Id,
                     ownedWorkspace.Selection.SharedIds,
                     TryValue("valueCurvePoint.tick", out string tick) ? Long(tick, "Tick") : null,
-                    TryValue("valueCurvePoint.value", out string pointValue) ? Double(pointValue, "Value") : null,
+                    TryValue("valueCurvePoint.value", out string pointValue) ? Double(pointValue, "Value") - MidiEditingValueDomain.Offset(valueCurveBatch.Curve.Target) : null,
                     TryValue("valueCurvePoint.interpolation", out string interpolation)
                         ? EnumValue<CurveInterpolation>(interpolation, "Interpolation")
                         : null);
@@ -762,7 +762,7 @@ internal static partial class ObjectPropertiesProjection
                     ? Long(tick, "Tick")
                     : null,
                 TryValue("batch.valueCurvePoint.value", out string pointValue)
-                    ? Double(pointValue, "Value")
+                    ? Double(pointValue, "Value") - MidiEditingValueDomain.Offset(curveBatch.Curve.Target)
                     : null,
                 TryValue("batch.valueCurvePoint.interpolation", out string interpolation)
                     ? EnumValue<CurveInterpolation>(interpolation, "Interpolation")
@@ -902,8 +902,8 @@ internal static partial class ObjectPropertiesProjection
             };
             int? data2 = key switch
             {
-                "midiEvent.velocity" or "midiEvent.pressure" or "midiEvent.value" =>
-                    IntRange(value, "Value", 0, 127),
+                "midiEvent.velocity" or "midiEvent.pressure" => IntRange(value, "Value", 0, 127),
+                "midiEvent.value" => MidiEditingValueDomain.ControllerRaw(directEvent.Data1, Int(value, "Value")),
                 "midiEvent.pitchBend" => IntRange(value, "Pitch Bend", 0, 16_383) >> 7,
                 _ => null
             };
@@ -956,7 +956,7 @@ internal static partial class ObjectPropertiesProjection
                     ProjectDomainEditCommands.UpdateEventInstrumentInitialStateValue(
                         instrument.Id,
                         ParseInitialStateTarget(key["instrument.initial.".Length..]),
-                        NullableInt(value, "Initial State Value")),
+                        ParseInitialDisplayValue(value, ParseInitialStateTarget(key["instrument.initial.".Length..]))),
                 _ when key.StartsWith("subvoice.", StringComparison.Ordinal) =>
                     CreateSubVoiceEdit(instrument, instrumentWorkspace.Selection.Primary, key, value),
                 _ when key.StartsWith("parameter.", StringComparison.Ordinal) =>
@@ -1093,8 +1093,9 @@ internal static partial class ObjectPropertiesProjection
                             midiLocation.Segment.Id,
                             ids,
                             data1: IntRange(value, "Channel Pressure", 0, 127)),
-                    "batch.midiEvent.velocity" or "batch.midiEvent.pressure" or
-                        "batch.midiEvent.value" =>
+                    "batch.midiEvent.value" => ProjectDomainEditCommands.SetDirectMidiEventValues(
+                        midiLocation.Segment.Id, ids, controllerDisplayValue: Int(value, "Value")),
+                    "batch.midiEvent.velocity" or "batch.midiEvent.pressure" =>
                         ProjectDomainEditCommands.SetDirectMidiEventValues(
                             midiLocation.Segment.Id,
                             ids,
@@ -1120,7 +1121,7 @@ internal static partial class ObjectPropertiesProjection
                     tick: Long(value, "Tick")),
                 "batch.valueCurvePoint.value" => ProjectDomainEditCommands.SetValueCurvePoints(
                     instrument.Id, curveBatch.Voice.Id, curveBatch.Curve.Id, ids,
-                    value: Double(value, "Value")),
+                    value: Double(value, "Value") - MidiEditingValueDomain.Offset(curveBatch.Curve.Target)),
                 "batch.valueCurvePoint.interpolation" => ProjectDomainEditCommands.SetValueCurvePoints(
                     instrument.Id, curveBatch.Voice.Id, curveBatch.Curve.Id, ids,
                     interpolation: EnumValue<CurveInterpolation>(value, "Interpolation")),
@@ -1203,7 +1204,7 @@ internal static partial class ObjectPropertiesProjection
                 break;
             case DirectMidiChannelEventKind.ControlChange:
                 fields.Add(Field("midiEvent.controller", "CONTROLLER", item.Data1));
-                fields.Add(Field("midiEvent.value", "VALUE", item.Data2));
+                fields.Add(Field("midiEvent.value", "VALUE", MidiEditingValueDomain.ControllerDisplay(item.Data1, item.Data2)));
                 break;
             case DirectMidiChannelEventKind.ProgramChange:
                 fields.Add(Field("midiEvent.program", "PROGRAM (0–127)", item.Data1));
@@ -1251,6 +1252,7 @@ internal static partial class ObjectPropertiesProjection
             : null;
         int? data1 = null;
         int? data2 = null;
+        int? controllerDisplayValue = null;
         if (TryValue("key", out string keyText))
         {
             data1 = IntRange(keyText, "Key Number", 0, 127);
@@ -1278,7 +1280,7 @@ internal static partial class ObjectPropertiesProjection
         }
         else if (TryValue("value", out string valueText))
         {
-            data2 = IntRange(valueText, "Value", 0, 127);
+            controllerDisplayValue = IntRange(valueText, "Value", -64, 127);
         }
 
         if (TryValue("pitchBend", out string pitchBendText))
@@ -1293,7 +1295,8 @@ internal static partial class ObjectPropertiesProjection
             eventIds,
             tick: tick,
             data1: data1,
-            data2: data2);
+            data2: data2,
+            controllerDisplayValue: controllerDisplayValue);
     }
 
     private sealed record LogicalParameterPointBatch(
@@ -1762,7 +1765,7 @@ internal static partial class ObjectPropertiesProjection
                     "Value Curve Point",
                     $"{curveVoice.Name ?? "SubVoice"} · {FormatMidiTarget(curve.Target)}",
                     [Field("valueCurvePoint.tick", "TICK", point.Tick),
-                     Field("valueCurvePoint.value", "VALUE", point.Value),
+                     Field("valueCurvePoint.value", "VALUE", point.Value + MidiEditingValueDomain.Offset(curve.Target)),
                      Field("valueCurvePoint.interpolation", "INTERPOLATION", point.Interpolation)]);
                 return;
             }
@@ -1803,7 +1806,7 @@ internal static partial class ObjectPropertiesProjection
                     fields.Add(Field(
                         "template.value",
                         template.Kind == TemplateEventKind.Program ? "PROGRAM (0–127)" : "VALUE",
-                        template.Value));
+                        template.Value + MidiEditingValueDomain.Offset(template.Kind, template.Number)));
                 }
                 if (template.Kind is TemplateEventKind.Bank or TemplateEventKind.PitchBendRange)
                 {
@@ -1940,7 +1943,7 @@ internal static partial class ObjectPropertiesProjection
                     instrument.Id,
                     id,
                     ParseInitialStateTarget(key["subvoice.initial.".Length..]),
-                    NullableInt(value, "Initial State Value")),
+                    ParseInitialDisplayValue(value, ParseInitialStateTarget(key["subvoice.initial.".Length..]))),
             _ => throw new InvalidOperationException("This SubVoice property is read-only.")
         };
     }
@@ -2014,7 +2017,7 @@ internal static partial class ObjectPropertiesProjection
                 curve.Id,
                 point.Id,
                 key == "valueCurvePoint.tick" ? Long(value, "Tick") : point.Tick,
-                key == "valueCurvePoint.value" ? Double(value, "Value") : point.Value,
+                key == "valueCurvePoint.value" ? Double(value, "Value") - MidiEditingValueDomain.Offset(curve.Target) : point.Value,
                 key == "valueCurvePoint.interpolation"
                     ? EnumValue<CurveInterpolation>(value, "Interpolation")
                     : point.Interpolation);
@@ -2239,7 +2242,7 @@ internal static partial class ObjectPropertiesProjection
         int eventValue = TryValue("template.value", out string valueText)
             ? item.Kind == TemplateEventKind.Program
                 ? IntRange(valueText, "Program", 0, 127)
-                : Int(valueText, "Value")
+                : checked(Int(valueText, "Value") - MidiEditingValueDomain.Offset(item.Kind, number))
             : item.Value;
         int secondary = TryValue("template.secondary", out string secondaryText)
             ? Int(secondaryText, "Secondary Value")
@@ -2515,11 +2518,14 @@ internal static partial class ObjectPropertiesProjection
             .Select(item => StateField(
                 $"{prefix}.cc.{item.Key}",
                 $"INITIAL {MidiControlChangeCatalog.Format(item.Key)}",
-                item.Value))
+                MidiEditingValueDomain.ControllerDisplay(item.Key, item.Value)))
             .Concat(state.RegisteredParameters.OrderBy(item => item.Key)
                 .Select(item => StateField($"{prefix}.rpn.{item.Key}", $"INITIAL RPN {item.Key}", item.Value)))
             .Concat(state.NonRegisteredParameters.OrderBy(item => item.Key)
                 .Select(item => StateField($"{prefix}.nrpn.{item.Key}", $"INITIAL NRPN {item.Key}", item.Value)));
+
+    private static int? ParseInitialDisplayValue(string value, MidiValueTarget target) =>
+        NullableInt(value, "Initial State Value") is { } display ? MidiEditingValueDomain.ClampInitialState(target, display) : null;
 
     private static MidiValueTarget ParseInitialStateTarget(string key)
     {

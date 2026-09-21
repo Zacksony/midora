@@ -508,6 +508,7 @@ public sealed partial class WpfInteractionRegressionTests
                 Style scrollBar = Assert.IsType<Style>(controls[typeof(ScrollBar)]);
                 Style menuSeparator = Assert.IsType<Style>(
                     controls[MenuItem.SeparatorStyleKey]);
+                AssertMenuIconsHaveTheirOwnFullWidthSlot();
 
                 Assert.Contains(combo.Setters.OfType<Setter>(), setter =>
                     setter.Property == Control.TemplateProperty && setter.Value is ControlTemplate);
@@ -699,7 +700,7 @@ public sealed partial class WpfInteractionRegressionTests
             {
                 application.Shutdown();
             }
-        });
+        }, TimeSpan.FromSeconds(180)); // Whole copy/Undo + native menu matrix; individual async assertions retain their 8-second gate.
     }
 
     [Fact]
@@ -1575,14 +1576,16 @@ public sealed partial class WpfInteractionRegressionTests
         {
             XElement button = document.Descendants(presentation + "Button").Single(element =>
                 string.Equals(
-                    (string?)element.Element(presentation + "TextBlock")?.Attribute("Text"),
+                    (string?)element.Attribute("AutomationProperties.Name"),
                     command,
                     StringComparison.Ordinal));
+            Assert.Equal(command == "Compile" ? "{Binding CompileButtonText}" : command,
+                (string?)button.Element(presentation + "TextBlock")?.Attribute("Text"));
             Assert.Equal(
                 "{StaticResource Button.CommandBarText}",
                 (string?)button.Attribute("Style"));
             Assert.Equal(
-                "{StaticResource Text.CommandBarButton}",
+                command == "Compile" ? "{StaticResource Text.CompileCommandBarButton}" : "{StaticResource Text.CommandBarButton}",
                 (string?)button.Element(presentation + "TextBlock")?.Attribute("Style"));
         }
     }
@@ -2012,7 +2015,7 @@ public sealed partial class WpfInteractionRegressionTests
         Dispatcher.PushFrame(frame);
     }
 
-    private static void RunOnSta(Action action)
+    private static void RunOnSta(Action action, TimeSpan? timeout = null)
     {
         Exception? failure = null;
         Thread thread = new(() =>
@@ -2032,9 +2035,9 @@ public sealed partial class WpfInteractionRegressionTests
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        if (!thread.Join(TimeSpan.FromSeconds(30)))
+        if (!thread.Join(timeout ?? TimeSpan.FromSeconds(30)))
         {
-            throw new TimeoutException("The WPF Dispatcher regression test did not complete.");
+            throw new TimeoutException($"The WPF Dispatcher regression test did not complete. Last object-list stage: {TimelineObjectListIntegrationTests.CurrentTestStage}");
         }
         if (failure is not null)
         {

@@ -81,7 +81,9 @@ public partial class BatchEditHelpDialog : Window
 
     public IReadOnlyList<string> ResultRules { get; } =
     [
-        "Integral targets are rounded away from zero. Velocity and Point Value are clamped to their formal target ranges.",
+        "Integral targets are rounded away from zero. Velocity and Point Value are clamped to their editing ranges.",
+        "CC10 and CC71–78 use -64..63 in editors, Batch Edit and Batch Create (display = MIDI value - 64). Deltas are not offset; factors operate on the displayed value.",
+        "Example: CC10 shown as 32 uses =p0*0.5 (or *0.5) to become 16. Project Mapping is different: value*0.5 operates on MIDI 96, produces MIDI 48, and is then shown as -16. Mapping functions, built-in steps and accumulators remain in the data domain.",
         "Gate is clamped to at least 1 tick. A note whose calculated Key Number is outside 0–127 is removed.",
         "A Segment object calculated before the exposed left edge expands the Segment left while preserving hidden objects. Crossing Project tick 0 removes that calculated object.",
         "A SubVoice object calculated below tick 0 is removed. Evaluation of the complete batch is limited to 10 seconds."

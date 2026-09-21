@@ -1,6 +1,6 @@
 # 执行计划 03：Lane Tabs、显示值与事件阶梯线
 
-日期：2026-09-15。近期：R28（P1），A2b；后续：R12／R29（均 P2），A4a。用户已确认全部人工验收及交互返修通过，含 LANE-02；扩大压力门见 §8。R12／R29 仍未开始。
+日期：2026-09-17。R28（P1）A2b 全部人工验收及交互返修通过，含 LANE-02；扩大压力门见 §8。R12／R29（均 P2）A4a 已获用户“大体全部验收通过”；后续 Lines 范围／全局开关修订也已获明确验收通过。A2b 样例非法 Logical Linear 点修正及自动证据见 §10；进一步的逻辑参数写入约束强化明确延期。原工程缺测继续保留。
 
 总入口：[执行计划索引](00-Execution-Plan.md)。需求依据：[需求 02](../02-Instrument-Changes-and-Lanes.md)、[唯一问答入口 04](../04-Decisions-and-Preparation.md)、[决策汇总 05](../05-Decision-Summary-and-Q2-2026-09-14.md)。R27 包装见 [计划 02](02-Instrument-Changes.md)。本文件拆解已确认决定并记录阶段状态，不新增或改写用户问答；实际实现／SRS 承接／验证证据见 §8。
 
@@ -10,7 +10,7 @@
 |---|---|---|---|
 | R28 Lane Tabs | 当前 owner＋正式 target、内容摘要、显示／隐藏／导航动作 → 单活动 Lane 及轻量 Tab 状态；显式编辑仍提交正式 Project command | Vel. 第一、适用 Inst. 第二且不可隐藏；普通 target 可隐藏；目录显示全部已有 targets 的名称、精确数量、显隐，含无点但有 Curve／Mapping owner；没有摘要时后台统计中 | 不全建 128 CC，不把隐藏等同删除，不通过共享 Track profile 在其他 Segment 创建 Lane，不建第二套音乐模型 |
 | R12 友好显示值 | CC10／CC71～78 raw 0～127 → 外侧显示／数值编辑工具 −64～63 → 正式 raw 编码 | 编辑层转换 display=raw−64；Project Mapping Function、内置／图形 Step、共享 accumulator、Context、取整／ABI 保持 raw；Help 对照两层 | 不对其他 CC／Note／Logical Parameter／时间／目标身份偏移，不在普通编辑入口增加 raw 辅助值或切换开关，不放弃旧项目音乐读取 |
-| R29 阶梯线 | 当前 Lane 自己的显式状态型标量点／Logical Parameter Step 点、同 owner 前驱及 formal order → 辅助显示线 | 有前驱接入可视左界，无前驱从首显式点起；默认显示、可关闭、线不命中；界外数据可视与实际发声范围区分 | 不解释跨 Track／Root 最终状态，不凭 Initial/default 造线，不改 Value Curve／Envelope，不把 Velocity／Inst.／Bank-PC／opaque／CC120～127 机械连线 |
+| R29 阶梯线 | 当前 Lane 自己的显式记录、同 owner 前驱及 formal order → 辅助显示线；依 D-STEP05 覆盖除 Vel.／Inst. 外全部 Lane | 有前驱接入可视左界，无前驱从首显式点起；程序级 Appearance 默认显示、可关闭、线不命中；opaque 使用既有固定 y；界外数据可视与实际发声范围区分 | 不解释跨 Track／Root 最终状态，不凭 Initial/default 造线，不改 Value Curve／Envelope，不声称命令保持状态，不解释 opaque payload |
 
 共同约束：稳定 ID／正式 target 是身份，名称和 Tab 位置不是身份；`[start,end)`、正式同 Tick order、精确碰撞与 source trace 不变。任何编辑失败／取消／revision race 均零部分发布；派生显示失败不得改 Project。普通显示、Tab 重排、显隐、纵轴不进入 canonical／MIDI／音频，也不作为音乐 Modified 或 Undo。R28 先实现会话内稳定状态，未来 R06／R07 按已确认白名单接入独立 presentation，不序列化整个 Tab VM。
 
@@ -107,7 +107,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-VAL-01 — 冻结外侧数值契约及入口清单
 
-- 状态：未开始。依据：R12；D-VAL01.a/b/c/d；SRS §20.4.13／19、INV-029／104。
+- 状态：已实施；证据见 §9。依据：R12；D-VAL01.a/b/c/d；SRS §20.4.13／19、INV-029／104。
 - 依赖：无 P0/P1 前置工作要求；正式接入采用已稳定的 Lane target 接口。
 - 工作：列出白名单 CC10／71～78、所有显示与数值工具输入输出、源编码差异、取整／Clamp 边界、工具 profile／Preset 数值版本待更新点；明确 Mapping 全链 raw 不变，保存既有音乐读取测试基线。
 - 非目标：不重新提问 Mapping 是否改域，不提前写死新 profile 版本，不改变 Project Mapping ABI。
@@ -116,7 +116,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-VAL-02 — 共用 target 显示描述与无损反变换
 
-- 状态：未开始。依据：R12；D-VAL01.a/d；SRS §8.54、§8.56。
+- 状态：已实施；全 CC/byte 往返测试通过，见 §9。依据：R12；D-VAL01.a/d；SRS §8.54、§8.56。
 - 依赖：T-VAL-01。
 - 工作：建立集中描述供格式化、值轴与编辑转换使用，白名单 display=raw−64、inverse=display+64；分别处理 Direct 14-bit PB 与 SubVoice signed PB，保证原 PB 语义，不套 CC 偏移。
 - 非目标：不改 CC 编号、Catalog 字段、Bank-PC、Note、时间或 Mapping 音乐值，不散落多个独立减 64 实现。
@@ -125,7 +125,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-VAL-03 — 图形、List、Properties 与 Initial State 一致呈现
 
-- 状态：未开始。依据：R12；D-VAL01.a/c/d。
+- 状态：已实施；跨入口自动测试及人工门见 §9。依据：R12；D-VAL01.a/c/d。
 - 依赖：T-VAL-02、已稳定的三宿主入口。
 - 工作：接 ruler、坐标、点／条 Tooltip、List、Properties、适用 Initial State；白名单入口只显示友好值，没有 raw 辅助项／开关；入口编辑最后编码回正式 raw。
 - 非目标：不改变合法音乐范围或以显示 viewport 充当合法范围；不把“完全不额外显示 raw”扩成隐藏 Program／Bank 合法数值。
@@ -134,7 +134,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-VAL-04 — Batch／Generator 与 Preset 数值适配
 
-- 状态：未开始。依据：R12；D-VAL01.b/d；SRS §20.4.11／13／19。
+- 状态：已实施；Event profile/numeric contract v2，旧文件保留并提示，见 §9。依据：R12；D-VAL01.b/d；SRS §20.4.11／13／19。
 - 依赖：T-VAL-01／02。
 - 工作：批改与生成器相应 point value、Initial、递推输入／输出使用显示域，最终一次转 raw；delta／factor 不做绝对偏移。更新工具数值契约版本和 Preset 验证，保留语法／API／资源安全上限，Undo／Redo 不重新求表达式。
 - 非目标：不承诺旧工具表达式／预设结果兼容，不据此拒绝旧 `.midora` 音乐；不改变 Project Function、内置 Step、accumulator、Context 或 ABI。
@@ -143,7 +143,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-VAL-05 — Help 两层对照与 Mapping 不变回归
 
-- 状态：未开始。依据：R12；D-VAL01.d 的明确 Help 要求；INV-029／104。
+- 状态：已实施；Compiler/Mapping/Persistence/Export 回归见 §9。依据：R12；D-VAL01.d 的明确 Help 要求；INV-029／104。
 - 依赖：T-VAL-02～04。
 - 工作：Help 解释外侧编辑／数值工具与数据／Mapping 的不同值域，以同一 CC10 raw96 样例对照：工具半值写 raw80，Mapping `value*0.5` 或内置 Multiply 0.5 仍输出 raw48／显示−16；明确仅旧工具结果兼容可破坏。测试映射 Function、内置／图形 Step、共享累计链及 Context 不变。
 - 非目标：Help 的编码说明不恢复普通 Tooltip raw 值或全局开关；不在 Function 入口偷偷偏移。
@@ -152,7 +152,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-VAL-06 — 三宿主回归、性能与 A4a 交付证据
 
-- 状态：未开始。依据：R12 全部 D-VAL。
+- 状态：本轮自动证据已归档，扩大矩阵缺测保留；待人工验收，见 §9。依据：R12 全部 D-VAL。
 - 依赖：T-VAL-01～05。
 - 工作：执行 AUTO-VAL 矩阵，覆盖三宿主适用 CC、无变化 target、Properties／List／图形／工具一致性与大样本；合并 UAT-A4a 中显示域 3 项。
 - 非目标：不阻塞 R27／R28，不额外建立一轮人工数值底层测试。
@@ -163,16 +163,16 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-STEP-01 — 冻结可连线目标与自身记录语义
 
-- 状态：未开始。依据：R29；D-STEP01～04；SRS §8.55／58、INV-076／110。
+- 状态：已实施；适用/排除矩阵见 §9。依据：R29；D-STEP01～04；SRS §8.55／58、INV-076／110。
 - 依赖：无 R27 的声音／格式前置；接稳定 target 能力表。
-- 工作：逐类定义状态型标量／Logical Parameter Step 能力，排除 Velocity、Inst.、Bank-PC、opaque、CC120～127；明确只画当前 owner 显式点、前驱和正式同 Tick order，界外区间／模板边界、开关与不命中规则。
+- 工作：依 2026-09-17 D-STEP05 覆盖除 Vel.／Inst. 外全部 Lane，包括 Bank-PC、opaque、命令 CC；明确只画当前 owner 显式点、前驱和正式同 Tick order，界外区间／模板边界、开关与不命中规则。opaque 不解释 payload，位置线不声明 MIDI 状态持续。
 - 非目标：不把 Value Curve／Envelope 全改为 Step，不查询整个 Channel 最终状态、不用 Initial/default 虚构起线。
 - 完成证据：三宿主 target 能力矩阵、首点／前驱／同 Tick／界外 golden 参考定义与实施期规格承接。
 - 门：正确性线仅代表数据而非发声承诺；性能无强制全源 prefix；失败为能力不适用时不连线，不借 fallback 伪造状态。
 
 ### T-STEP-02 — 正式 order 的范围与前驱查询
 
-- 状态：未开始。依据：R29；D-STEP02/03；INV-065／069／095。
+- 状态：已实施；有界范围、前驱及同 Tick order 测试见 §9。依据：R29；D-STEP02/03；INV-065／069／095。
 - 依赖：T-STEP-01；复用 T-LANE-01／02 可用范围接口，不要求把两者做成同一索引。
 - 工作：为活动 owner＋target 提供绑定 revision 的可见范围与最近前驱、页级聚合；同 Tick 首末严格依正式 order，不按稳定 ID；覆盖稀疏长间隔、极端 Tick 与无前驱。
 - 非目标：不建立全事件数组／多份完整 prefix，不对所有 Track 做 channel-state 查询，不触发 UI 同步编译。
@@ -181,7 +181,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-STEP-03 — 阶梯 tile、LOD 与局部失效
 
-- 状态：未开始。依据：R29；D-STEP01～03；SRS §18.2.7、INV-069／110。
+- 状态：已实施；独立异步瓦片、range/predecessor/order 指纹，见 §9。依据：R29；D-STEP01～03；SRS §18.2.7、INV-069／110。
 - 依赖：T-STEP-01／02；如同批 R12 接入，取 T-VAL-02 显示描述，不因此前移 R12。
 - 工作：参考 Tempo 的设备列 first／last／min／max 思路形成共享适配，画水平保持与变化 Tick 竖跳；左界前驱正确接入，界外内容弱化明确，不跨 owner 接线。点／选择／线层局部失效并保持像素对齐。
 - 非目标：不删 LOD 合并像素内的正式记录、不线性插值声音，不为每点建 WPF Control，不直接复制 Conductor 模型。
@@ -190,16 +190,16 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-STEP-04 — 开关、输入透明与编辑集成
 
-- 状态：未开始。依据：R29；D-STEP04；D-LANE01.e、D-UI01.d。
+- 状态：已实施；三宿主程序级 Lines 开关、取消和选择不变测试见 §10。依据：R29；D-STEP04/05；D-LANE01.e、D-UI01.d。
 - 依赖：T-STEP-03。
-- 工作：默认显示线，提供关闭线视图选项；线不参与命中，所有拖拽仍以点和已有 source hit-test 执行；整合三宿主换 Lane、Snap、选择、Undo 与共享 Draw／事件形态，不改变采样密度和碰撞。
-- 非目标：不增加点击线选前驱或修改持续状态的隐式操作，不把开关加入 Project 音乐 History；跨会话持久化归 B 白名单，不在此私加 schema。
+- 工作：默认显示线，Application Preferences → Appearance 提供统一开关，保存后同步已打开及后续 Lane，移除 Lane 工具栏开关；线不参与命中，所有拖拽仍以点和已有 source hit-test 执行；整合三宿主换 Lane、Snap、选择、Undo 与共享 Draw／事件形态，不改变采样密度和碰撞。
+- 非目标：不增加点击线选前驱或修改持续状态的隐式操作，不把开关加入 Project、音乐 History 或音频配置；此程序级偏好不属于 B 的 Project presentation。
 - 完成证据：相同输入开启／关闭线的命中／命令结果对照、选择与 Undo 对照、只改变视图的断言。
 - 门：正确性开启前后音乐与编辑结果完全相同；性能开关不复建 source 索引、切换取消旧请求；失败为关闭／owner 删除／捕获丢失无迟到编辑或多余 Undo。
 
 ### T-STEP-05 — 同 Tick、界外和非状态目标反例
 
-- 状态：未开始。依据：R29；D-STEP01～03；INV-050／051／077。
+- 状态：已实施；自动反例与待视觉核验项见 §9。依据：R29；D-STEP01～03；INV-050／051／077。
 - 依赖：T-STEP-02～04。
 - 工作：构造共享 Root 另一 Track 改值、当前 Lane 无前驱、crop 外点、相邻 Segment、SubVoice 模板边界、PB、Bank-PC／命令／opaque、曲线＋离散点的反例；确保线只是对应数据源的辅助展示。
 - 非目标：不为使线看似连续而补原始事件、不将界外线解释成音频持续，不覆盖 Value Curve 原绘制语义。
@@ -208,7 +208,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### T-STEP-06 — 大样本、关闭释放与 A4a 交付
 
-- 状态：未开始。依据：R29 全部 D-STEP。
+- 状态：本轮大样本和有界门已记录，完整长会话/帧分布未穷尽；待人工验收，见 §9。依据：R29 全部 D-STEP。
 - 依赖：T-STEP-01～05。
 - 工作：执行 AUTO-STEP 矩阵，测线开／关冷暖 pan／zoom／局部编辑／Undo／切 Tab／关 Project，整理 A4a 阶梯线 3 项，与 R12 合并交付。
 - 非目标：不阻塞 P0/P1，不用单次均值或稀疏小样本宣称百万级通过，不新增一轮用户逐项查像素的测试。
@@ -217,7 +217,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ## 5. 原定自动验证矩阵
 
-此表是完整计划范围，原状态保留用于对照；A2b 实际已测子集、结果和未跑门见 §8，不把少量断言通过写成整行压力矩阵通过。R12／R29 尚未实施。
+此表是完整计划范围，原状态保留用于对照；A2b 实际已测子集、结果和未跑门见 §8，不把少量断言通过写成整行压力矩阵通过。A4a 实际已测子集和缺测见 §9，不将整张计划矩阵一律标为通过。
 
 下表属于工程自动验证，不能转换成用户重复手工遍历任务。每次报告需列构建／测试命令、fixture、源版本、实际通过／失败／未跑，不能只贴“测试完成”。
 
@@ -242,7 +242,7 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ## 6. 人工验收清单
 
-用户只核查自动测试不能替代的布局、手感和可理解性。开发方先给自动证据、固定样例与打开位置，并自行完成 DPI 100／125／150／200%、短窗／长名称／禁用状态矩阵；没有当前明确授权不得调用 computer-use。A2b 全部人工验收及返修通过，原表操作和预期不变；A4a 未开始。
+用户只核查自动测试不能替代的布局、手感和可理解性。开发方先给自动证据、固定样例与打开位置，并自行完成 DPI 100／125／150／200%、短窗／长名称／禁用状态矩阵；没有当前明确授权不得调用 computer-use。A2b 全部人工验收及返修通过。A4a 原六项用户大体全部验收通过；保留下面的原清单作历史基线，STEP-02/03 的新增范围／开关以 §10 为准，不把新要求冒充已验收。
 
 ### UAT-A2b — 与 R27 全编辑合并一次（本文件 6 项）
 
@@ -259,16 +259,16 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 
 ### UAT-A4a — 显示域与阶梯线（后续 P2，共 6 项）
 
-仅 R12／R29 实施完适用自动门后安排，不阻塞 A2a／A2b；不是要求用户当前执行。
+2026-09-15 的原验收清单如下。2026-09-17 用户已确认“大体全部验收通过”；本轮修订另见 §10。自动证据和未穷尽工程门见 §9。
 
 | 检查 ID | 具体操作场景 | 预期 | 状态 |
 |---|---|---|---|
-| UAT-A4a-VAL-01 | 打开白名单 CC10／71～78 样例，在图形标尺、坐标、Tooltip、List、Properties、适用 Initial State 查看并改边界值 | 统一 −64～63、中心 0，无额外 raw 辅助值／开关；其他 CC／Bank-PC／音符不被减 64 | 未开始 |
-| UAT-A4a-VAL-02 | 对给定 CC10 显示32样例执行工具 `=p0*0.5`，再在独立对照样例查看 Project Mapping 半值效果与 Help | 工具结果显示16；Mapping 对照显示−16；Help 清楚解释外侧编辑层与数据层，无误导“所有表达式同值域” | 未开始 |
-| UAT-A4a-VAL-03 | 从图形、List、Properties 分别做同一改值，试 Batch Create 并取消一次、Undo／Redo一次 | 各入口读数／结果一致，工具输入与界面同域；取消无内容、Undo／Redo 可理解，无原始字节越界弹错或隐藏数值跳变 | 未开始 |
-| UAT-A4a-STEP-01 | 平移有前驱、无前驱、单点与同 Tick 密集点样例，观察三宿主适用 Lane | 水平保持、变化 Tick 竖跳；可见左界前驱连续，无前驱不从默认值画线；密集图仍可辨主要变化 | 未开始 |
-| UAT-A4a-STEP-02 | 查看 crop 外点、相邻 Segment、SubVoice 模板边界，并切 Velocity／Inst.／Bank-PC／命令目标／已有曲线 | 界外线与可听区间区别明确、不跨 owner 接线；排除目标不乱连，Value Curve／Envelope 原样 | 未开始 |
-| UAT-A4a-STEP-03 | 开关阶梯线；点击线段、拖点，缩放后再编辑／Undo；在大样例平移和切 Tab | 线只辅助、不抢命中；开关不改音乐或选择，拖点方式未变；局部更新自然，旧线不闪回，无明显新卡顿 | 未开始 |
+| UAT-A4a-VAL-01 | 打开白名单 CC10／71～78 样例，在图形标尺、坐标、Tooltip、List、Properties、适用 Initial State 查看并改边界值 | 统一 −64～63、中心 0，无额外 raw 辅助值／开关；其他 CC／Bank-PC／音符不被减 64 | 用户大体验收通过 |
+| UAT-A4a-VAL-02 | 对给定 CC10 显示32样例执行工具 `=p0*0.5`，再在独立对照样例查看 Project Mapping 半值效果与 Help | 工具结果显示16；Mapping 对照显示−16；Help 清楚解释外侧编辑层与数据层，无误导“所有表达式同值域” | 用户大体验收通过 |
+| UAT-A4a-VAL-03 | 从图形、List、Properties 分别做同一改值，试 Batch Create 并取消一次、Undo／Redo一次 | 各入口读数／结果一致，工具输入与界面同域；取消无内容、Undo／Redo 可理解，无原始字节越界弹错或隐藏数值跳变 | 用户大体验收通过 |
+| UAT-A4a-STEP-01 | 平移有前驱、无前驱、单点与同 Tick 密集点样例，观察三宿主适用 Lane | 水平保持、变化 Tick 竖跳；可见左界前驱连续，无前驱不从默认值画线；密集图仍可辨主要变化 | 用户大体验收通过 |
+| UAT-A4a-STEP-02 | 查看 crop 外点、相邻 Segment、SubVoice 模板边界，并切 Velocity／Inst.／Bank-PC／命令目标／已有曲线 | 界外线与可听区间区别明确、不跨 owner 接线；排除目标不乱连，Value Curve／Envelope 原样 | 原行为大体通过；范围被 D-STEP05 取代 |
+| UAT-A4a-STEP-03 | 开关阶梯线；点击线段、拖点，缩放后再编辑／Undo；在大样例平移和切 Tab | 线只辅助、不抢命中；开关不改音乐或选择，拖点方式未变；局部更新自然，旧线不闪回，无明显新卡顿 | 原行为大体通过；开关位置被 D-STEP05 取代 |
 
 ## 7. 完成声明与后续依赖
 
@@ -285,3 +285,18 @@ A4a 只是总计划 A4 中 R12／R29 的可独立验收子集，不把 P2 升为
 实际测试与预算详见 [A2b 报告](../../Midora-A2b-Instrument-Changes-and-Lane-Tabs-Implementation-2026-09-14.md)。AUTO-LANE-01／02／04 已有三宿主 Tab 结构、精确计数、独立轴、隐藏重开、显式导航、选择不隐式导航、受控 DPI 的自动证据。AUTO-LANE-03／05／06 已有部分更新／取消／卸载及数据层大样本证据；没有声称随机命令全部组合、真实 UI 帧时序 p95/p99、百万包装与全部 I/O 故障注入已完成。
 
 人工状态：LANE-01～06 全部通过，含 LANE-02 及五项交互返修。根因、修复、精简复验和用户原答见 [A2b 报告 §8](../../Midora-A2b-Instrument-Changes-and-Lane-Tabs-Implementation-2026-09-14.md#8-2026-09-15-验收返修)。本次按用户要求记录、提交／推送；R12／R29 与 A3 没有提前实施，不本地发布。未穷尽的工程验证门不因人工通过而更改。
+
+## 9. A4a 实施记录（2026-09-15）
+
+基线 `59bf911`。R12/R29 的产品接线已完成，UAT-A4a 六项待用户验收；本轮没有提交、推送、发布或 computer-use。实现、测试命令、实际耗时/分配和未穷尽工程矩阵见 [A4a 报告](../../Midora-A4a-Event-Display-Implementation-2026-09-15.md)。
+
+- T-VAL-01～05：集中 CC 显示描述，图形/列表/属性/Initial State/批量工具接线，混合 CC 按各自 target 编码；Event Batch/Generator profile v2，安全校验、旧 Preset 提示和 Help 两层对照。音乐数据/Mapping/Format 4 不变。
+- T-STEP-01～05：自身目标的范围/前驱和 formal order，设备列摘要与独立辅助线瓦片，默认 Lines 开关、不命中、crop 外弱化/模板末尾裁剪；目标/修订/缩放隔离，关闭取消辅助请求。
+- AUTO-VAL/STEP 已有核心数值、反例、真实 WPF 接线、三宿主百万点、9KX2 和全量基础回归证据。原矩阵中的全部故障交叉组合、所有目标的全套截图、真实连续 pan/zoom 帧时间 p95/p99 及长会话内存分摊没有全部执行，仍为工程缺测，不因下面人工通过而自动关闭。
+- 已同步 SRS §8.54.4、§18.2.9/10、§20.4.13、INV-104/121/122。未开始 A4b、B 或其他主题；原用户问答保持原样。
+
+## 10. A4a 验收后修订（2026-09-17）
+
+用户确认原 A4a“大体全部验收通过”，同时明确 D-STEP05：除 Vel.／Inst. 外全部 Lane 均有位置辅助线；逐 Lane 工具栏开关改为程序级 Appearance 全局设置。样例的 8 条 MIDORA1316 已确认来自 A2b 生成器遗漏 Step，而不是辅助线；修生成器并另存安全修正版，不放宽正式验证。实现、自动证据、修正版位置及局部复验见 [本轮记录](../../Midora-A4a-Acceptance-Followup-2026-09-17.md)。实施轮未提交、推送或发布。
+
+2026-09-17 用户明确确认 Lines 优化验收通过，并要求记录、提交、推送；本次按该授权归档，不开始 A4b/B/C、不本地发布。进一步的逻辑参数专用类型／统一写入边界强化按 `DEFER-LPARAM-01` 延期，未选定或实施方案。既有 Step-only 契约和样例修复保留；修正版已自动编译为 0 诊断，不将用户对 Lines 的验收扩大为单独确认修正版人工结果。

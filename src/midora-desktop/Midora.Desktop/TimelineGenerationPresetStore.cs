@@ -34,7 +34,7 @@ public sealed record TimelineGenerationPreset(
 
     public static TimelineGenerationPreset FromEvents(string name, EventGenerationOptions options) => new(
         1, TimelineGenerationPresetStore.EventToolId, 1,
-        NumericExpressionProfiles.GenerateEvent.Id, NumericExpressionProfiles.GenerateEvent.Version, 1,
+        NumericExpressionProfiles.GenerateEvent.Id, NumericExpressionProfiles.GenerateEvent.Version, MidiEditingValueDomain.NumericContractVersion,
         name, options.MaximumCandidates, options.MaximumRelativeStartTick, options.CreateFirstFromInitialValues,
         null, new(options.InitialValue, options.InitialTick,
             options.ValueExpression ?? string.Empty, options.TickExpression ?? string.Empty));
@@ -116,16 +116,19 @@ public sealed class TimelineGenerationPresetStore
 
     public string DirectoryPath => _directory;
     public bool Notes => _notes;
+    public int OmittedPresetCount { get; private set; }
 
     public IReadOnlyList<TimelineGenerationPresetInfo> Load()
     {
+        OmittedPresetCount = 0;
         if (!Directory.Exists(_directory)) return [];
         List<TimelineGenerationPresetInfo> result = [];
         foreach (string path in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly).Order(StringComparer.OrdinalIgnoreCase))
         {
-            try { result.Add(new(path, NormalizeAndValidate(ReadJson(path), _notes))); }
+            try { result.Add(new(path, NormalizeAndValidate(ToolPresetJson.Read<TimelineGenerationPreset>(path, JsonOptions), _notes))); }
             catch (Exception exception) when (IsPresetFailure(exception))
             {
+                OmittedPresetCount++;
                 // One damaged or obsolete file does not hide the other independent presets.
             }
         }
@@ -169,7 +172,7 @@ public sealed class TimelineGenerationPresetStore
         ArgumentNullException.ThrowIfNull(preset);
         NumericExpressionProfile profile = notes ? NumericExpressionProfiles.GenerateNote : NumericExpressionProfiles.GenerateEvent;
         if (preset.SchemaVersion != CurrentSchemaVersion || preset.ToolVersion != CurrentToolVersion
-            || preset.NumericContractVersion != CurrentNumericContractVersion
+            || preset.NumericContractVersion != (notes ? CurrentNumericContractVersion : MidiEditingValueDomain.NumericContractVersion)
             || preset.ToolId != (notes ? NoteToolId : EventToolId)
             || preset.ExpressionProfileId != profile.Id || preset.ExpressionProfileVersion != profile.Version)
             throw new InvalidDataException("The generation preset schema, tool, expression profile, or numeric contract version is unsupported.");
@@ -219,28 +222,7 @@ public sealed class TimelineGenerationPresetStore
         return name;
     }
 
-    private static TimelineGenerationPreset ReadJson(string path)
-    {
-        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
-        if (stream.Length > MaximumPresetFileBytes) throw new InvalidDataException("The preset exceeds its file size limit.");
-        byte[] bytes = new byte[checked((int)stream.Length)];
-        stream.ReadExactly(bytes);
-        using JsonDocument document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 16 });
-        CheckDuplicates(document.RootElement);
-        return JsonSerializer.Deserialize<TimelineGenerationPreset>(bytes, JsonOptions)
-            ?? throw new InvalidDataException("The preset is empty.");
-    }
 
-    private static void CheckDuplicates(JsonElement element)
-    {
-        if (element.ValueKind != JsonValueKind.Object) return;
-        HashSet<string> names = new(StringComparer.Ordinal);
-        foreach (JsonProperty property in element.EnumerateObject())
-        {
-            if (!names.Add(property.Name)) throw new InvalidDataException($"Duplicate preset property '{property.Name}'.");
-            CheckDuplicates(property.Value);
-        }
-    }
 
     internal static bool IsPresetFailure(Exception exception) => exception is
         JsonException or IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or OverflowException;

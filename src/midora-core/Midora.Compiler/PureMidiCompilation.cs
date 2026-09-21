@@ -75,6 +75,7 @@ public sealed partial class MidoraCompiler
         List<CanonicalSmfTrackDescriptor> descriptors = [];
         List<CanonicalOpaqueMidiEvent> opaque = [];
         int rootOrder = 0;
+        request.Progress?.Report(CompilationPhase.MidiRoots, 0, project.MidiChannelRoots.Count);
         foreach (MidiChannelRoot root in project.MidiChannelRootsInOrder())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -145,8 +146,10 @@ public sealed partial class MidoraCompiler
                 .ToArray();
             roots.Add(new(root, rangeTracks, intervals, participatesInRequest));
             rootOrder++;
+            request.Progress?.Report(CompilationPhase.MidiRoots, rootOrder, project.MidiChannelRoots.Count);
         }
 
+        request.Progress?.Report(CompilationPhase.MidiMetadata);
         bool usesPagedContent = roots
             .SelectMany(value => value.Tracks)
             .SelectMany(value => value.Segments)

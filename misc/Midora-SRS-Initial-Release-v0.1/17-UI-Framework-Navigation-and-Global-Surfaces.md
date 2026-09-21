@@ -143,6 +143,7 @@ Realtime Maximum Sample Voices per Unit Stream
 Maximum Reusable Audio Cache Bytes
 Ordered application SoundFont list: absolute local SF2/SFZ path + Enabled + optional target mapping
 Appearance Language (initial release only offers English)
+Show event lane lines (default enabled; all lanes except Vel. and Inst.)
 ```
 Audio Cache Root 不是可编辑 Preference，固定为 `<ProgramRoot>/.tmp/AudioCache`。这些状态：
 - 不进入 Project Undo / Redo；
@@ -155,6 +156,8 @@ Audio Cache Root 不是可编辑 Preference，固定为 `<ProgramRoot>/.tmp/Audi
 SoundFont 列表对所有 Project 和从 MIDI 导入的新 Project 共用，不属于 Project 创建参数。列表支持新增 SF2/SFZ、删除、启用/禁用和排序；Enabled 只显示复选框，不重复显示 `Enabled` 文字。每项还提供完整 Target Bank MSB/LSB/Program 三元组：SF2 可关闭映射，SFZ 强制启用映射。顺序是正式 BASSMIDI 优先顺序。列表工具栏位于列表顶部；列表自身单个滚轮刻度使用小幅像素滚动，不得沿用下拉框或外层页面的大步进。Apply 的 Draft/持久化部分只保存路径与映射结构，不读取、复制或完整 hash 文件，不检查 SFZ 依赖；若 SoundFont、target、实时音频或音频缓存配置变化，持久化后必须显示 `Saving Settings` 模态任务并立即重建、加载和保留 Worker。加载失败必须明确报告且不得伪装成保存失败或静默恢复旧设置。列表不得进入 `.midora`、Project Modified 或 Undo/Redo。
 
 Application Preferences 必须分为 `Audio | SoundFonts | Appearance` 三个 Tab。Audio 包含 Playback、Realtime Audio 与 Audio Cache；SoundFonts 包含上述有序列表；Appearance 初版显示 Language 下拉框且唯一可选项为 `English`，为未来本地化预留稳定入口，但本轮不引入语言包或热切换。
+
+Appearance 同时提供全局 `Show event lane lines`，默认启用，控制 MIDI Segment、Logical Segment 和 SubVoice 除 Vel.／Inst. 外全部 Lane 的辅助线（§18.2.10）。不再在各 Lane 工具栏提供 Lines 开关。设置成功保存后立即应用于已打开及以后打开的 Lane；取消、关闭或设置保存失败不发布 draft 值。旧程序设置没有此字段时使用启用默认值。该显示偏好不标记 Project Modified、不进入 Undo／canonical／音频配置，不因此重建 Worker。
 ### 17.2.3 Project Presentation 与 Project Session UI State
 
 Format 3 的 Project presentation 只保存第 3.11 与第 16.33 节明确列出的 Onion/All-Tracks 容器。它使用独立 revision/save baseline，不标记 Project Modified、不进入 Undo/Redo、编译或 canonical；损坏时恢复默认 presentation 并独立警告。
@@ -172,13 +175,15 @@ Search queries and filters
 Tree expansion
 Active subpage
 Workspace-local lane height and focus history
-Workspace-local lower editor visibility and height
+Track-shared lower editor visibility and last nonzero height; independent per SubVoice
 Arrangement Grid / Snap session settings
-Shared Segment and SubVoice piano-roll Grid / Snap session settings
+Track-shared Segment preferences; per-SubVoice independent preferences; Piano/Event Snap separate
 Default Segment creation length
-Shared piano-roll default Note length and velocity
+Track/SubVoice piano-roll default Note length and velocity
 ```
 关闭或替换 Project 后清除，不跨应用重启恢复。
+
+B1 的轻量会话记忆按 §20.1.4 区分共享 profile 与 Segment/SubVoice 局部描述，普通关闭 Tab 不清除描述，但必须释放 VM、页、位图及任务。无内容持有的纯值冻结边界不等于已经写入项目文件；现行 presentation schema 2 的 Onion/All Tracks 能力保持不变。Selection、Time Range、手势、浮动选区工具位置、焦点历史、Undo 和草稿不进入这些描述。
 
 状态栏 transient message 必须提供直接“已读”操作；该操作只清除当前 transient message，不清除 Diagnostics、不修改 Project，也不创建 Undo。
 ### 17.2.4 Transient Interaction State
@@ -363,6 +368,10 @@ Audio Render
 Command Bar 右侧 `Compile`、`MIDI Export` 与 `Audio Export` 禁用时继续保持透明背景和边框，但文本固定使用显式 `#8A939F` 淡色，确保命令名称仍可辨识且不误示为可用。按钮内容自身和命令按钮专用模板的 Disabled 状态必须同时固定该颜色，不得被通用 Button 模板或前景色继承覆盖。
 
 上述三个命令在启用状态下固定使用显式 `#F1F3F5` 主文本色；禁用色不得泄漏到启用状态。
+
+当前 Project 后台编译期间，`Compile` 文案旁显示实际阶段；已有可靠 current/total 的阶段可显示该阶段的百分比，并明确它不是全流程耗时预测。没有可靠分母时只显示阶段名，禁止为了计量额外预扫描或展开大型编译结果。仅保留当前任务/修订的最新值，合并并节流 UI 更新，完成、失败、取消或关闭后恢复普通文案；旧任务迟到不得覆盖新任务。该旁路状态不进入 Project、Undo、缓存身份或 canonical，不改变 Full/Incremental 的结果和取消语义。R31 的工程性能门要求测量开关进度的对照，不能以反馈功能为由引入明显编译退化。
+
+Compiling 时，Compile 左侧显示与 Buffering 播放按钮相同几何、转速的加载旋转图标；Compile 文案使用与底部 Buffering 状态相同的黄色（`#FFFFC400`），即使按钮此时禁用也须保持该编译状态色。离开 Compiling 后隐藏图标并停止动画，文字恢复普通启用/禁用色；不得为了显示动画延长编译。
 ### 17.7.2 Global Notice Bar
 只用于持续、重要且影响全局工作流，或必须由用户关注才能继续的状态：
 ```text

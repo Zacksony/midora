@@ -24,25 +24,6 @@ public enum ArrangementSharedGroupDropZone
 
 public static class TimelineToolPolicy
 {
-    public const int RightDoubleClickIntervalMilliseconds = 300;
-    public const double RightDoubleClickToleranceDips = 6;
-
-    public static bool IsRightDoubleClick(
-        long elapsedMilliseconds,
-        double horizontalDistance,
-        double verticalDistance) =>
-        elapsedMilliseconds >= 0
-        && elapsedMilliseconds < RightDoubleClickIntervalMilliseconds
-        && double.IsFinite(horizontalDistance)
-        && double.IsFinite(verticalDistance)
-        && Math.Abs(horizontalDistance) <= RightDoubleClickToleranceDips
-        && Math.Abs(verticalDistance) <= RightDoubleClickToleranceDips;
-
-    public static TimelineToolMode ResolveDrawSelectToggle(TimelineToolMode current) =>
-        current == TimelineToolMode.Select
-            ? TimelineToolMode.Draw
-            : TimelineToolMode.Select;
-
     public static long ResolvePositiveFixedStepCreationDelta(
         long pointerDeltaTicks,
         long operationStepTicks)
@@ -109,6 +90,7 @@ public static class TimelineToolPolicy
         surfaceMode is TimelineSurfaceMode.Arrangement
             or TimelineSurfaceMode.PianoRoll
             or TimelineSurfaceMode.EventLanes
+            or TimelineSurfaceMode.Velocity
             or TimelineSurfaceMode.Conductor;
 
     public static bool StartsMarqueeBeforeItemHit(
@@ -174,19 +156,8 @@ public static class TimelineToolPolicy
         ModifierKeys modifiers) =>
         button == MouseButton.Left
         && (modifiers & ModifierKeys.Alt) != 0
-        && (surfaceMode == TimelineSurfaceMode.Velocity
-            || surfaceMode == TimelineSurfaceMode.EventLanes
-                && toolMode == TimelineToolMode.Draw);
-
-    public static bool RequestsHorizontalValueTrace(
-        TimelineToolMode toolMode,
-        TimelineSurfaceMode surfaceMode,
-        MouseButton button,
-        ModifierKeys modifiers) =>
-        toolMode == TimelineToolMode.Draw
-        && surfaceMode == TimelineSurfaceMode.EventLanes
-        && button == MouseButton.Right
-        && (modifiers & ModifierKeys.Shift) != 0;
+        && toolMode == TimelineToolMode.Draw
+        && surfaceMode is TimelineSurfaceMode.Velocity or TimelineSurfaceMode.EventLanes;
 
     public static bool RequestsTimeLockedPointCreation(
         TimelineToolMode toolMode,

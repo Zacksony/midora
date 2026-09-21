@@ -76,7 +76,16 @@
           </Grid>
         </TabItem>
         <TabItem Header="Appearance">
-          <StackPanel Margin="10"><TextBlock Style="{StaticResource Text.Section}" Text="Appearance"/><TextBlock Margin="0,5,0,14" Style="{StaticResource Text.Caption}" Text="Additional appearance and localization settings will be added here."/><TextBlock Style="{StaticResource Text.Overline}" Text="LANGUAGE"/><ComboBox x:Name="LanguageBox" Width="240" Margin="0,5,0,0" HorizontalAlignment="Left"/><TextBlock Margin="0,5,0,0" Style="{StaticResource Text.Caption}" Text="English is the only language available in this release."/></StackPanel>
+          <StackPanel Margin="10">
+            <TextBlock Style="{StaticResource Text.Section}" Text="Appearance"/>
+            <TextBlock Margin="0,14,0,0" Style="{StaticResource Text.Overline}" Text="EVENT LANES"/>
+            <CheckBox x:Name="EventLaneLinesBox" Margin="0,8,0,0" Content="Show event lane lines"/>
+            <TextBlock Margin="0,5,0,18" Style="{StaticResource Text.Caption}" TextWrapping="Wrap"
+                       Text="Show position guide lines in every event lane except Vel. and Inst. Lines are visual guides, not a promise of held MIDI state."/>
+            <TextBlock Style="{StaticResource Text.Overline}" Text="LANGUAGE"/>
+            <ComboBox x:Name="LanguageBox" Width="240" Margin="0,5,0,0" HorizontalAlignment="Left"/>
+            <TextBlock Margin="0,5,0,0" Style="{StaticResource Text.Caption}" Text="English is the only language available in this release."/>
+          </StackPanel>
         </TabItem>
       </TabControl>
       <Border x:Name="ValidationBorder" Grid.Row="2" Margin="18,8" Padding="9" Background="{StaticResource Brush.Red.Subtle}" BorderBrush="{StaticResource Brush.Red}" BorderThickness="1" CornerRadius="3" Visibility="Collapsed"><TextBlock x:Name="ValidationText" Foreground="{StaticResource Brush.Red.Hover}" TextWrapping="Wrap"/></Border>

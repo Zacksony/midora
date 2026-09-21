@@ -291,7 +291,11 @@ public static partial class ProjectDomainEditCommands
                     else FindPureMidiTrack(owner, original.TrackId).Segments.Insert(original.Index, original.Direct!);
             });
             return new ConversionSelectionPrepared(edit, moveIds, () => created!.Select(static value =>
-                value is Segment logical ? logical.Id : ((MidiSegment)value).Id).ToArray(), originalDirectory);
+                value is Segment logical ? logical.Id : ((MidiSegment)value).Id).ToArray(), () =>
+                placements.Select((row, index) => new SegmentIdentityTransfer(row.Source.SourceId,
+                    created![index] is Segment logical ? logical.Id : ((MidiSegment)created[index]).Id))
+                    .Where(pair => pair.SourceId != pair.TargetId && originalDirectory.ById.ContainsKey(pair.SourceId))
+                    .ToArray(), originalDirectory);
         }
         catch { originalDirectory.Dispose(); throw; }
     });
@@ -427,16 +431,23 @@ public static partial class ProjectDomainEditCommands
     }
 
     private sealed class ConversionSelectionPrepared(IPreparedProjectEdit inner, IReadOnlyList<MidoraId> original,
-        Func<IReadOnlyList<MidoraId>> getResult, IDisposable resources) : IPreparedTimelineSelectionEdit, IDisposable
+        Func<IReadOnlyList<MidoraId>> getResult, Func<IReadOnlyList<SegmentIdentityTransfer>> getTransfers,
+        IDisposable resources) : IPreparedTimelineSelectionEdit, IPreparedSegmentIdentityTransfers, IDisposable
     {
         private IDisposable? _resources = resources;
         private PreparedTimelineSelection? _selection;
         public bool HasChanges => inner.HasChanges;
         public ProjectChangeSet Changes => inner.Changes;
+        public IReadOnlyList<SegmentIdentityTransfer> SegmentIdentityTransfers { get; private set; } = [];
         public PreparedTimelineSelection PreparedSelection => _selection
             ?? throw new InvalidOperationException("Conversion selection is not prepared yet.");
         public void Apply(MidoraProject project)
-        { inner.Apply(project); _selection ??= new(CompactMidoraIdList.Freeze(original), CompactMidoraIdList.Freeze(getResult())); }
+        {
+            inner.Apply(project);
+            if (_selection is not null) return;
+            _selection = new(CompactMidoraIdList.Freeze(original), CompactMidoraIdList.Freeze(getResult()));
+            SegmentIdentityTransfers = getTransfers();
+        }
         public void Undo(MidoraProject project) => inner.Undo(project);
         public void Dispose()
         {

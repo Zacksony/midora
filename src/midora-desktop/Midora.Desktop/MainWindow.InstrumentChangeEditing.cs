@@ -23,8 +23,14 @@ public partial class MainWindow
     internal async void RunInstrumentAction(WorkspaceViewModel workspace, string action, Action? completed = null,
         long delta = 0, bool duplicate = false)
     {
+        if (action == "Deselect All" && ReferenceEquals(workspace, _session.ActiveWorkspace))
+        {
+            PublishInstrumentSelection(workspace, CompressedMidoraIdSet.Empty);
+            completed?.Invoke();
+            return;
+        }
         if (_session.Document is not { } document || InstrumentOwner(workspace) is not { } owner
-            || !_session.CanEditProject || !ReferenceEquals(workspace, _session.ActiveWorkspace)) return;
+            || !_session.CanEditProject && action is not ("Copy" or "Properties") || !ReferenceEquals(workspace, _session.ActiveWorkspace)) return;
         var ids = workspace.Selection.SharedIds;
         try
         {
@@ -70,7 +76,7 @@ public partial class MainWindow
                 });
                 if (!read.Completed || read.Value.count == 0) return;
                 var value = read.Value;
-                if (action == "Properties" && value.count == 1)
+                if (action == "Properties" && value.count == 1 && _session.CanEditProject)
                 { EditInstrumentChange(workspace, value.first.Tick, value.first.Id); return; }
                 if (!PrepareForModalSurface()) return;
                 if (action == "Scale")
@@ -118,13 +124,14 @@ public partial class MainWindow
         var menu = new ContextMenu();
         menu.SetResourceReference(StyleProperty, typeof(ContextMenu));
         Add("Copy", "Ctrl+C"); Add("Cut", "Ctrl+X"); Add("Paste", "Ctrl+V"); Add("Delete", "Del");
-        menu.Items.Add(new Separator()); Add("Flip", "", "Flip Horizontally"); Add("Scale", "Ctrl+Q", "Scale…");
+        menu.Items.Add(new Separator()); Add("Flip", "", "Flip Horizontal"); Add("Scale", "Ctrl+Q", "Scale…");
         Add("Quantize", "", "Quantize…"); Add("Properties", "Ctrl+P", "Properties…");
         return menu;
         void Add(string action, string gesture, string? title = null)
         {
             var item = new MenuItem { Header = title ?? action, InputGestureText = gesture,
-                IsEnabled = _session.CanEditProject && (action == "Paste" ? _projectClipboard?.Kind == ProjectObjectClipboardKind.InstrumentChanges : hasSelection) };
+                IsEnabled = (_session.CanEditProject || action is "Copy" or "Properties") && (action == "Paste" ? _projectClipboard?.Kind == ProjectObjectClipboardKind.InstrumentChanges : hasSelection) };
+            SetTimelineCommandIcon(item);
             item.Click += (_, _) => RunInstrumentAction(workspace, action, completed);
             menu.Items.Add(item);
         }

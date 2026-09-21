@@ -1,6 +1,5 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -15,7 +14,7 @@ namespace Midora.Desktop;
 
 public partial class LaneTabHeader : UserControl
 {
-    private static readonly ConditionalWeakTable<WorkspaceViewModel, Dictionary<MidoraId, LaneTabSession>> Sessions = new();
+    private EditorStateOwner? _memoryOwner;
     private WorkspaceViewModel? _workspace;
     private LaneTabSession? _state;
     private LaneTabKey _displayed;
@@ -30,14 +29,15 @@ public partial class LaneTabHeader : UserControl
     public LaneTabHeader() { InitializeComponent(); DataContextChanged += (_, _) => Attach(); }
     private void OnLoaded(object sender, RoutedEventArgs e) => Attach();
     private void OnUnloaded(object sender, RoutedEventArgs e)
-    { SaveAxis(); ++_presentationVersion; ResetTabDrag(); DirectoryPopup.IsOpen = false; Detach(); }
+    { SaveAxis(); ++_presentationVersion; ResetTabDrag(); DirectoryPopup.IsOpen = false; Detach(); _state = null; _memoryOwner = null; }
     private void Attach()
     {
-        if (!ReferenceEquals(_workspace, DataContext)) { SaveAxis(); ResetTabDrag(); _state = null; }
+        if (!ReferenceEquals(_workspace, DataContext)) { SaveAxis(); ResetTabDrag(); _state = null; _memoryOwner = null; }
         Detach();
         if (!IsLoaded || DataContext is not WorkspaceViewModel workspace) return;
         _workspace = workspace;
         workspace.PropertyChanged += OnChanged;
+        workspace.LaneViewStateCaptureRequested += SaveAxis;
         if (workspace is TimelineWorkspaceViewModel timeline) timeline.ParameterLaneOptions.CollectionChanged += OnCollectionChanged;
         if (workspace is InstrumentWorkspaceViewModel voice) voice.RenderLanes.CollectionChanged += OnCollectionChanged;
         string settings = workspace is TimelineWorkspaceViewModel ? "LaneEditorSettings" : "EventLaneEditorSettings";
@@ -49,6 +49,7 @@ public partial class LaneTabHeader : UserControl
     private void Detach()
     {
         if (_workspace is not null) _workspace.PropertyChanged -= OnChanged;
+        if (_workspace is not null) _workspace.LaneViewStateCaptureRequested -= SaveAxis;
         if (_workspace is TimelineWorkspaceViewModel timeline) timeline.ParameterLaneOptions.CollectionChanged -= OnCollectionChanged;
         if (_workspace is InstrumentWorkspaceViewModel voice) voice.RenderLanes.CollectionChanged -= OnCollectionChanged;
         _workspace = null;
@@ -69,10 +70,20 @@ public partial class LaneTabHeader : UserControl
     internal void Refresh(bool present = true)
     {
         if (_workspace is null || Host?.GetLaneTabDescriptors(_workspace) is not { } description) return;
-        var sessions = Sessions.GetOrCreateValue(_workspace);
-        if (!sessions.TryGetValue(description.Owner, out var state)) sessions.Add(description.Owner, state = new());
+        LaneTabSession state;
+        if (_workspace.EditorState is { LocalOwner: { } owner } binding && owner.Id == description.Owner)
+        {
+            if (_state is not null && _memoryOwner == owner) state = _state;
+            else state = new(binding.GetLaneMemory(), memory => binding.SaveLaneMemory(owner, memory));
+            _memoryOwner = owner;
+        }
+        else
+        {
+            var sessions = _workspace.LocalLaneSessions;
+            if (!sessions.TryGetValue(description.Owner, out state!)) sessions.Add(description.Owner, state = new());
+        }
         if (!ReferenceEquals(_state, state)) { SaveAxis(); ResetTabDrag(); _state = state; _displayed = state.Active; _restoreOwnerAxis = true; }
-        state.Sync(description.Descriptors);
+        state.Sync(description.Descriptors, _workspace is not TimelineWorkspaceViewModel t || t.IsLaneDirectoryComplete);
         RenderHeader();
         if (present) Present(false);
         if (DirectoryPopup.IsOpen) RefreshDirectory();
@@ -87,7 +98,7 @@ public partial class LaneTabHeader : UserControl
             // A pointer-down selection must not replace the very containers
             // which are about to initiate a drag (or reset their scroll offset).
             if (!Tabs.Items.Cast<LaneTabDescriptor>().SequenceEqual(visible)) Tabs.ItemsSource = visible;
-            Tabs.SelectedItem = Tabs.Items.Cast<LaneTabDescriptor>().FirstOrDefault(value => value.Key == _state.Active);
+            Tabs.SelectedItem = Tabs.Items.Cast<LaneTabDescriptor>().FirstOrDefault(value => value.Key == _state.EffectiveActive);
         }
         finally { _syncing = false; }
     }
@@ -98,7 +109,8 @@ public partial class LaneTabHeader : UserControl
     private void Present(bool focus)
     {
         if (_state is null || Owner is null || _workspace is null) return;
-        var key = _state.Active;
+        var key = _state.EffectiveActive;
+        Shapes.Visibility = key == LaneTabKey.Instrument ? Visibility.Collapsed : Visibility.Visible;
         int index = key.Type == 0 ? 0 : key.Type == 1 ? 1 : 2;
         bool restore = _restoreOwnerAxis || _restoreAxisKey == key || _displayed != key || Owner.SelectedIndex != index;
         _restoreOwnerAxis = false;
@@ -110,10 +122,11 @@ public partial class LaneTabHeader : UserControl
         var state = _state; long version = ++_presentationVersion;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
-            if (!IsLoaded || !ReferenceEquals(_state, state) || _state?.Active != key || version != _presentationVersion) return;
+            if (!IsLoaded || !ReferenceEquals(_state, state) || _state?.EffectiveActive != key || version != _presentationVersion) return;
             var surface = ActiveSurface;
             if (surface is not null)
             {
+                Host?.BindEventLaneLines(surface);
                 if (restore) surface.RestoreValueViewport(_state.Axis(key));
                 _restoreAxisKey = null;
                 Coordinates.SetBinding(TextBlock.TextProperty, new Binding(nameof(TimelineSurface.PointerPositionText)) { Source = surface });
@@ -185,6 +198,7 @@ public partial class LaneTabHeader : UserControl
     private void OnDirectoryClosed(object sender, EventArgs e)
     { if (IsLoaded) Present(true); }
     private void OnSnapClick(object sender, RoutedEventArgs e) => Present(true);
+    private void OnShapeChosen(object? sender, EventArgs e) => Present(true);
     private void OnAddLane(object sender, RoutedEventArgs e) => Host?.AddLaneFromHeader(this);
     private void OnSubdivisionLostFocus(object sender, KeyboardFocusChangedEventArgs e) => Host?.CommitLaneSubdivision(sender, e);
     internal static T? Find<T>(DependencyObject? root, Func<T, bool>? predicate = null) where T : DependencyObject

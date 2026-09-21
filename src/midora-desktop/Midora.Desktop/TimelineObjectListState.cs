@@ -7,7 +7,8 @@ public sealed class TimelineObjectListState : ObservableObject
 {
     private bool _isVisible;
     private bool _isActive;
-    private double _width = 400;
+    internal const double DefaultWidth = 400;
+    private double _width = DefaultWidth;
     private int _firstRow;
     private Func<TimelineObjectListSource?>? _factory;
     private TimelineObjectListSource? _source;
@@ -30,7 +31,16 @@ public sealed class TimelineObjectListState : ObservableObject
         set
         {
             if (!IsVisible || !value.IsAbsolute || !double.IsFinite(value.Value)) return;
-            _width = Math.Clamp(value.Value, 240, 700);
+            LayoutWidth = value.Value;
+        }
+    }
+
+    internal double LayoutWidth
+    {
+        get => _width;
+        set
+        {
+            if (!double.IsFinite(value) || !Set(ref _width, Math.Clamp(value, 240, 700))) return;
             Raise(nameof(ColumnWidth));
         }
     }

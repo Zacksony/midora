@@ -126,6 +126,9 @@ public partial class MainWindow : Window
         PreviewMouseDown += OnPreviewMouseDownForPlaybackShortcut;
         Deactivated += OnWindowDeactivated;
         ContextMenuOpening += OnEditingSurfaceContextMenuOpening;
+        AddHandler(TimelineSurface.SelectionActionRequestedEvent,
+            new EventHandler<TimelineSelectionActionEventArgs>(OnSelectionActionRequested));
+        AddHandler(FrameworkElement.LoadedEvent, new RoutedEventHandler(OnSelectionCommandSurfaceLoaded), true);
         MainMenu.AddHandler(
             MenuItem.SubmenuOpenedEvent,
             new RoutedEventHandler(OnMainMenuSubmenuOpened),
@@ -706,6 +709,7 @@ public partial class MainWindow : Window
 
     private void OnPlaybackTimerTick(object? sender, EventArgs e)
     {
+        _session.RefreshCompilationProgress();
         long now = Environment.TickCount64;
         if (now >= _nextProjectRuntimeInformationRefresh)
         {
@@ -1410,6 +1414,7 @@ public partial class MainWindow : Window
                 IsEnabled = enabled
             };
             item.Click += handler;
+            SetTimelineCommandIcon(item);
             menu.Items.Add(item);
         }
         void Separator() => menu.Items.Add(new Separator());
@@ -1476,6 +1481,12 @@ public partial class MainWindow : Window
         }
 
         _lastTimelineCommandSurface = surface;
+        if (surface.IsContextTargetPending)
+        {
+            menu.Items.Clear();
+            menu.Items.Add(new MenuItem { Header = "Locating…", IsEnabled = false });
+            return;
+        }
         menu.Items.Clear();
         MenuItem Add(string header, RoutedEventHandler handler, string? gesture = null, bool enabled = true)
         {
@@ -1486,15 +1497,19 @@ public partial class MainWindow : Window
                 IsEnabled = enabled
             };
             item.Click += handler;
+            SetTimelineCommandIcon(item);
             menu.Items.Add(item);
             return item;
         }
         void Separator() => menu.Items.Add(new Separator());
 
-        Point contextPoint = Mouse.GetPosition(surface);
+        Point contextPoint = menu.Tag is TimelineSelectionAction
+            ? new Point(surface.LaneHeaderWidth + 8, surface.TimelineRulerHeight + 8)
+            : surface.ContextTargetPosition ?? Mouse.GetPosition(surface);
+        if (menu.Tag is not TimelineSelectionAction && PopulateTemplateMarkerMenu(menu, surface, contextPoint)) return;
         double headerWidth = surface.LaneHeaderWidth;
         bool isLaneHeader = contextPoint.X < headerWidth;
-        if (surface.SurfaceMode == TimelineSurfaceMode.Arrangement)
+        if (surface.SurfaceMode == TimelineSurfaceMode.Arrangement && menu.Tag is not TimelineSelectionAction)
         {
             if (surface.IsArrangementEmptyBackground(contextPoint)
                 && _session.ActiveWorkspace is TimelineWorkspaceViewModel
@@ -1688,11 +1703,35 @@ public partial class MainWindow : Window
         }
 
         bool canEdit = _session.CanEditProject;
+        if (menu.Tag is not TimelineSelectionAction && surface.ContextTargetHasObject == false
+            && _session.ActiveWorkspace?.Selection.Ids.Count is not > 0)
+        {
+            // Only a genuinely empty selection uses the container-only menu.
+            // A blank hit preserves the frozen selection and its full commands.
+            ClearTimelineCommandTargets();
+            _lastTimelineCommandSurface = surface;
+            WorkspaceTimelineSelectionSource? backgroundSource = _session.ActiveWorkspace is { } backgroundWorkspace
+                ? GetTimelineSelectionSource(backgroundWorkspace, surface) : null;
+            if (IsTimelineGenerationSource(backgroundSource))
+                Add(IsTimelineNoteGenerationSource(backgroundSource) ? "Batch Create Notes…" : "Batch Create Events…",
+                    OnBatchCreateTimelineObjectsClick, enabled: canEdit);
+            Add("Paste", OnPasteClick, "Ctrl+V", canEdit);
+            Separator();
+            Add("Deselect All", OnDeselectAllTimelineObjectsClick, enabled: _session.ActiveWorkspace?.Selection.Ids.Count > 0);
+            Add("Invert Selection", OnInvertTimelineSelectionClick, enabled: surface.Snapshot?.HasHitTestableItems == true);
+            return;
+        }
         if (_session.ActiveWorkspace is WorkspaceViewModel mixedWorkspace
-            && mixedWorkspace.Selection.Ids.Count > 1
-            && mixedWorkspace.Selection.HomogeneousTimelineSource is null
+            && mixedWorkspace.Selection.Ids.Count > 0
+            && (mixedWorkspace.Selection.Ids.Count > 1 && mixedWorkspace.Selection.HomogeneousTimelineSource is null
+                || menu.Tag is not TimelineSelectionAction && surface.ContextTargetHasObject == false
+                    && (mixedWorkspace.Selection.HomogeneousTimelineSource is not { } selectedSource
+                        || !IsTimelineSelectionSourceCompatible(mixedWorkspace, surface, selectedSource)))
             && TryGetTimelineObjectOwner(mixedWorkspace, out _))
         {
+            // A blank click can be in a different lane from the selection.
+            // Resolve the selected source, never reinterpret notes as values
+            // (or one event target as another) using the clicked surface.
             _ = PopulateObjectListMenuAsync(menu, mixedWorkspace);
             return;
         }
@@ -1744,6 +1783,7 @@ public partial class MainWindow : Window
                 MenuItem contentAndSegments = new() { Header = "Exposed Content and Segments" };
                 contentAndSegments.Click += OnFlipSegmentsAndContentHorizontalClick;
                 flipHorizontal.Items.Add(contentAndSegments);
+                SetTimelineCommandIcon(flipHorizontal);
                 menu.Items.Add(flipHorizontal);
             }
             else
@@ -3050,13 +3090,14 @@ public partial class MainWindow : Window
         string text = source.Trim();
         if (text.Length == 0) return null;
         int entered = int.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
-        int clamped = MidiStateValueRules.Clamp(target, entered);
+        int raw = MidiEditingValueDomain.ClampInitialState(target, entered);
+        int clamped = raw + MidiEditingValueDomain.Offset(target);
         if (clamped != entered)
         {
             _session.SetStatusMessage(
                 $"{displayName}: {entered.ToString(CultureInfo.InvariantCulture)} was clamped to {clamped.ToString(CultureInfo.InvariantCulture)}.");
         }
-        return clamped;
+        return raw;
     }
 
     private static MidiValueTarget ParseConfigurationMidiTarget(string key)
@@ -4032,7 +4073,7 @@ public partial class MainWindow : Window
         if (_session.Project is not null)
         {
             _session.ArrangementEditorSettings.Reset(true, _session.Project.TicksPerQuarterNote);
-            _session.PianoRollEditorSettings.Reset(false, _session.Project.TicksPerQuarterNote);
+            _session.ResetPianoEditorPreferences();
         }
         _preferences = _preferences with
         {
@@ -4118,6 +4159,15 @@ public partial class MainWindow : Window
                 workspace.Selection.Toggle(id, source);
             else
                 workspace.Selection.Toggle(id);
+        }
+        if (e.IsContextRequest)
+        {
+            if (!workspace.Selection.IdSet.Contains(e.Item.Id))
+            {
+                ReplaceSelection(e.Item.Id);
+                _session.RefreshWorkspaceSelection(workspace);
+            }
+            return;
         }
         bool replaceDrawSegmentSelection = ShouldReplaceDrawSegmentSelection(
             (sender as TimelineSurface)?.ToolMode,
@@ -6290,6 +6340,14 @@ public partial class MainWindow : Window
         }
         TimelineWorkspaceViewModel? timeline = (sender as FrameworkElement)?.DataContext
             as TimelineWorkspaceViewModel;
+        if (e.IsEditCursor)
+        {
+            if (timeline is not null) timeline.EditCursorTick = e.Tick;
+            else if ((sender as FrameworkElement)?.DataContext is InstrumentWorkspaceViewModel instrument)
+                instrument.EditCursorTick = e.Tick;
+            (sender as TimelineSurface)?.Focus();
+            return;
+        }
         RunSynchronous("Set Playback Cursor", () => _session.SetPlaybackCursor(
             timeline?.ToProjectTick(project, e.Tick) ?? e.Tick));
     }
@@ -6763,8 +6821,8 @@ public partial class MainWindow : Window
                             WorkspaceTimelineSelectionKind.LogicalParameterPoint,
                             segmentId,
                             laneId,
-                            PointMinimum: timeline.ActiveValueMinimum,
-                            PointMaximum: timeline.ActiveValueMaximum);
+                            PointMinimum: timeline.ActiveEditingValueMinimum,
+                            PointMaximum: timeline.ActiveEditingValueMaximum);
                     }
                     if (lane?.DirectMidiTarget is DirectMidiEventLaneTarget target
                         && (item is null
@@ -6775,8 +6833,8 @@ public partial class MainWindow : Window
                             segmentId,
                             DirectMidiEventKind: target.Kind,
                             DirectMidiData1: target.Data1,
-                            PointMinimum: timeline.ActiveValueMinimum,
-                            PointMaximum: timeline.ActiveValueMaximum);
+                            PointMinimum: timeline.ActiveEditingValueMinimum,
+                            PointMaximum: timeline.ActiveEditingValueMaximum);
                     }
                     return null;
                 }
@@ -6841,8 +6899,8 @@ public partial class MainWindow : Window
                     instrumentId,
                     subVoiceId,
                     target,
-                    PointMinimum: instrument.ActiveValueMinimum,
-                    PointMaximum: instrument.ActiveValueMaximum);
+                    PointMinimum: instrument.ActiveValueAxisMinimum,
+                    PointMaximum: instrument.ActiveValueAxisMaximum);
 
             default:
                 return null;
@@ -7852,16 +7910,12 @@ public partial class MainWindow : Window
             (TimelineWorkspaceViewModel)_session.ActiveWorkspace!;
         IReadOnlyCollection<MidoraId> noteIds = selected;
         long minimumStart;
-        int minimumPitch;
-        int maximumPitch;
         if (workspace.SelectionSnapshot.TryGetMetrics(
                 TimelineItemKind.LogicalNote,
                 out TimelineSelectionMetrics metrics)
             && metrics.Count == selected.Count)
         {
             minimumStart = metrics.MinimumStartTick;
-            minimumPitch = 127 - metrics.MaximumLane;
-            maximumPitch = 127 - metrics.MinimumLane;
         }
         else
         {
@@ -7871,20 +7925,12 @@ public partial class MainWindow : Window
             if (!read.Completed || read.Value.Ids.Count == 0) return;
             noteIds = read.Value.Ids;
             minimumStart = read.Value.MinimumTick;
-            minimumPitch = read.Value.MinimumPitch;
-            maximumPitch = read.Value.MaximumPitch;
         }
         switch (edit.EditKind)
         {
             case TimelineItemEditKind.Move:
                 long tickDelta = Math.Max(snappedDelta, -minimumStart);
-                int requestedPitchDelta = -edit.LaneDelta;
-                int pitchDelta = edit.CopyRequested
-                    ? Math.Clamp(
-                        requestedPitchDelta,
-                        -minimumPitch,
-                        127 - maximumPitch)
-                    : requestedPitchDelta;
+                int pitchDelta = -edit.LaneDelta;
                 if (edit.CopyRequested)
                 {
                     long firstNewStableId = _session.Project!.NextStableId;
@@ -7897,6 +7943,7 @@ public partial class MainWindow : Window
                     SelectCreatedWorkspaceObjects(
                         (TimelineWorkspaceViewModel)_session.ActiveWorkspace!,
                         firstNewStableId,
+                        replaceSelectionWhenNoObjectSurvives: true,
                         timelineSource: new(
                             WorkspaceTimelineSelectionKind.LogicalNote,
                             segmentId));
@@ -8071,10 +8118,9 @@ public partial class MainWindow : Window
                     segmentId,
                     DirectMidiEventKind: target.Kind,
                     DirectMidiData1: target.Data1,
-                    PointMinimum: 0,
-                    PointMaximum: target.Kind == DirectMidiChannelEventKind.PitchBend
-                        ? 16383
-                        : 127));
+                    PointMinimum: MidiEditingValueDomain.Offset(target.Kind, target.Data1),
+                    PointMaximum: (target.Kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127)
+                        + MidiEditingValueDomain.Offset(target.Kind, target.Data1)));
         }
     }
 
@@ -8380,13 +8426,7 @@ public partial class MainWindow : Window
             {
                 case TimelineItemEditKind.Move:
                     long tickDelta = Math.Max(snappedDelta, -noteMetrics.MinimumStartTick);
-                    int requestedPitchDelta = -edit.LaneDelta;
-                    int pitchDelta = edit.CopyRequested
-                        ? Math.Clamp(
-                            requestedPitchDelta,
-                            -(127 - noteMetrics.MaximumLane),
-                            127 - (127 - noteMetrics.MinimumLane))
-                        : requestedPitchDelta;
+                    int pitchDelta = -edit.LaneDelta;
                     if (edit.CopyRequested)
                     {
                         long firstNewStableId = _session.Project.NextStableId;
@@ -8399,6 +8439,7 @@ public partial class MainWindow : Window
                         SelectCreatedWorkspaceObjects(
                             workspace,
                             firstNewStableId,
+                            replaceSelectionWhenNoObjectSurvives: true,
                             timelineSource: new(
                                 WorkspaceTimelineSelectionKind.TemplateNote,
                                 instrumentId,
@@ -8485,8 +8526,8 @@ public partial class MainWindow : Window
                         instrumentId,
                         voice.Id,
                         target,
-                        PointMinimum: minimum,
-                        PointMaximum: maximum));
+                        PointMinimum: minimum + MidiEditingValueDomain.Offset(target),
+                        PointMaximum: maximum + MidiEditingValueDomain.Offset(target)));
             }
             return;
         }

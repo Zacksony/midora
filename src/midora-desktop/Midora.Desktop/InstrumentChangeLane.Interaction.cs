@@ -1,7 +1,10 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.ComponentModel;
 using Midora.Application;
 using Midora.Domain;
 using Midora.Desktop.Presentation.Interaction;
@@ -26,6 +29,10 @@ public partial class InstrumentChangeLane
     private long _pressTick, _pressSnappedTick;
     private long _minimumDragTick;
     private ModifierKeys _modifiers;
+    private MouseButton _pressButton;
+    private bool _floatingMove;
+    private long _pressSelectionRevision;
+    private Exception? _rightPressError;
     private CompressedMidoraIdSet _pressSelection = CompressedMidoraIdSet.Empty;
     private CancellationTokenSource _interaction = new();
     private void ResetInteractionLifetime()
@@ -48,7 +55,23 @@ public partial class InstrumentChangeLane
     protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
     {
         base.OnPreviewMouseDown(e);
+        if (_instrumentToolbar?.IsMouseOver == true) return;
+        if (e.ChangedButton == MouseButton.Right)
+        {
+            var point = e.GetPosition(Points);
+            if (_pressPoint is not null || _panOrigin is not null || !IsContentPoint(point) || _workspace is null)
+            { e.Handled = true; return; }
+            ResetInteractionLifetime(); ResetGesture(); Focus();
+            _pressButton = MouseButton.Right;
+            _rightPressError = null;
+            _pressPoint = _current = point; _modifiers = Keyboard.Modifiers;
+            _pressTick = PointTick(point.X, false); _pressSnappedTick = PointTick(point.X);
+            _pressSelection = _workspace.Selection.SharedIds; _pressSelectionRevision = _workspace.Selection.Revision;
+            _pressWork = ReadRightPressAsync(point, _interaction.Token);
+            Points.CaptureMouse(); e.Handled = true; return;
+        }
         if (e.ChangedButton != MouseButton.Middle || !IsContentPoint(e.GetPosition(Points)) || _workspace is null) return;
+        if (_pressPoint is not null || _panOrigin is not null) { e.Handled = true; return; }
         BeginPan(e.GetPosition(Points));
         if (!Points.CaptureMouse()) ResetGesture();
         e.Handled = true;
@@ -99,14 +122,29 @@ public partial class InstrumentChangeLane
         long tolerance = Math.Max(1, (long)Math.Min(long.MaxValue / 2d, 12 * (double)Backdrop.TickSpan / Math.Max(1, Points.ActualWidth - 64)));
         return ReadIndex(index => index.Hit(tick, tolerance, token), token);
     }
+    private async Task ReadRightPressAsync(Point point, CancellationToken token)
+    {
+        try
+        {
+            var workspace = _workspace;
+            var hit = await HitAsync(point, token);
+            token.ThrowIfCancellationRequested();
+            if (_workspace == workspace && workspace?.Selection.Revision == _pressSelectionRevision) _pressedHit = hit;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception)
+        { if (!token.IsCancellationRequested) _rightPressError = exception; }
+    }
     protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnPreviewMouseLeftButtonDown(e);
+        if (_instrumentToolbar?.IsMouseOver == true) return;
         var point = e.GetPosition(Points);
-        if (!IsContentPoint(point) || _workspace is null || _panOrigin is not null) return;
+        if (!IsContentPoint(point) || _workspace is null || _panOrigin is not null || _pressPoint is not null) return;
         Focus(); e.Handled = true;
         ResetInteractionLifetime();
         _pressedHit = null;
+        _pressButton = MouseButton.Left;
         _pressSelection = _workspace.Selection.SharedIds;
         _pressPoint = _current = point; _clickCount = e.ClickCount; _modifiers = Keyboard.Modifiers;
         _pressTick = PointTick(point.X, false); _pressSnappedTick = PointTick(point.X);
@@ -136,6 +174,7 @@ public partial class InstrumentChangeLane
                 token.ThrowIfCancellationRequested();
                 if (_workspace != workspace || workspace.Selection.Revision != selectionRevision) return;
                 _minimumDragTick = minimum;
+                _pressSelectionRevision = selectionRevision;
                 _delta = Math.Max(PointTick(_current.X) - _pressSnappedTick, -minimum);
                 if (_dragging) Refresh();
             }
@@ -156,23 +195,32 @@ public partial class InstrumentChangeLane
             e.Handled = true; return;
         }
         PointerPositionText = $"({PointTick(_current.X)})";
-        if (_pressPoint is not { } press || e.LeftButton != MouseButtonState.Pressed) return;
+        if (_pressPoint is not { } press || (_pressButton == MouseButton.Right ? e.RightButton : e.LeftButton) != MouseButtonState.Pressed) return;
         if (Math.Abs(_current.X - press.X) >= SystemParameters.MinimumHorizontalDragDistance
             || Math.Abs(_current.Y - press.Y) >= SystemParameters.MinimumVerticalDragDistance) _dragging = true;
-        long delta = Math.Max(PointTick(_current.X) - _pressSnappedTick, -_minimumDragTick);
+        if (_pressButton == MouseButton.Right) return;
+        long delta = _modifiers.HasFlag(ModifierKeys.Shift) ? 0 : Math.Max(PointTick(_current.X) - _pressSnappedTick, -_minimumDragTick);
         if (_delta != delta) { _delta = delta; if (_pressedHit is not null) Refresh(); }
+        TrackInstrumentAutoScroll();
     }
     private async void OnPointClick(object sender, MouseButtonEventArgs e)
     {
+        if (_pressButton != MouseButton.Left) { e.Handled = true; return; }
+        var lifetime = _interaction;
         e.Handled = true; var press = _pressPoint; var point = e.GetPosition(Points);
         try
         {
             await _pressWork;
+            if (lifetime.IsCancellationRequested || !ReferenceEquals(lifetime, _interaction)) return;
             if (press is null || _pressPoint is null || _workspace is not { } workspace) return;
             bool dragged = _dragging; var hit = _pressedHit;
-            long delta = PointTick(point.X) - _pressSnappedTick;
-            if (dragged && hit is not null && Mode != TimelineToolMode.Select)
-            { Host?.RunInstrumentAction(workspace, "Move", RefreshAndFocus, delta, _copy); return; }
+            long delta = _modifiers.HasFlag(ModifierKeys.Shift) ? 0 : Math.Max(PointTick(point.X) - _pressSnappedTick, -_minimumDragTick);
+            if (dragged && hit is not null && (Mode != TimelineToolMode.Select || _floatingMove))
+            {
+                if (workspace.Selection.Revision == _pressSelectionRevision)
+                    Host?.RunInstrumentAction(workspace, "Move", RefreshAndFocus, delta, _copy);
+                return;
+            }
             if (dragged)
             {
                 long a = _pressTick, b = PointTick(point.X, false);
@@ -194,13 +242,15 @@ public partial class InstrumentChangeLane
         }
         catch (OperationCanceledException) { }
         catch (Exception exception) { Host?.ReportInstrumentLaneFailure(exception); }
-        finally { ResetGesture(); }
+        finally { if (ReferenceEquals(lifetime, _interaction)) ResetGesture(); }
     }
     private void ResetGesture()
     {
         bool resetPreview = _dragging && _pressedHit is not null;
         _pressPoint = null; _pressedHit = null; _pressSelection = CompressedMidoraIdSet.Empty; _delta = 0; _dragging = false;
         _panOrigin = null;
+        _floatingMove = false;
+        StopInstrumentAutoScroll();
         _releasing = true; if (Points.IsMouseCaptured) Points.ReleaseMouseCapture(); _releasing = false;
         if (!Points.IsMouseOver) PointerPositionText = "";
         Points.InvalidateVisual();
@@ -216,29 +266,66 @@ public partial class InstrumentChangeLane
             index.ReadRange(start, end, token).SelectMany(MemberIds), token), token);
         token.ThrowIfCancellationRequested();
         if (workspace != _workspace || workspace.Selection.Revision != revision) return;
-        if (modifiers.HasFlag(ModifierKeys.Control)) ids = basis.Union(ids);
+        ids = TimelineToolPolicy.ResolveMarqueeSelectionMode(modifiers) switch
+        {
+            WorkspaceSelectionRangeMode.Add => basis.Union(ids),
+            WorkspaceSelectionRangeMode.Remove => basis.Except(ids),
+            WorkspaceSelectionRangeMode.Toggle => basis.SymmetricExcept(ids),
+            _ => ids
+        };
         Host?.PublishInstrumentSelection(workspace, ids); Points.InvalidateVisual();
     }
     private async void OnContextClick(object sender, MouseButtonEventArgs e)
     {
-        e.Handled = true; Focus(); var point = e.GetPosition(Points);
-        if (point.X < 64 || point.Y < 24 || _workspace is not { } workspace) return;
+        e.Handled = true;
+        if (_pressButton != MouseButton.Right || _pressPoint is not { } origin || _workspace is not { } workspace) return;
+        var point = e.GetPosition(Points); var lifetime = _interaction; var token = lifetime.Token;
+        bool dragged = _dragging;
+        _releasing = true; if (Points.IsMouseCaptured) Points.ReleaseMouseCapture(); _releasing = false;
         try
         {
-            var token = _interaction.Token;
-            var hit = await HitAsync(point, token); token.ThrowIfCancellationRequested();
-            if (!IsLoaded || workspace != _workspace) return;
-            if (hit is { } value && !IsSelected(value)) Select(value);
+            if (workspace.Selection.Revision != _pressSelectionRevision) return;
+            if (dragged)
+            {
+                double y = 24 + (Points.ActualHeight - 24) * .5;
+                long end = Math.Max(_pressTick, PointTick(point.X, false));
+                if (Math.Min(origin.Y, point.Y) <= y + 4 && Math.Max(origin.Y, point.Y) >= y - 4)
+                    await SelectRangeAsync(Math.Min(_pressTick, PointTick(point.X, false)), end == long.MaxValue ? end : end + 1, _modifiers);
+                else await SelectRangeAsync(0, 0, _modifiers);
+                return;
+            }
+            var menu = new ContextMenu { PlacementTarget = Points, Placement = PlacementMode.RelativePoint,
+                HorizontalOffset = origin.X, VerticalOffset = origin.Y };
+            menu.SetResourceReference(StyleProperty, typeof(ContextMenu));
+            menu.Items.Add(new MenuItem { Header = "Locating…", IsEnabled = false });
+            var openProperty = DependencyPropertyDescriptor.FromProperty(ContextMenu.IsOpenProperty, typeof(ContextMenu));
+            void Closed(object? sender, EventArgs args)
+            {
+                if (menu.IsOpen) return;
+                openProperty.RemoveValueChanged(menu, Closed);
+                if (ReferenceEquals(lifetime, _interaction)) ResetInteractionLifetime();
+            }
+            openProperty.AddValueChanged(menu, Closed);
+            ContextMenu = menu; menu.IsOpen = true;
+            await _pressWork; token.ThrowIfCancellationRequested();
+            if (_rightPressError is { } error)
+            { menu.IsOpen = false; Host?.ReportInstrumentLaneFailure(error); return; }
+            if (!menu.IsOpen || !IsLoaded || workspace != _workspace || workspace.Selection.Revision != _pressSelectionRevision) { menu.IsOpen = false; return; }
+            if (_pressedHit is { } value && !IsSelected(value)) Select(value);
             var ids = workspace.Selection.SharedIds; long revision = workspace.Selection.Revision;
             var groups = _latest?.Root ?? InstrumentChangeSet.Empty;
-            bool hasSelection = await Task.Run(() => InstrumentChangeSelectionQuery.EnumerateGroups(groups, ids, token).Any(), token);
+            bool hasSelection = await Task.Run(
+                () => InstrumentChangeSelectionQuery.EnumerateGroups(groups, ids, token).Any(), token);
             token.ThrowIfCancellationRequested();
-            if (!IsLoaded || workspace != _workspace || workspace.Selection.Revision != revision) return;
-            ContextMenu = Host?.InstrumentMenu(workspace, hasSelection, RefreshAndFocus);
-            if (ContextMenu is { } menu) { menu.PlacementTarget = this; menu.IsOpen = true; }
+            if (!IsLoaded || workspace != _workspace || workspace.Selection.Revision != revision) { menu.IsOpen = false; return; }
+            if (!menu.IsOpen) return;
+            menu.Items.Clear();
+            if (Host?.InstrumentMenu(workspace, hasSelection, RefreshAndFocus) is { } commands)
+                foreach (object item in commands.Items.Cast<object>().ToArray()) { commands.Items.Remove(item); menu.Items.Add(item); }
         }
         catch (OperationCanceledException) { }
         catch (Exception exception) { Host?.ReportInstrumentLaneFailure(exception); }
+        finally { if (ReferenceEquals(lifetime, _interaction)) ResetGesture(); }
     }
     internal bool HandleShortcut(KeyEventArgs e)
     {
@@ -264,7 +351,7 @@ public partial class InstrumentChangeLane
         if (CreationPreviewPoint is { } preview)
             dc.DrawEllipse(null, new Pen(info, 1) { DashStyle = DashStyles.Dash }, preview, 5, 5);
         if (!_dragging || _pressPoint is not { } start) return;
-        if (_pressedHit is null || Mode == TimelineToolMode.Select)
+        if (_pressButton == MouseButton.Right || _pressedHit is null || Mode == TimelineToolMode.Select && !_floatingMove)
         {
             var rectangle = new Rect(new Point(TickX(_pressTick), start.Y), _current);
             dc.PushOpacity(.22); dc.DrawRectangle(info, null, rectangle); dc.Pop();

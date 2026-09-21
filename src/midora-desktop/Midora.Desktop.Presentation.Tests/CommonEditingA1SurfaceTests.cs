@@ -78,6 +78,8 @@ public sealed class CommonEditingA1SurfaceTests
             try
             {
                 Set(surface, "_dragItem", item); Set(surface, "_dragKind", TimelineItemEditKind.Move);
+                Invoke(surface, "FreezeEditGesture");
+                Set(surface, "_dragOriginNormalizedValue", 20d / 256);
                 Set(surface, "_dragOrigin", new Point(100, 260)); Set(surface, "_dragActivated", true);
                 Set(surface, "_hoverPoint", new Point(100, -100));
                 Set(surface, "_dragPreviewMinimumValue", low); Set(surface, "_dragPreviewMaximumValue", high);

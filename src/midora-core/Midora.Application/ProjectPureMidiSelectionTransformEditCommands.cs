@@ -228,18 +228,20 @@ public static partial class ProjectDomainEditCommands
                 return PrepareBoundedDirectMidiEventTransform(project, segmentId, eventIds, values =>
                 {
                     int maximum = ValidateBoundedDirectEventLane(values);
-                    ValidateDirectRange(program, BatchEditField.PointValue, 0, maximum);
+                    var first = values.First().Value;
+                    int offset = MidiEditingValueDomain.Offset(first.Kind, first.Data1);
+                    ValidateDirectRange(program, BatchEditField.PointValue, offset, maximum + offset);
                     long origin = values.Min(static value => value.Value.Tick);
                     var clock = Stopwatch.StartNew();
                     return value =>
                     {
                         DirectMidiEventValue old = new(value.Tick, value.Kind, value.Data1, value.Data2, value.Order);
-                        var calculated = program.Evaluate(new(0, DirectMidiEventPointValue(old), 0, 0,
+                        var calculated = program.Evaluate(new(0, DirectMidiEventPointValue(old) + offset, 0, 0,
                             value.Tick, checked(value.Tick - origin)), clock, BatchExpressionTimeout);
                         long? tick = RoundTickOrDiscard(calculated.Tick);
                         if (!tick.HasValue) return null;
                         var result = WithDirectMidiEventPointValue(old with { Tick = tick.Value },
-                            checked((int)RoundAndClamp(calculated.PointValue, 0, maximum)));
+                            checked((int)RoundAndClamp(calculated.PointValue, offset, maximum + offset) - offset));
                         return value with { Tick = result.Tick, Data1 = result.Data1, Data2 = result.Data2 };
                     };
                 });
@@ -247,7 +249,8 @@ public static partial class ProjectDomainEditCommands
             DirectEventSelection[] selected = SelectDirectEvents(location.Segment, eventIds);
             EnsureSameDirectMidiEventLane(selected);
             int maximum = selected[0].Event.Kind == DirectMidiChannelEventKind.PitchBend ? 16383 : 127;
-            ValidateDirectRange(program, BatchEditField.PointValue, 0, maximum);
+            int offset = MidiEditingValueDomain.Offset(selected[0].Event.Kind, selected[0].Event.Data1);
+            ValidateDirectRange(program, BatchEditField.PointValue, offset, maximum + offset);
             DirectMidiEventValue[] old = selected.Select(value => value.Original).ToArray();
             long relativeOrigin = old.Min(value => value.Tick);
             Stopwatch clock = Stopwatch.StartNew();
@@ -257,7 +260,7 @@ public static partial class ProjectDomainEditCommands
                 BatchEditValues calculated = program.Evaluate(
                     new(
                         Velocity: 0,
-                        PointValue: pointValue,
+                        PointValue: pointValue + offset,
                         KeyNumber: 0,
                         Gate: 0,
                         Tick: value.Tick,
@@ -265,7 +268,7 @@ public static partial class ProjectDomainEditCommands
                     clock,
                     BatchExpressionTimeout);
                 long? tick = RoundTickOrDiscard(calculated.Tick);
-                int scalar = checked((int)RoundAndClamp(calculated.PointValue, 0, maximum));
+                int scalar = checked((int)RoundAndClamp(calculated.PointValue, offset, maximum + offset) - offset);
                 DirectMidiEventValue result = WithDirectMidiEventPointValue(
                     value with { Tick = tick ?? 0 },
                     scalar);

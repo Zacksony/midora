@@ -1,6 +1,9 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Midora.Common;
+using Midora.Application;
+using Midora.Compiler;
 
 namespace Midora.Desktop;
 
@@ -18,7 +21,12 @@ public sealed record BatchEditPreset(
     string PointValue,
     string KeyNumber,
     string Gate,
-    string Tick);
+    string Tick)
+{
+    public string? ExpressionProfileId { get; init; }
+    public int ExpressionProfileVersion { get; init; }
+    public int NumericContractVersion { get; init; }
+}
 
 public sealed record BatchEditPresetInfo(string Path, BatchEditPreset Preset)
 {
@@ -35,9 +43,13 @@ public sealed class BatchEditPresetStore
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
+        WriteIndented = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        RespectRequiredConstructorParameters = true,
+        MaxDepth = 16
     };
     private readonly string _root;
+    public int OmittedPresetCount { get; private set; }
 
     public BatchEditPresetStore(string? localApplicationData = null)
     {
@@ -48,6 +60,7 @@ public sealed class BatchEditPresetStore
 
     public IReadOnlyList<BatchEditPresetInfo> Load(BatchEditPresetKind kind)
     {
+        OmittedPresetCount = 0;
         string directory = GetDirectory(kind);
         if (!Directory.Exists(directory)) return [];
         List<BatchEditPresetInfo> result = [];
@@ -56,24 +69,24 @@ public sealed class BatchEditPresetStore
         {
             try
             {
-                BatchEditPreset preset = JsonSerializer.Deserialize<BatchEditPreset>(
-                    File.ReadAllText(path),
-                    JsonOptions)
-                    ?? throw new InvalidDataException("The preset JSON is empty.");
-                if (preset.SchemaVersion != 1 || preset.Kind != kind
-                    || string.IsNullOrWhiteSpace(preset.Name))
+                BatchEditPreset preset = ToolPresetJson.Read<BatchEditPreset>(path, JsonOptions);
+                NumericExpressionProfile profile = kind == BatchEditPresetKind.Note ? NumericExpressionProfiles.BatchNote : NumericExpressionProfiles.BatchEvent;
+                bool legacyNote = kind == BatchEditPresetKind.Note && preset.SchemaVersion == 1;
+                if (preset.Kind != kind || string.IsNullOrWhiteSpace(preset.Name)
+                    || !legacyNote && (preset.SchemaVersion != 2
+                        || preset.ExpressionProfileId != profile.Id || preset.ExpressionProfileVersion != profile.Version
+                        || preset.NumericContractVersion != (kind == BatchEditPresetKind.Note ? 1 : MidiEditingValueDomain.NumericContractVersion)))
                 {
+                    OmittedPresetCount++;
                     continue;
                 }
+                ValidateExpressions(preset);
                 result.Add(new(path, preset));
             }
-            catch (JsonException)
+            catch (Exception exception) when (TimelineGenerationPresetStore.IsPresetFailure(exception))
             {
-                // A damaged independent preset must not prevent other presets from loading.
-            }
-            catch (IOException)
-            {
-                // A concurrently unavailable preset remains untouched and is omitted this time.
+                OmittedPresetCount++;
+                // Leave obsolete, malformed, or unavailable independent files untouched.
             }
         }
         return result.OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -83,7 +96,13 @@ public sealed class BatchEditPresetStore
     {
         ArgumentNullException.ThrowIfNull(preset);
         string name = ValidateName(preset.Name);
-        BatchEditPreset normalized = preset with { SchemaVersion = 1, Name = name };
+        NumericExpressionProfile profile = preset.Kind == BatchEditPresetKind.Note ? NumericExpressionProfiles.BatchNote : NumericExpressionProfiles.BatchEvent;
+        BatchEditPreset normalized = preset with
+        {
+            SchemaVersion = 2, Name = name, ExpressionProfileId = profile.Id, ExpressionProfileVersion = profile.Version,
+            NumericContractVersion = preset.Kind == BatchEditPresetKind.Note ? 1 : MidiEditingValueDomain.NumericContractVersion
+        };
+        ValidateExpressions(normalized);
         string directory = GetDirectory(preset.Kind);
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, name + ".json");
@@ -98,7 +117,12 @@ public sealed class BatchEditPresetStore
         string temporary = Path.Combine(directory, $".{Guid.NewGuid():N}.tmp");
         try
         {
-            File.WriteAllText(temporary, JsonSerializer.Serialize(normalized, JsonOptions));
+            using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(stream, normalized, JsonOptions);
+                if (stream.Length > ToolPresetJson.MaximumBytes) throw new InvalidDataException("The preset exceeds its file size limit.");
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(temporary, path, overwrite: false);
         }
         finally
@@ -130,6 +154,14 @@ public sealed class BatchEditPresetStore
             BatchEditPresetKind.Event => "EventBatchPresets",
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         });
+
+    private static void ValidateExpressions(BatchEditPreset preset)
+    {
+        using var program = BatchEditExpressionProgram.Compile(preset.Kind == BatchEditPresetKind.Note
+            ? new Dictionary<BatchEditField, string?> { [BatchEditField.Velocity] = preset.Velocity,
+                [BatchEditField.KeyNumber] = preset.KeyNumber, [BatchEditField.Gate] = preset.Gate, [BatchEditField.Tick] = preset.Tick }
+            : new Dictionary<BatchEditField, string?> { [BatchEditField.PointValue] = preset.PointValue, [BatchEditField.Tick] = preset.Tick });
+    }
 
     private static string ValidateName(string value)
     {

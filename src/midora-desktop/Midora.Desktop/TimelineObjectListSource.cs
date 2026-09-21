@@ -418,5 +418,6 @@ public sealed class TimelineObjectListSource : IDisposable
         : row.Kind == TimelineItemKind.TemplateEvent && row.TemplateKind == TemplateEventKind.Program
             || row.Kind == TimelineItemKind.DirectMidiEvent && row.DirectKind == DirectMidiChannelEventKind.ProgramChange
             ? $"Program {row.Value}"
-        : row.Value.ToString("G", CultureInfo.InvariantCulture);
+        : (row.Value + (row.Kind == TimelineItemKind.TemplateEvent ? MidiEditingValueDomain.Offset(row.TemplateKind, row.Number)
+            : row.Kind == TimelineItemKind.DirectMidiEvent ? MidiEditingValueDomain.Offset(row.DirectKind, row.Number) : 0)).ToString("G", CultureInfo.InvariantCulture);
 }

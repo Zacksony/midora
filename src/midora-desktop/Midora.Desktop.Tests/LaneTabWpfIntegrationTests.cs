@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Midora.Application;
 using Midora.Desktop.Presentation.Controls;
 using Xunit;
 
@@ -25,6 +26,7 @@ public static partial class TimelineObjectListIntegrationTests
             var compact = new LaneTabHeader();
             VisualTreeHelper.SetRootDpi(compact, new DpiScale(dpi, dpi));
             ((ListBox)compact.FindName("Tabs")).ItemsSource = rows.Select(row => row with { Name = new string('W', 200) }).ToArray();
+            Assert.Null(compact.FindName("StepLines"));
             ((TextBlock)compact.FindName("Coordinates")).Text = "(9223372036854775806, 16383)";
             compact.Measure(new Size(640, 32)); compact.Arrange(new Rect(0, 0, 640, 32)); compact.UpdateLayout();
             foreach (var name in new[] { "Snap", "Subdivision", "DirectoryButton" })
@@ -46,7 +48,31 @@ public static partial class TimelineObjectListIntegrationTests
         Assert.Equal(2, host.SelectedIndex);
         Assert.Single(Descendants<TimelineSurface>(host), s => s.IsVisible && s.IsHitTestVisible);
         var state = (LaneTabSession)Field(header, "_state")!;
-        Descendants<TimelineSurface>(host).Single(s => s.IsVisible && s.IsHitTestVisible).RestoreValueViewport((.2, .8));
+        var eventSurface = Descendants<TimelineSurface>(host).Single(s => s.IsVisible && s.IsHitTestVisible);
+        Assert.Null(header.FindName("StepLines"));
+        Assert.NotNull(eventSurface.Snapshot!.StepSignalSource);
+        var session = (DesktopSessionController)Field(window, "_session")!;
+        var preferences = (ApplicationPreferences)Field(session, "_applicationPreferences")!;
+        ApplicationPreferences? attempted = null;
+        var preferencesDialog = new ApplicationPreferencesDialog(preferences, InstrumentCatalogState.Default,
+            candidate => { attempted = candidate; return "Simulated save failure"; }, ApplicationPreferencesPage.Appearance);
+        var checkbox = Assert.IsType<CheckBox>(preferencesDialog.FindName("EventLaneLinesBox"));
+        Assert.True(checkbox.IsChecked);
+        checkbox.IsChecked = false;
+        Assert.True(session.ShowEventLaneLines); // Draft alone cannot affect the session.
+        Invoke(preferencesDialog, "OnApplyClick", preferencesDialog, new RoutedEventArgs(Button.ClickEvent));
+        Assert.NotNull(attempted); Assert.False(attempted.Appearance.ShowEventLaneLines);
+        Assert.Null(preferencesDialog.Result); Assert.True(session.ShowEventLaneLines);
+        Invoke(preferencesDialog, "OnRestoreDefaultsClick", preferencesDialog, new RoutedEventArgs(Button.ClickEvent));
+        Assert.True(checkbox.IsChecked);
+        Assert.True(eventSurface.ShowStepSignal);
+        SetLines(false);
+        Assert.False(eventSurface.ShowStepSignal);
+        var futureSurface = new TimelineSurface();
+        window.BindEventLaneLines(futureSurface);
+        Assert.False(futureSurface.ShowStepSignal);
+        Assert.Same(selection, workspace.Selection.SharedIds);
+        eventSurface.RestoreValueViewport((.2, .8));
         Layout(content);
         state.Hide(target.Key); header.Refresh(); Layout(content);
         Assert.Equal(0, host.SelectedIndex);
@@ -57,12 +83,25 @@ public static partial class TimelineObjectListIntegrationTests
         state.Show(target.Key); header.Refresh(); Layout(content);
         Assert.Equal(2, host.SelectedIndex);
         var surface = Descendants<TimelineSurface>(host).Single(s => s.IsVisible && s.IsHitTestVisible);
+        Assert.False(surface.ShowStepSignal);
+        SetLines(true);
+        Assert.True(surface.ShowStepSignal);
+        Assert.True(futureSurface.ShowStepSignal);
         var axis = surface.CaptureValueViewport();
         Assert.InRange(axis.Minimum, .19, .21); Assert.InRange(axis.Maximum, .79, .81);
         Assert.Equal(rows.Length, state.Descriptors.Count);
         state.Show(LaneTabKey.Velocity); header.Refresh(); Layout(content);
+        Assert.Null(Descendants<TimelineSurface>(host).Single(s => s.IsVisible && s.IsHitTestVisible).Snapshot!.StepSignalSource);
         VerifyLaneHeaderDrag(window, content, workspace, header, tabs, state);
         if (kind != TimelineObjectListOwnerKind.LogicalSegment)
             VerifyInstrumentLaneGestures(window, content, workspace, host, header, state);
+
+        void SetLines(bool show)
+        {
+            var next = preferences with { Appearance = preferences.Appearance with { ShowEventLaneLines = show } };
+            Assert.False(session.RequiresAudioWorkerRebuild(next));
+            session.ApplyApplicationPreferencesAsync(next).GetAwaiter().GetResult();
+            Layout(content);
+        }
     }
 }

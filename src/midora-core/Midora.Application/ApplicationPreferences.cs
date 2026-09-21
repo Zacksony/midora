@@ -174,6 +174,7 @@ public sealed record AppearancePreferences(string Language)
 {
     public const string EnglishLanguage = "English";
     public static AppearancePreferences Default { get; } = new(EnglishLanguage);
+    public bool ShowEventLaneLines { get; init; } = true;
 
     public void Validate()
     {

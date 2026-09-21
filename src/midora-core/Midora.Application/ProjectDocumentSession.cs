@@ -366,7 +366,11 @@ public sealed class ProjectDocumentSession : IDisposable
 
     public event EventHandler? HistoryChanged;
     public event EventHandler<ProjectContentChangedEventArgs>? ContentChanged;
-    internal event Action<IReadOnlyDictionary<MidoraId, MidoraId>>? PresentationObjectsCloned;
+    /// <summary>Identity-only companion notification after a successful duplicate; not music history.</summary>
+    public event Action<IReadOnlyDictionary<MidoraId, MidoraId>>? PresentationObjectsCloned;
+    /// <summary>Published after a successful move/Undo/Redo and before content refresh.
+    /// The bool is true for Undo; receivers then follow TargetId back to SourceId.</summary>
+    public event Action<IReadOnlyList<SegmentIdentityTransfer>, bool>? SegmentIdentitiesTransferred;
 
     public ProjectEditExecution Execute(IProjectEditCommand command)
     {
@@ -558,7 +562,7 @@ public sealed class ProjectDocumentSession : IDisposable
         _cursor++;
         _currentStateId = nextStateId;
         _publicationRevision = nextPublicationRevision;
-        NotifyEditChanged(prepared.Changes);
+        NotifyEditChanged(prepared);
         return new(true, result);
     }
 
@@ -642,7 +646,7 @@ public sealed class ProjectDocumentSession : IDisposable
             _cursor--;
             _currentStateId = entry.BeforeStateId;
             _publicationRevision = nextPublicationRevision;
-            NotifyEditChanged(entry.Prepared.Changes);
+            NotifyEditChanged(entry.Prepared, undo: true);
             return result;
         }
     }
@@ -665,7 +669,7 @@ public sealed class ProjectDocumentSession : IDisposable
             _cursor++;
             _currentStateId = entry.AfterStateId;
             _publicationRevision = nextPublicationRevision;
-            NotifyEditChanged(entry.Prepared.Changes);
+            NotifyEditChanged(entry.Prepared);
             return result;
         }
     }
@@ -708,9 +712,10 @@ public sealed class ProjectDocumentSession : IDisposable
         _externalDirtyReasons.Count != 0
         || _baselineStateId != _currentStateId;
 
-    private void NotifyEditChanged(ProjectChangeSet changes)
+    private void NotifyEditChanged(IPreparedProjectEdit prepared, bool undo = false)
     {
-        NotifyHistoryChanged(compilationChanged: true, changes);
+        NotifyHistoryChanged(compilationChanged: true, prepared.Changes,
+            (prepared as IPreparedSegmentIdentityTransfers)?.SegmentIdentityTransfers, undo);
     }
 
     public long CurrentStateId
@@ -726,13 +731,16 @@ public sealed class ProjectDocumentSession : IDisposable
 
     private void NotifyHistoryChanged(
         bool compilationChanged,
-        ProjectChangeSet? changes = null)
+        ProjectChangeSet? changes = null,
+        IReadOnlyList<SegmentIdentityTransfer>? transfers = null,
+        bool undo = false)
     {
         _notifying = true;
         try
         {
             if (compilationChanged)
             {
+                if (transfers is { Count: > 0 }) SegmentIdentitiesTransferred?.Invoke(transfers, undo);
                 _compilation.NotifyCompilationChanged();
                 ContentChanged?.Invoke(this, new ProjectContentChangedEventArgs(
                     changes ?? ProjectChangeSet.Everything));
@@ -778,7 +786,7 @@ public sealed class ProjectDocumentSession : IDisposable
         changes.TimelineOwnerChanges.AddRange(prepared.Changes.TimelineOwnerChanges);
         return new(
             InstrumentChangeMaintenance.Wrap(project, ExactTimelineCollisionPolicy.Wrap(project, prepared)),
-            changes);
+            changes, (prepared as IPreparedSegmentIdentityTransfers)?.SegmentIdentityTransfers ?? []);
     }
 
     private sealed record HistoryEntry(
@@ -789,13 +797,15 @@ public sealed class ProjectDocumentSession : IDisposable
 
     private sealed class FrozenPreparedProjectEdit(
         IPreparedProjectEdit source,
-        ProjectChangeSet changes) : IPreparedProjectEdit, IDisposable
+        ProjectChangeSet changes, IReadOnlyList<SegmentIdentityTransfer> transfers)
+        : IPreparedProjectEdit, IPreparedSegmentIdentityTransfers, IDisposable
     {
         private IPreparedProjectEdit? _source = source;
         private BoundedEditPublicationResources? _resources;
 
         public bool HasChanges { get; } = source.HasChanges;
         public ProjectChangeSet Changes { get; } = changes;
+        public IReadOnlyList<SegmentIdentityTransfer> SegmentIdentityTransfers { get; } = transfers;
         public void Apply(MidoraProject project)
         {
             Current.Apply(project);

@@ -11,10 +11,11 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Xunit.Abstractions;
 
 namespace Midora.Desktop.Presentation.Tests;
 
-public sealed class TimelineRenderingTests
+public sealed class TimelineRenderingTests(ITestOutputHelper output)
 {
     [Fact]
     public void UnloadingTimelineSurfaceClearsBusyMarqueeCursor()
@@ -166,6 +167,7 @@ public sealed class TimelineRenderingTests
             Assert.NotNull(dragSelectionField);
             Assert.NotNull(prepare);
             dragItemField!.SetValue(surface, first);
+            surfaceType.GetMethod("FreezeEditGesture", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(surface, null);
 
             prepare!.Invoke(surface, [first]);
 
@@ -918,7 +920,7 @@ public sealed class TimelineRenderingTests
                 _ = InvokePrivate(
                     surface,
                     "BeginPendingRightGesture",
-                    new Point(190, 140),
+                    new Point(149, 99),
                     ModifierKeys.None);
                 Assert.True(queryStarted.Wait(TimeSpan.FromSeconds(2)));
                 Assert.True((bool)GetPrivateField(
@@ -1176,6 +1178,7 @@ public sealed class TimelineRenderingTests
                 52 + viewport.TickToX(100),
                 24 + viewport.Height / 2));
             SetPrivateField(surface, "_hoverPoint", new Point(1_100, 500));
+            SetPrivateField(surface, "_dragOriginNormalizedValue", .5d);
             SetPrivateField(surface, "_dragPreviewMinimumStartTick", 100L);
             SetPrivateField(surface, "_dragPreviewMinimumValue", 0.5d);
             SetPrivateField(surface, "_dragPreviewMaximumValue", 0.5d);
@@ -1956,61 +1959,12 @@ public sealed class TimelineRenderingTests
                 isNearHorizontalEdge: true));
     }
 
-    [Theory]
-    [InlineData(TimelineToolMode.Select, TimelineToolMode.Draw)]
-    [InlineData(TimelineToolMode.Draw, TimelineToolMode.Select)]
-    [InlineData(TimelineToolMode.Erase, TimelineToolMode.Select)]
-    [InlineData(TimelineToolMode.Split, TimelineToolMode.Select)]
-    public void RightDoubleClickToggleHasOneDeterministicDrawSelectTransition(
-        TimelineToolMode current,
-        TimelineToolMode expected) =>
-        Assert.Equal(expected, TimelineToolPolicy.ResolveDrawSelectToggle(current));
-
-    [Theory]
-    [InlineData(299, true)]
-    [InlineData(300, false)]
-    [InlineData(301, false)]
-    [InlineData(-1, false)]
-    public void RightDoubleClickUsesMidoraFixedHalfOpenTimeWindow(
-        long elapsedMilliseconds,
-        bool expected) =>
-        Assert.Equal(
-            expected,
-            TimelineToolPolicy.IsRightDoubleClick(
-                elapsedMilliseconds,
-                horizontalDistance: 0,
-                verticalDistance: 0));
-
-    [Theory]
-    [InlineData(6, 0, true)]
-    [InlineData(-6, 6, true)]
-    [InlineData(6.001, 0, false)]
-    [InlineData(0, -6.001, false)]
-    [InlineData(double.NaN, 0, false)]
-    [InlineData(0, double.PositiveInfinity, false)]
-    public void RightDoubleClickUsesFixedSixDipSpatialTolerance(
-        double horizontalDistance,
-        double verticalDistance,
-        bool expected) =>
-        Assert.Equal(
-            expected,
-            TimelineToolPolicy.IsRightDoubleClick(
-                elapsedMilliseconds: 299,
-                horizontalDistance,
-                verticalDistance));
-
     [Fact]
-    public void RightDoubleClickPolicyHasNoWpfClickCountOrSystemSettingInput()
+    public void ObsoleteRightDoubleClickAndRightDrawingPoliciesAreRemoved()
     {
-        System.Reflection.MethodInfo method = typeof(TimelineToolPolicy).GetMethod(
-            nameof(TimelineToolPolicy.IsRightDoubleClick))
-            ?? throw new InvalidOperationException("Right-double-click policy was not found.");
-
-        Assert.Equal(
-            [typeof(long), typeof(double), typeof(double)],
-            method.GetParameters().Select(static parameter => parameter.ParameterType));
-        Assert.Equal(300, TimelineToolPolicy.RightDoubleClickIntervalMilliseconds);
-        Assert.Equal(6, TimelineToolPolicy.RightDoubleClickToleranceDips);
+        Assert.Null(typeof(TimelineToolPolicy).GetMethod("IsRightDoubleClick"));
+        Assert.Null(typeof(TimelineToolPolicy).GetMethod("ResolveDrawSelectToggle"));
+        Assert.Null(typeof(TimelineToolPolicy).GetMethod("RequestsHorizontalValueTrace"));
     }
 
     [Theory]
@@ -2125,7 +2079,7 @@ public sealed class TimelineRenderingTests
     public void AltLeftForcesValueTraceWithoutDirectPointManipulation()
     {
         Assert.True(TimelineToolPolicy.ForcesValueTrace(
-            TimelineToolMode.Select,
+            TimelineToolMode.Draw,
             TimelineSurfaceMode.Velocity,
             MouseButton.Left,
             ModifierKeys.Alt));
@@ -2161,29 +2115,15 @@ public sealed class TimelineRenderingTests
             ModifierKeys.Alt));
     }
 
-    [Fact]
-    public void ShiftRightRequestsHorizontalTraceOnlyInDrawEventLanes()
+    [Theory]
+    [InlineData(TimelineSurfaceMode.Velocity)]
+    [InlineData(TimelineSurfaceMode.EventLanes)]
+    public void AltOnlyForcesLeftDrawingInSharedDrawMode(TimelineSurfaceMode mode)
     {
-        Assert.True(TimelineToolPolicy.RequestsHorizontalValueTrace(
-            TimelineToolMode.Draw,
-            TimelineSurfaceMode.EventLanes,
-            MouseButton.Right,
-            ModifierKeys.Shift));
-        Assert.False(TimelineToolPolicy.RequestsHorizontalValueTrace(
-            TimelineToolMode.Draw,
-            TimelineSurfaceMode.EventLanes,
-            MouseButton.Right,
-            ModifierKeys.None));
-        Assert.False(TimelineToolPolicy.RequestsHorizontalValueTrace(
-            TimelineToolMode.Select,
-            TimelineSurfaceMode.EventLanes,
-            MouseButton.Right,
-            ModifierKeys.Shift));
-        Assert.False(TimelineToolPolicy.RequestsHorizontalValueTrace(
-            TimelineToolMode.Draw,
-            TimelineSurfaceMode.Velocity,
-            MouseButton.Right,
-            ModifierKeys.Shift));
+        foreach (var tool in Enum.GetValues<TimelineToolMode>())
+            foreach (var button in new[] { MouseButton.Left, MouseButton.Right })
+                Assert.Equal(tool == TimelineToolMode.Draw && button == MouseButton.Left,
+                    TimelineToolPolicy.ForcesValueTrace(tool, mode, button, ModifierKeys.Alt));
     }
 
     [Fact]
@@ -5123,7 +5063,7 @@ public sealed class TimelineRenderingTests
     }
 
     [Fact]
-    public void SelectionFloatingToolRejectsMixedSemanticObjectKinds()
+    public void SelectionFloatingToolKeepsCommandsButDisablesMixedObjectDragging()
     {
         RunOnSta(() =>
         {
@@ -5166,9 +5106,10 @@ public sealed class TimelineRenderingTests
             try
             {
                 _ = RenderVisual(surface);
-                Assert.True(((Rect)GetPrivateField(
+                Assert.False(((Rect)GetPrivateField(
                     surface,
                     "_selectionToolBounds")!).IsEmpty);
+                Assert.False((bool)GetPrivateField(surface, "_selectionToolCanDrag")!);
             }
             finally
             {
@@ -5636,8 +5577,20 @@ public sealed class TimelineRenderingTests
     [InlineData(TimelineItemKind.TemplateNote)]
     public void SixtyThousandNoteResizePreviewUsesBoundedPixelAggregation(
         TimelineItemKind kind)
+        => CheckNoteResizePixelAggregation(kind, 60_000, TimeSpan.FromSeconds(1));
+
+    [Theory]
+    [InlineData(TimelineItemKind.LogicalNote, 400_000)]
+    [InlineData(TimelineItemKind.DirectMidiNote, 400_000)]
+    [InlineData(TimelineItemKind.TemplateNote, 400_000)]
+    [InlineData(TimelineItemKind.LogicalNote, 1_000_000)]
+    [InlineData(TimelineItemKind.DirectMidiNote, 1_000_000)]
+    [InlineData(TimelineItemKind.TemplateNote, 1_000_000)]
+    public void LargeNoteResizePreviewRetainsObjectsAndBoundedPixelAggregation(TimelineItemKind kind, int count)
+        => CheckNoteResizePixelAggregation(kind, count, TimeSpan.FromSeconds(8));
+
+    private void CheckNoteResizePixelAggregation(TimelineItemKind kind, int count, TimeSpan timeLimit)
     {
-        const int count = 60_000;
         TimelineRenderItem[] notes = new TimelineRenderItem[count];
         MidoraId[] ids = new MidoraId[count];
         for (int index = 0; index < count; index++)
@@ -5647,7 +5600,7 @@ public sealed class TimelineRenderingTests
                 kind: kind);
             ids[index] = notes[index].Id;
         }
-        TimelineRenderSnapshot snapshot = new(1, "resize-60k", notes);
+        TimelineRenderSnapshot snapshot = new(1, $"resize:{kind}:{count}", notes);
         TimelineSelectionSnapshot selection = new(1, ids, ids[0]);
         double[] tops = Enumerable.Range(0, 128).Select(static lane => lane * 8d).ToArray();
         double[] heights = Enumerable.Repeat(8d, 128).ToArray();
@@ -5675,9 +5628,10 @@ public sealed class TimelineRenderingTests
         Assert.Equal(count, raster.CandidateCount);
         Assert.True(allocated < 8 * 1024 * 1024,
             $"Resize raster allocated {allocated:N0} bytes.");
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1),
+        Assert.True(stopwatch.Elapsed < timeLimit,
             $"Resize raster took {stopwatch.Elapsed}.");
         Assert.Contains(raster.Pixels, static value => value != 0);
+        output.WriteLine($"{kind}, {count:N0} candidates: {stopwatch.Elapsed.TotalMilliseconds:F2} ms; raster allocated {allocated:N0} bytes.");
     }
 
     [Theory]
@@ -5727,7 +5681,7 @@ public sealed class TimelineRenderingTests
         double p95 = elapsedMilliseconds[(int)Math.Ceiling(frameCount * 0.95) - 1];
         double maximum = elapsedMilliseconds[^1];
 
-        Console.WriteLine(
+        output.WriteLine(
             $"{kind}: resize p50/p95/max={p50:N2}/{p95:N2}/{maximum:N2} ms; "
             + $"managed={allocated:N0} bytes; working-set delta={workingSetDelta:N0} bytes.");
 

@@ -104,6 +104,7 @@ public sealed partial class MidoraCompiler : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
+        request.Progress?.Report(CompilationPhase.Validating);
         if (request.HeldPreviewGateOpen
             && (request.Purpose != CompilationPurpose.EventInstrumentPreview
                 || request.StartTick < 0
@@ -153,6 +154,7 @@ public sealed partial class MidoraCompiler : IDisposable
             endTick = request.StartTick;
         }
 
+        request.Progress?.Report(CompilationPhase.FreezingConductor);
         CanonicalConductor conductor = FreezeConductor(project.Conductor, request.StartTick, endTick);
         cancellationToken.ThrowIfCancellationRequested();
         if (diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
@@ -194,6 +196,7 @@ public sealed partial class MidoraCompiler : IDisposable
         }
 
         long logicalExpansionStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        request.Progress?.Report(CompilationPhase.LogicalTracks, 0, selectedTracks.Count);
         foreach (LogicalTrack track in selectedTracks)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -211,6 +214,7 @@ public sealed partial class MidoraCompiler : IDisposable
             diagnostics.AddRange(expansion.Diagnostics);
             recompiledTracks += expansion.Recompiled ? 1 : 0;
             reusedTracks += expansion.Recompiled ? 0 : 1;
+            request.Progress?.Report(CompilationPhase.LogicalTracks, recompiledTracks + reusedTracks, selectedTracks.Count);
             recompiledSegments += expansion.RecompiledSegmentCount;
             reusedSegments += expansion.ReusedSegmentCount;
             stateConvergences += expansion.StateConvergenceCount;
@@ -221,6 +225,7 @@ public sealed partial class MidoraCompiler : IDisposable
             }
         }
 
+        request.Progress?.Report(CompilationPhase.OverlapPolicies);
         ApplyDestructiveOverlapPolicies(
             project,
             instances,
@@ -301,9 +306,11 @@ public sealed partial class MidoraCompiler : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         int overlapDiagnosticStart = diagnostics.Count;
+        request.Progress?.Report(CompilationPhase.CheckingOverlaps);
         CompilerDiagnosticList overlapDiagnostics = CollectOverlapDiagnostics(instances, cancellationToken);
         bool overlapErrors = overlapDiagnostics.CountSeverity(DiagnosticSeverity.Error) != 0;
         int allocationDiagnosticStart = diagnostics.Count;
+        request.Progress?.Report(CompilationPhase.AllocatingChannels);
         AllocationResult allocation = Allocate(
             project,
             instances,
@@ -360,7 +367,8 @@ public sealed partial class MidoraCompiler : IDisposable
             allocation.UnitBySubVoice,
             project.GlobalResetDefaults,
             storageBudget,
-            cancellationToken);
+            cancellationToken,
+            request.Progress);
         double logicalMaterializationMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(logicalMaterializationStart).TotalMilliseconds;
         // Backing layout only selects storage, never a second range compiler.
         // Logical and Pure units are disjoint. Keep their range semantics unchanged;
@@ -369,6 +377,7 @@ public sealed partial class MidoraCompiler : IDisposable
             .Where(value => value.MidiChannelRootId == default).ToArray();
         long logicalRangeStart = System.Diagnostics.Stopwatch.GetTimestamp();
         using LogicalCanonicalPageIndex logicalPageIndex = new(storageBudget);
+        request.Progress?.Report(CompilationPhase.ApplyingRange);
         CompactCanonicalStore rangedStore = ApplyRange(
             allEvents,
             rangeSourceAllocations,
@@ -404,6 +413,7 @@ public sealed partial class MidoraCompiler : IDisposable
                 $"The Channel Unit peak is {allocation.PeakUnits}/256.", new()));
         }
 
+        request.Progress?.Report(CompilationPhase.PublishingMidi);
         CanonicalSmfTrackDescriptor[] smfTracks = FreezeSmfTrackDescriptors(
             pureMidiPlan,
             allocation.UnitByRoot);
@@ -432,6 +442,7 @@ public sealed partial class MidoraCompiler : IDisposable
             ranged = merged.ToArray();
             pagedEventSource = null;
         }
+        request.Progress?.Report(CompilationPhase.Fingerprinting);
         long resultFingerprint = SourceFingerprint.ForResult(
             request.StartTick,
             endTick,
@@ -3156,7 +3167,8 @@ public sealed partial class MidoraCompiler : IDisposable
         IReadOnlyDictionary<(MidoraId InstanceId, MidoraId SubVoiceId), int> unitByVoice,
         MidiInitialState resetDefaults,
         CompilerStorageBudget storageBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CompilationProgress? progress = null)
     {
         using CanonicalSourceTable sources = new(storageBudget, cancellationToken);
         using CanonicalSourceTable.Reader reader = sources.OpenReader(cancellationToken);
@@ -3176,8 +3188,17 @@ public sealed partial class MidoraCompiler : IDisposable
         HashSet<MidoraId> laneActivationInstances = GetLaneActivationInstances(
             groups,
             cancellationToken);
+        progress?.Report(CompilationPhase.LogicalInstances, 0, instances.Count);
+        int completedInstances = 0;
+        long nextProgressInstance = 0;
+        int progressInterval = Math.Max(1, instances.Count / 1000);
         foreach (RawInstance instance in instances)
         {
+            if (completedInstances++ == nextProgressInstance)
+            {
+                progress?.Report(CompilationPhase.LogicalInstances, completedInstances - 1, instances.Count);
+                nextProgressInstance += progressInterval;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             bool includeLaneActivationState = laneActivationInstances.Contains(instance.InstanceId);
             foreach (RawSubVoice voice in instance.Voices)
@@ -3240,6 +3261,7 @@ public sealed partial class MidoraCompiler : IDisposable
             }
         }
 
+        progress?.Report(CompilationPhase.SortingLogicalEvents);
         sources.Seal();
         return FoldCompactDescendingEvents(sorter.ReadSorted(cancellationToken), sources, storageBudget, cancellationToken);
     }

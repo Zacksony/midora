@@ -1362,7 +1362,8 @@ public sealed class TimelineRenderSnapshot
         IReadOnlyList<ArrangementLaneDescriptor>? arrangementLanes = null,
         ITimelineRenderItemSource? itemSource = null,
         ITimelineOverviewSource? overviewSource = null,
-        ITimelineRenderItemSource? conductorPreviewSource = null)
+        ITimelineRenderItemSource? conductorPreviewSource = null,
+        TimelineStepSignalSource? stepSignalSource = null)
     {
         if (semanticRevision < 0)
         {
@@ -1387,6 +1388,7 @@ public sealed class TimelineRenderSnapshot
         SemanticRevision = semanticRevision;
         ProjectionKey = projectionKey.Trim();
         _itemSource = itemSource;
+        StepSignalSource = stepSignalSource;
         _conductorPreviewSource = conductorPreviewSource;
         _overviewSource = overviewSource;
         _materializedMaximumEndTick = materialized.Length == 0
@@ -1465,6 +1467,8 @@ public sealed class TimelineRenderSnapshot
     public bool HasHitTestableItems { get; }
     public bool HasDedicatedOverview => _overviewSource is not null;
     public ConductorRenderItemSource? ConductorSource => _itemSource as ConductorRenderItemSource;
+    public TimelineStepSignalSource? StepSignalSource { get; }
+
     public bool IsTempoProjection => ConductorSource?.Kind == ConductorProjectionKind.Tempo;
     public long TotalItemCount => checked(Items.Count + (_itemSource?.Count ?? 0));
     public int MaterializedMaximumLane => _materializedMaximumLane;

@@ -29,14 +29,18 @@ public partial class BatchEditPresetDialog : Window
         PreviewText.Text = Presets.Count == 0
             ? "No presets are stored in this category."
             : "Select a preset to preview it.";
+        PreviewText.Text += OmittedNotice;
     }
 
     private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         PreviewText.Text = PresetList.SelectedItem is BatchEditPresetInfo preset
-            ? preset.Preview
-            : "Select a preset to preview it.";
+            ? preset.Preview + OmittedNotice
+            : "Select a preset to preview it." + OmittedNotice;
     }
+
+    private string OmittedNotice => _store.OmittedPresetCount == 0 ? ""
+        : $"\n\n{_store.OmittedPresetCount} obsolete, invalid or unavailable preset file(s) were omitted and left unchanged. Event presets now use the CC editor display domain (numeric contract 2).";
 
     private void OnApplyClick(object sender, RoutedEventArgs e)
     {

@@ -33,8 +33,8 @@ public sealed class BatchEditPresetStoreTests
 
         Assert.Equal("NoteBatchPresets", Directory.GetParent(noteInfo.Path)!.Name);
         Assert.Equal("EventBatchPresets", Directory.GetParent(pointInfo.Path)!.Name);
-        Assert.Equal(note, Assert.Single(store.Load(BatchEditPresetKind.Note)).Preset);
-        Assert.Equal(point, Assert.Single(store.Load(BatchEditPresetKind.Event)).Preset);
+        Assert.Equal(noteInfo.Preset, Assert.Single(store.Load(BatchEditPresetKind.Note)).Preset);
+        Assert.Equal(pointInfo.Preset, Assert.Single(store.Load(BatchEditPresetKind.Event)).Preset);
         Assert.Throws<IOException>(() => store.Save(note));
 
         store.Delete(noteInfo);
@@ -61,6 +61,31 @@ public sealed class BatchEditPresetStoreTests
             "{not json");
 
         Assert.Equal("Valid", Assert.Single(store.Load(BatchEditPresetKind.Event)).Name);
+    }
+
+    [Theory]
+    [InlineData("legacy")] [InlineData("profile")] [InlineData("expression")]
+    [InlineData("unknown")] [InlineData("duplicate")] [InlineData("oversize")]
+    public void EventPresetLoadRejectsObsoleteOrUnvalidatedDataWithoutDeletingIt(string variant)
+    {
+        using TemporaryDirectory temporary = new();
+        var store = new BatchEditPresetStore(temporary.Path);
+        var saved = store.Save(new(1, "Current", BatchEditPresetKind.Event, "", "=p0*.5", "", "", ""));
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(saved.Path))!.AsObject();
+        switch (variant)
+        {
+            case "legacy": json["schemaVersion"] = 1; break;
+            case "profile": json["expressionProfileVersion"] = 999; break;
+            case "expression": json["pointValue"] = "=System.IO.File.ReadAllText(\"x\")"; break;
+            case "unknown": json["unrecognized"] = 1; break;
+        }
+        string text = json.ToJsonString();
+        if (variant == "duplicate") text = text.Insert(1, "\"name\":\"Hidden\",");
+        if (variant == "oversize") text += new string(' ', 262144);
+        File.WriteAllText(saved.Path, text);
+        Assert.Empty(store.Load(BatchEditPresetKind.Event));
+        Assert.Equal(1, store.OmittedPresetCount);
+        Assert.Equal(text, File.ReadAllText(saved.Path));
     }
 
     private sealed class TemporaryDirectory : IDisposable
