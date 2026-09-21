@@ -4,7 +4,7 @@
 > 日常简称：**《Midora SRS》**  
 > 规格版本：**v0.1**  
 > 生成日期：**2026-07-15**  
-> 最近修订日期：**2026-09-18**
+> 最近修订日期：**2026-09-20**
 > 文档形态：**按章节拆分的 Markdown 规格书**
 
 ## 文档定位
@@ -51,6 +51,8 @@
 - 后续修订必须说明受影响章节，避免在实现中静默改变需求。
 
 ## 2026-09-20 修订摘要
+
+- B3 已重新实施：当前 presentation writer 使用 schema 4，并新增独立 `workspaceNavigation` section；继续读取 schema 1/2/3，外层 Project Format 4、音乐 source、canonical、Undo、MIDI/WAV 和音频语义不变。保存有序 Workspace Tabs、Active Workspace、批准页面与 viewport 纯值；打开只物化 Arrangement 与活动页，其余 Tab 以有限轻量描述懒激活，失效活动项回退 Arrangement。Persistence/Desktop 自动构建和测试均已通过；真实 WPF 冷启动、损坏注入、长会话和资源压力门待 B3 UAT。详细实现记录见 [B3 执行记录](../Midora-Next-Development-Requirements-2026-09-11/execution/06b-Workspace-State-Restore-B3.md)。
 
 - B2 工作区状态持久化的 UAT-B2-01～06 已获用户全部验收通过。确认范围为 presentation schema 3、分区 Save/Save Copy、损坏 section 隔离与 recovery-dirty、运行期 Mute/Solo 恢复及 Format 1/2/3 迁移边界；B3 的 Tabs/活动页自动恢复仍未实施。详细实施与人工验收记录见 [B2 执行记录](../Midora-Next-Development-Requirements-2026-09-11/execution/06-Workspace-State-Persistence-B2.md)。本次不改变 Project Format 4、音乐 source、canonical、Undo 或正式 MIDI/WAV/音频语义。
 

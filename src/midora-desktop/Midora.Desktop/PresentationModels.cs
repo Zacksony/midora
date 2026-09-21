@@ -3009,6 +3009,17 @@ public sealed class LibraryWorkspaceViewModel()
             if (Set(ref _sortMode, value)) ApplyView();
         }
     }
+
+    internal void RestoreNavigationState(string? searchText, int? sortMode)
+    {
+        _searchText = searchText is null ? string.Empty : searchText.Trim();
+        _sortMode = sortMode is int value && Enum.IsDefined(typeof(InstrumentLibrarySortMode), value)
+            ? (InstrumentLibrarySortMode)value
+            : InstrumentLibrarySortMode.Manual;
+        Raise(nameof(SearchText));
+        Raise(nameof(SortMode));
+        ApplyView();
+    }
     public InstrumentListItem? SelectedInstrument
     {
         get => _selectedInstrument;
@@ -3347,6 +3358,23 @@ public sealed class InstrumentWorkspaceViewModel(
     {
         get => _activeSubVoiceId;
         private set { if (Set(ref _activeSubVoiceId, value)) Raise(nameof(ValueTraceShape)); }
+    }
+
+    internal bool RestoreActiveSubVoice(MidoraId id, MidoraProject project, long revision)
+    {
+        if (SubVoices.Any(value => value.Id == id))
+        {
+            ActiveSubVoiceId = id;
+            Selection.Replace(id);
+            // Rebuild the materialized view immediately.  Merely changing the
+            // selected id leaves the render lanes, object-list source and
+            // snapshots for the default voice in place until the next project
+            // refresh, which makes restored tabs look correct only after a
+            // later edit.
+            Rebuild(project, revision);
+            return true;
+        }
+        return false;
     }
     private readonly Dictionary<MidoraId, TimelineValueTraceShape> _subVoiceTraceShapes = [];
     public override TimelineValueTraceShape ValueTraceShape
@@ -4266,6 +4294,7 @@ public sealed class DiagnosticsWorkspaceViewModel()
     private string? _filterError;
     private string _diagnosticPageText = "1";
     private string _diagnosticPageError = string.Empty;
+    private long? _pendingNavigationPage;
     private CompressedMidoraIdSet _workspaceScopeIds = CompressedMidoraIdSet.Empty;
     private CompressedMidoraIdSet _selectionScopeIds = CompressedMidoraIdSet.Empty;
     private string _searchText = string.Empty;
@@ -4286,6 +4315,33 @@ public sealed class DiagnosticsWorkspaceViewModel()
         set => Set(ref _diagnosticPageText, value ?? string.Empty);
     }
 
+    internal long CurrentNavigationPage => _diagnostics.PageIndex;
+
+    internal void RestoreNavigationState(
+        string? searchText,
+        int? severityFilter,
+        int? statusFilter,
+        int? scopeFilter,
+        int? page)
+    {
+        _searchText = searchText?.Trim() ?? string.Empty;
+        _severityFilter = severityFilter is int severity
+            && severity >= 0 && severity < SeverityFilters.Count
+            ? SeverityFilters[severity] : SeverityFilters[0];
+        _statusFilter = statusFilter is int status
+            && status >= 0 && status < StatusFilters.Count
+            ? StatusFilters[status] : StatusFilters[1];
+        _scopeFilter = scopeFilter is int scope
+            && scope >= 0 && scope < ScopeFilters.Count
+            ? ScopeFilters[scope] : ScopeFilters[0];
+        _pendingNavigationPage = page is >= 0 ? page : null;
+        Raise(nameof(SearchText));
+        Raise(nameof(SeverityFilter));
+        Raise(nameof(StatusFilter));
+        Raise(nameof(ScopeFilter));
+        ApplyFilter();
+    }
+
     public bool GoToDiagnosticPage()
     {
         if (!CanGoToDiagnosticPage) return false;
@@ -4297,6 +4353,7 @@ public sealed class DiagnosticsWorkspaceViewModel()
             Raise(nameof(DiagnosticPageError));
             return false;
         }
+        _pendingNavigationPage = null;
         PublishDiagnostics(_diagnostics.GetPage(page - 1));
         return true;
     }
@@ -4304,6 +4361,7 @@ public sealed class DiagnosticsWorkspaceViewModel()
     public void MoveDiagnosticPage(bool next)
     {
         if (next ? !CanNextDiagnosticPage : !CanPreviousDiagnosticPage) return;
+        _pendingNavigationPage = null;
         PublishDiagnostics(_diagnostics.GetPage(_diagnostics.PageIndex + (next ? 1 : -1)));
     }
     public IReadOnlyList<string> SeverityFilters { get; } = ["All severities", "Error", "Warning", "Information"];
@@ -4315,23 +4373,48 @@ public sealed class DiagnosticsWorkspaceViewModel()
         get => _searchText;
         set
         {
-            if (Set(ref _searchText, value ?? string.Empty)) ApplyFilter();
+            if (Set(ref _searchText, value ?? string.Empty))
+            {
+                _pendingNavigationPage = null;
+                ApplyFilter();
+            }
         }
     }
     public string SeverityFilter
     {
         get => _severityFilter;
-        set { if (Set(ref _severityFilter, value ?? "All severities")) ApplyFilter(); }
+        set
+        {
+            if (Set(ref _severityFilter, value ?? "All severities"))
+            {
+                _pendingNavigationPage = null;
+                ApplyFilter();
+            }
+        }
     }
     public string StatusFilter
     {
         get => _statusFilter;
-        set { if (Set(ref _statusFilter, value ?? "Active")) ApplyFilter(); }
+        set
+        {
+            if (Set(ref _statusFilter, value ?? "Active"))
+            {
+                _pendingNavigationPage = null;
+                ApplyFilter();
+            }
+        }
     }
     public string ScopeFilter
     {
         get => _scopeFilter;
-        set { if (Set(ref _scopeFilter, value ?? "Whole Project")) ApplyFilter(); }
+        set
+        {
+            if (Set(ref _scopeFilter, value ?? "Whole Project"))
+            {
+                _pendingNavigationPage = null;
+                ApplyFilter();
+            }
+        }
     }
     public string Summary => _filterError is not null
         ? $"Diagnostic filter failed: {_filterError}"
@@ -4449,6 +4532,12 @@ public sealed class DiagnosticsWorkspaceViewModel()
     private void PublishDiagnostics(VirtualDiagnosticRows diagnostics)
     {
         _diagnosticFilterDirty = false;
+        if (_pendingNavigationPage is long requestedPage && diagnostics.PageCount > 0)
+        {
+            int page = (int)Math.Clamp(requestedPage, 0, diagnostics.PageCount - 1);
+            diagnostics = diagnostics.GetPage(page);
+            _pendingNavigationPage = null;
+        }
         _diagnostics = diagnostics;
         _diagnosticPageError = string.Empty;
         DiagnosticPageText = (diagnostics.PageIndex + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);

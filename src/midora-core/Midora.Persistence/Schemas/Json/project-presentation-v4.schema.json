@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Midora Project presentation v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "allTracksMode", "trackOnionPresets", "subVoiceOnionPresets", "workspaceState", "workspaceNavigation"],
+  "properties": {
+    "schemaVersion": { "const": 4 },
+    "allTracksMode": { "enum": ["raw", "compiled"] },
+    "trackOnionPresets": { "type": "array", "items": { "$ref": "project-presentation-v3.schema.json#/$defs/trackPreset" } },
+    "subVoiceOnionPresets": { "type": "array", "items": { "$ref": "project-presentation-v3.schema.json#/$defs/subVoicePreset" } },
+    "workspaceState": { "$ref": "project-presentation-v3.schema.json#/$defs/workspaceState" },
+    "workspaceNavigation": { "$ref": "#/$defs/workspaceNavigation" }
+  },
+  "$defs": {
+    "stableId": { "$ref": "common-v1.schema.json#/$defs/stableId" },
+    "navigationKey": {
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["arrangement", "eventInstrumentLibrary", "projectSettings", "diagnostics", "conductorTrack", "segmentEditor", "eventInstrumentEditor", "allTracks"] },
+        "objectId": { "$ref": "#/$defs/stableId" }
+      }
+    },
+    "navigationView": {
+      "type": "object", "additionalProperties": false, "required": ["key"],
+      "properties": {
+        "key": { "$ref": "#/$defs/navigationKey" }, "page": { "type": "integer", "minimum": 0 },
+        "secondaryId": { "$ref": "#/$defs/stableId" }, "searchText": { "type": "string", "maxLength": 256 },
+        "primaryFilter": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "secondaryFilter": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "tertiaryFilter": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "sortMode": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "startTick": { "type": "integer", "minimum": 0 }, "tickSpan": { "type": "integer", "minimum": 1, "maximum": 1125899906842624 },
+        "firstLane": { "type": "integer", "minimum": 0, "maximum": 127 }, "firstRow": { "type": "integer", "minimum": 0 },
+        "laneHeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 128 }, "followPlayback": { "type": "boolean" },
+        "lowerEditorVisible": { "type": "boolean" }, "lowerEditorHeight": { "type": "number", "minimum": 110, "maximum": 720 }
+      }
+    },
+    "workspaceNavigation": {
+      "type": "object", "additionalProperties": false, "required": ["tabs", "activeTab", "views"],
+      "properties": {
+        "tabs": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/navigationKey" } },
+        "activeTab": { "$ref": "#/$defs/navigationKey" },
+        "views": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/navigationView" } }
+      }
+    }
+  }
+}

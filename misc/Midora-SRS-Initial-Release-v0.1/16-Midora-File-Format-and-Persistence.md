@@ -486,13 +486,13 @@ trackOnionPresets[] = targetTrackId + enabled + opacity + ordered sourceTrackIds
 subVoiceOnionPresets[] = eventInstrumentId + targetSubVoiceId + enabled + opacity + ordered sourceSubVoiceIds
 ```
 
-当前 writer 使用独立 presentation schema 3：保留 schema 2 的 Onion/All-Tracks 字段，并增加严格的 `workspaceState` 分区。该分区只包含 B1 已批准的 Track profile、Segment/SubVoice 局部视图与 Lane 记忆，以及 Track/Usage/Root 的 Mute/Solo 展示状态；Tab 顺序、活动页、子页和其他 B3 导航状态不写入。schema 2 reader 仍可读并以空 workspace 作为默认；schema 1 reader/DTO/schema 保留并显式转换为 custom，不将 sourceMode 反向写入旧 schema。
+当前 writer 使用独立 presentation schema 4：保留 schema 2 的 Onion/All-Tracks 字段和 schema 3 的严格 `workspaceState` 分区，并增加独立 `workspaceNavigation` 分区。workspaceState 只包含 B1 已批准的 Track profile、Segment/SubVoice 局部视图与 Lane 记忆，以及 Track/Usage/Root 的 Mute/Solo 展示状态；workspaceNavigation 保存有序 Workspace key、活动项和批准的页面/viewport 纯值。schema 1/2/3 reader 仍可读；没有导航 section 时使用默认 Arrangement，不向旧 schema 回写新字段。
 
 workspace 的稳定 ID 只作为 owner/reference 保存，绝不把 ViewModel、WPF 控件、选择、Undo、任务、位图、编译结果或缓存写入项目。当前 presentation JSON 总预算为 64 MiB，profiles/views/lanes 各最多 131,072 条，单 owner 的 Lane target 总数最多 65,536。writer 在预算内确定排序并输出，超出时必须保留音乐及仍可表达的 presentation section，并以 `MIDORA-PERSIST-PRESENTATION-SECTION-OMITTED` 明确记录被省略的完整 section，不得静默截断。
 
 opacity 必须是有限 `0..1`。target 必须存在且唯一，source 必须存在、同类、唯一且不得等于 target。写出按 target stable ID 确定排序；source 顺序保存为当次正式 Arrangement / SubVoice 顺序过滤后的叠加顺序，而非另建用户可重排的顺序。运行时跟随正式轨道 / SubVoice 顺序，首项最底层。保存快照过滤已经删除的 target/source，不得为 presentation 引用复活 Project 对象。
 
-该 entry 缺失、hash 不符、strict JSON/schema/根级引用验证失败、未知 presentation schema/模式或 manifest 与 payload schemaVersion 不一致时，只隔离 presentation、恢复 `allTracksMode=raw` 且 preset arrays 为空，并报告 `MIDORA-PERSIST-PRESENTATION-RECOVERED` Warning。schema 3 内部的 workspace section 读取和项目 owner 验证按 section 隔离：损坏 section 回退为空并报告 `MIDORA-PERSIST-PRESENTATION-SECTION-RECOVERED`，有效的 Onion/All-Tracks 或其他 workspace section 必须保留。恢复结果设置独立 presentation recovery-dirty，但打开不自动修复；只有用户显式 Save 才写回有效当前 presentation。音乐 Project source 仍可打开，`IsModified` 不因此成立。Mute/Solo 只属于 presentation dirty，不进入音乐 Modified、Undo、canonical、编译或导出。旧软件可读取音乐并丢弃 schema 3 的新增 workspace 字段；若旧软件随后保存，字段丢失是明确兼容边界。Format 1/2 没有该 entry，detached migration 使用同一默认 presentation。
+该 entry 缺失、hash 不符、strict JSON/schema/根级引用验证失败、未知 presentation schema/模式或 manifest 与 payload schemaVersion 不一致时，只隔离 presentation、恢复 `allTracksMode=raw` 且 preset arrays 为空，并报告 `MIDORA-PERSIST-PRESENTATION-RECOVERED` Warning。schema 4 内部的 workspace section（包括 workspaceNavigation）读取和项目 owner 验证按 section 隔离：损坏 section 回退为空并报告 `MIDORA-PERSIST-PRESENTATION-SECTION-RECOVERED`，有效的 Onion/All-Tracks、workspaceState 或 navigation 必须保留。恢复结果设置独立 presentation recovery-dirty，但打开不自动修复；只有用户显式 Save 才写回有效当前 presentation。音乐 Project source 仍可打开，`IsModified` 不因此成立。Mute/Solo 与导航只属于 presentation dirty，不进入音乐 Modified、Undo、canonical、编译或导出。旧软件可读取音乐并丢弃 schema 4 的新增 workspace 字段；若旧软件随后保存，字段丢失是明确兼容边界。Format 1/2 没有该 entry，detached migration 使用同一默认 presentation。
 ## 16.8 conductor-track.json
 ### 16.8.1 内容
 `conductor-track.json` 保存完整 Conductor Track 内容，包括：
@@ -1992,6 +1992,10 @@ Format 3 Save/Save Copy/reopen and canonical equivalence
 
 不得通过改写 Format 1/2 golden 或隐藏双写完成 Format 3 测试。
 
+### 16.33.5 B3 当前 presentation reader/writer
+
+B3 将当前 presentation entry 的 writer 升为 schema 4，增加独立 `workspaceNavigation` section；Format 3 本节保留为历史 reader/兼容边界。当前 reader 读取 schema 1/2/3/4，schema 3 只带 workspaceState 时补空 navigation。schema 4 的导航损坏、失效 owner、重复 key 或超出导航有界预算只隔离导航 section，不阻止音乐 source 打开；Arrangement 固定恢复为首个 Workspace，失效 ActiveTab 回退 Arrangement。隐藏 Tab 只以纯值描述保留，用户激活时才物化。
+
 ---
 
 ## 16.34 ProgramRoot Portable Storage
@@ -2034,6 +2038,6 @@ manifest 缺失/损坏、裸 GUID、未知文件、活动锁、越界或 reparse
 
 只保存身份及关联，不重复保存 Tick、MSB/LSB/Program、名称、音频状态。关联 ID 与其他 Project ID 共用唯一正 int64 分配，NextStableId 必须严格超过全部 ID。Direct owner 先、SubVoice 后，owner ID/包装 ID 确定序列化；该文件排序不是音乐排序。读取按 owner 复用分页快照、仅解析关联的成员，不发现未关联 raw 组合。
 
-Format 1/2 按既有迁移补默认 Pre-Roll/presentation；Format 3 保留 presentation；三者新增空关联，不把导入/旧文件的 raw Bank-PC 自动分组。打开只 detached 迁移，原来源不写。旧格式普通 Save 仍需确认，先创建或复用来源逐字节一致的可见永久副本，之后以 Format 4 临时包自检和原子替换；名称中的 `before Format` 使用当前目标 4。Save Copy 写 4，不清除来源保护。软件 SemVer、Mapping ABI、Worker ABI、presentation schema 不因这个文件格式版本一并升级。
+Format 1/2 按既有迁移补默认 Pre-Roll/presentation；Format 3 保留 presentation；三者新增空关联，不把导入/旧文件的 raw Bank-PC 自动分组。打开只 detached 迁移，原来源不写。旧格式普通 Save 仍需确认，先创建或复用来源逐字节一致的可见永久副本，之后以 Format 4 临时包自检和原子替换；名称中的 `before Format` 使用当前目标 4。Save Copy 写 4，不清除来源保护。当前 Format 4 writer 使用 presentation schema 4；旧 presentation schema 1/2/3 reader/golden 继续保留。软件 SemVer、Mapping ABI、Worker ABI 不因这个文件格式版本一并升级。
 
 验证须覆盖两种 owner 的确定性重开、旧 Format 3 package byte golden、坏关联严格拒绝、旧格式安全备份/冲突/来源身份变化、取消和 staging/publish 故障，以及关联存在/不存在时音乐 canonical 等价。

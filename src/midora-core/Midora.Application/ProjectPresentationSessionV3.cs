@@ -169,8 +169,77 @@ public sealed class ProjectPresentationSessionV3
             .ToArray();
         // Workspace state is a presentation-only snapshot. The desktop session
         // prunes its owner directories before capture; preserve it here so a
-        // Save/Save Copy cannot silently discard valid view state.
-        return new(state.AllTracksMode, trackPresets, subVoicePresets, state.WorkspaceState);
+        // Save/Save Copy cannot silently discard valid view state. Navigation
+        // is filtered independently as well: deleting a Segment or Event
+        // Instrument must not make the otherwise valid navigation section fail
+        // as a whole during save.
+        return new(
+            state.AllTracksMode,
+            trackPresets,
+            subVoicePresets,
+            state.WorkspaceState,
+            FilterNavigation(state.Navigation, project));
+    }
+
+    private static ProjectPresentationNavigationStateV4 FilterNavigation(
+        ProjectPresentationNavigationStateV4? state,
+        MidoraProject project)
+    {
+        ProjectPresentationNavigationStateV4 source =
+            state ?? ProjectPresentationNavigationStateV4.Empty;
+        HashSet<MidoraId> segmentIds = project.Tracks
+            .SelectMany(track => track.Segments.Select(segment => segment.Id))
+            .Concat(project.PureMidiTracks.SelectMany(track => track.Segments.Select(segment => segment.Id)))
+            .ToHashSet();
+        HashSet<MidoraId> instrumentIds = project.EventInstruments.Select(item => item.Id).ToHashSet();
+
+        bool IsValidKey(ProjectPresentationNavigationKeyV4 key)
+        {
+            if (!Enum.IsDefined(key.Kind)) return false;
+            bool objectKind = key.Kind is ProjectPresentationNavigationKindV4.SegmentEditor
+                or ProjectPresentationNavigationKindV4.EventInstrumentEditor;
+            if (!objectKind) return key.ObjectId is null;
+            return key.ObjectId is MidoraId id && id != default && (key.Kind switch
+            {
+                ProjectPresentationNavigationKindV4.SegmentEditor => segmentIds.Contains(id),
+                ProjectPresentationNavigationKindV4.EventInstrumentEditor => instrumentIds.Contains(id),
+                _ => false
+            });
+        }
+
+        ProjectPresentationNavigationKeyV4 arrangement =
+            new(ProjectPresentationNavigationKindV4.Arrangement);
+        List<ProjectPresentationNavigationKeyV4> tabs = [];
+        foreach (ProjectPresentationNavigationKeyV4 key in source.Tabs ?? [])
+        {
+            if (IsValidKey(key) && !tabs.Contains(key)) tabs.Add(key);
+        }
+        if (!tabs.Contains(arrangement)) tabs.Insert(0, arrangement);
+        else if (tabs[0] != arrangement)
+        {
+            tabs.Remove(arrangement);
+            tabs.Insert(0, arrangement);
+        }
+
+        ProjectPresentationNavigationKeyV4 active =
+            IsValidKey(source.ActiveTab) && tabs.Contains(source.ActiveTab)
+                ? source.ActiveTab : arrangement;
+        HashSet<ProjectPresentationNavigationKeyV4> tabSet = tabs.ToHashSet();
+        List<ProjectPresentationNavigationViewV4> views = [];
+        foreach (ProjectPresentationNavigationViewV4 view in source.Views ?? [])
+        {
+            if (!tabSet.Contains(view.Key) || views.Any(item => item.Key == view.Key)) continue;
+            if (view.SecondaryId is { } secondary)
+            {
+                if (view.Key.Kind != ProjectPresentationNavigationKindV4.EventInstrumentEditor
+                    || view.Key.ObjectId is not MidoraId instrumentId
+                    || project.EventInstruments.FirstOrDefault(item => item.Id == instrumentId)
+                        ?.SubVoices.Any(item => item.Id == secondary) != true)
+                    continue;
+            }
+            views.Add(view);
+        }
+        return new(tabs, active, views);
     }
 }
 

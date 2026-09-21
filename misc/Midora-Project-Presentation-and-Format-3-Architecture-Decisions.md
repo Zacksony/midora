@@ -2,6 +2,8 @@
 
 状态：Accepted；Format 3 历史决策已实施，B1/B2 workspace 持久化已实施，Onion UI 仍按当前产品实现维护
 
+2026-09-20 B3：workspace navigation 已实施为 presentation schema 4；schema 1/2/3 继续只读兼容，外层 Project Format 4 不变。旧的“B3 尚未保存 Tabs/活动页”段落保留为历史上下文，当前约束以本节新增 ADR-PRESENTATION-B3-001 为准。
+
 2026-09-18 B1/B2 补充：以下 Format 3 初始决定保留历史语境；当前 writer 为 Format 4、presentation writer 为 schema 3（继续读取 schema 1/2）。按已确认 D-STATE03.d，删除目标自身立即清除其自身配置；仍存活目标的 dormant 来源 ID 则保留至会话结束/显式修改，以支持音乐 Undo 恢复来源。B1 新增的 Track/Segment/SubVoice 编辑器状态在会话内记忆，B2 将批准白名单保存到独立 workspaceState 分区；B3 的 Tabs/活动页仍未保存。实现与资源门见 [B1 记录](Midora-B1-Workspace-State-Implementation-2026-09-18.md) 和 [B2 执行记录](Midora-Next-Development-Requirements-2026-09-11/execution/06-Workspace-State-Persistence-B2.md)。
 
 2026-09-18 B2 实施记录：[B2 执行文档](Midora-Next-Development-Requirements-2026-09-11/execution/06-Workspace-State-Persistence-B2.md) 已落地 presentation codec、Save/Save Copy 的分区准备、分区损坏隔离、recovery-dirty、运行期 Mute/Solo 和字节预算门。D01～D06 已确认；保存端不会截断数组，非法或超预算 section 会被完整省略并通过保存诊断列出，音乐 source 仍可原子保存。B3 的自动 Tabs/活动页恢复仍未实施。
@@ -79,3 +81,17 @@ commit document + presentation baselines
 - backup、staging、self-validation、publish、cleanup fault injection；
 - Save Copy 不改变 migration/document/presentation baseline；
 - Desktop 普通 Save 路径显示 backup 并完成原路径升级。
+
+## ADR-PRESENTATION-B3-001：schema 4 工作区导航、活动优先与懒激活
+
+状态：Accepted；2026-09-20 重新实施，待真实 WPF UAT。
+
+`settings/project-presentation.json` 的当前 writer 使用 schema 4，新增独立 `workspaceNavigation` section。该 section 只保存确定性的 Tab key/order、ActiveTab 和已批准的页面/视口标量；不保存 VM、WPF 控件、Selection、Undo/Redo、任务、焦点、菜单、缓存、编译结果或音频资源。外层 Project Format 4、音乐 source、canonical、Project Modified 和音频/MIDI 语义不变。
+
+读取继续支持 schema 1/2/3。根级 presentation 或导航 section 损坏只隔离 presentation；无效 owner、重复 key、非法范围或无效活动项不得创建幽灵 Workspace，活动项统一回退 Arrangement 并给出状态提示。Arrangement 始终位于首位。Settings 与 Diagnostics 的批准导航字段属于当前 Project presentation；无 Project 时不产生项目恢复状态。
+
+打开 Project 时只物化 Arrangement 和保存的 Active Workspace；其他保存的 Tab 以轻量纯值占位符保留，用户激活时才建立真实 Workspace、分页/渲染状态和订阅。隐藏页不预热、不编译、不扫描大型内容。活动 All Tracks 的 Compiled 准备沿用既有可取消后台链路；迟到结果必须受当前 Project/revision 约束。当前实现没有跨打开流程的延迟恢复任务，因此新的用户 Tab/编辑动作不会被旧恢复回调抢回；Diagnostics 的筛选、翻页等用户动作会清除尚未应用的恢复页码。
+
+导航 section 与既有 presentation 共用 64 MiB 总预算；预算不足时完整省略该 section 并保留音乐和可表达的其他 presentation，不静默截断数组。确定性保存、旧 schema 读取、坏 section 隔离和失效 owner 回退均属于 B3 自动门；真实 WPF 冷启动、长会话和 50/100/200 Tab 资源门仍需单独运行。
+
+本 ADR 取代本文中“B3 尚未保存 Tabs/活动页”的当前状态描述，但保留 Format 3 的历史章节、旧 reader/golden 以及旧软件丢弃新 presentation 字段的兼容边界。

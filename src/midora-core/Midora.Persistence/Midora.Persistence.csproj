@@ -43,6 +43,9 @@
     <Content Include="Schemas\Json\midora-json-v3.schema-set.sha256"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="Never" />
+    <Content Include="Schemas\Json\midora-json-v4.schema-set.sha256"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="Never" />
     <Content Include="Schemas\Proto\*.descriptor.sha256"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="Never" />

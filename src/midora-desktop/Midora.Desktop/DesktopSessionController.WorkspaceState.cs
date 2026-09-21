@@ -104,8 +104,15 @@ public sealed partial class DesktopSessionController
     private void CaptureWorkspacePresentationForSave()
     {
         if (Project is null || Persistence is null || EditorStates.IsDisposed) return;
-        Persistence.Presentation.ReplaceWorkspace(
-            EditorStates.CapturePresentationState(CaptureMonitoringPresentation()));
+        ProjectPresentationWorkspaceStateV4 workspace =
+            EditorStates.CapturePresentationState(CaptureMonitoringPresentation());
+        ProjectPresentationNavigationStateV4 navigation = CaptureWorkspaceNavigation();
+        Persistence.Presentation.Replace(
+            Persistence.Presentation.Current with
+            {
+                WorkspaceState = workspace,
+                Navigation = navigation
+            });
     }
 
     private void RestoreWorkspacePresentation(ProjectContext context)

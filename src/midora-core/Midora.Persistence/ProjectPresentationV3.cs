@@ -36,13 +36,15 @@ public sealed record ProjectPresentationStateV3(
     ProjectPresentationAllTracksModeV3 AllTracksMode,
     IReadOnlyList<TrackOnionPresetV3> TrackOnionPresets,
     IReadOnlyList<SubVoiceOnionPresetV3> SubVoiceOnionPresets,
-    ProjectPresentationWorkspaceStateV4? WorkspaceState = null)
+    ProjectPresentationWorkspaceStateV4? WorkspaceState = null,
+    ProjectPresentationNavigationStateV4? Navigation = null)
 {
     public static ProjectPresentationStateV3 Empty { get; } = new(
         ProjectPresentationAllTracksModeV3.Raw,
         Array.Empty<TrackOnionPresetV3>(),
         Array.Empty<SubVoiceOnionPresetV3>(),
-        ProjectPresentationWorkspaceStateV4.Empty);
+        ProjectPresentationWorkspaceStateV4.Empty,
+        ProjectPresentationNavigationStateV4.Empty);
 }
 
 internal static class ProjectPresentationCodecV3
@@ -67,7 +69,7 @@ internal static class ProjectPresentationCodecV3
             || !version.TryGetInt32(out int schemaVersion)
             || declaredSchemaVersion is { } declared && schemaVersion != declared)
             throw new InvalidDataException("project-presentation.json schemaVersion is missing or differs from its manifest.");
-        if (schemaVersion == 3)
+        if (schemaVersion is 3 or 4)
             return ProjectPresentationCodecV4.Read(utf8, project, declaredSchemaVersion);
         if (schemaVersion == 2)
             return new(ProjectPresentationCodecV2.Read(utf8, project), false, []);
@@ -123,7 +125,10 @@ internal static class ProjectPresentationCodecV3
         ProjectPresentationWorkspaceStateV4 workspace = ProjectPresentationCodecV4.ValidateWorkspace(
             state.WorkspaceState,
             project);
-        return new(state.AllTracksMode, tracks, subVoices, workspace);
+        ProjectPresentationNavigationStateV4 navigation = ProjectPresentationCodecV4.ValidateNavigation(
+            state.Navigation,
+            project);
+        return new(state.AllTracksMode, tracks, subVoices, workspace, navigation);
     }
 
     private static ProjectPresentationStateV3 FromDto(

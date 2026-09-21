@@ -2414,7 +2414,7 @@ public sealed class MidoraProjectPackageV1
     private static int GetCurrentSchemaVersion(string path) => path switch
     {
         MidoraPackagePathsV1.ProjectPresentation =>
-            PersistenceContractV3.ProjectPresentationSchemaVersion,
+            PersistenceContractV4.ProjectPresentationSchemaVersion,
         _ when path.StartsWith("event-instruments/", StringComparison.Ordinal) =>
             PersistenceContractV3.EventInstrumentSchemaVersion,
         _ => PersistenceContractV3.ReusedComponentSchemaVersion

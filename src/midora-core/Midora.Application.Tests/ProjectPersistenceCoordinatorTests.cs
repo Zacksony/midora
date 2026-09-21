@@ -79,6 +79,35 @@ public sealed class ProjectPersistenceCoordinatorTests
     }
 
     [Fact]
+    public void PresentationSnapshotRetainsNavigationAndDropsDeletedOwners()
+    {
+        MidoraProject project = new(192, CreatedAt);
+        using ProjectCompilationSession compilation = new(project);
+        using ProjectDocumentSession document = new(compilation);
+        ProjectPersistenceCoordinator persistence = new(
+            document,
+            new MidoraProjectPackageV1("1.0.0"));
+        ProjectPresentationNavigationKeyV4 arrangement =
+            new(ProjectPresentationNavigationKindV4.Arrangement);
+        ProjectPresentationNavigationKeyV4 deletedSegment =
+            new(ProjectPresentationNavigationKindV4.SegmentEditor, new MidoraId(123));
+        persistence.Presentation.Replace(ProjectPresentationStateV3.Empty with
+        {
+            Navigation = new(
+                [arrangement, deletedSegment],
+                deletedSegment,
+                [new(deletedSegment, StartTick: 96, TickSpan: 192)])
+        });
+
+        ProjectPresentationSaveSnapshotV3 snapshot =
+            persistence.Presentation.CreateSaveSnapshot(project);
+
+        Assert.Equal([arrangement], snapshot.State.Navigation!.Tabs);
+        Assert.Equal(arrangement, snapshot.State.Navigation.ActiveTab);
+        Assert.Empty(snapshot.State.Navigation.Views);
+    }
+
+    [Fact]
     public async Task FirstSaveRequiresTargetAndExplicitOverwriteAuthorization()
     {
         using TemporaryDirectory temporary = new();

@@ -482,7 +482,7 @@ public sealed class MidoraProjectPackageV1Tests
                 item.Kind == "event-instrument-pb"
                     ? PersistenceContractV3.EventInstrumentSchemaVersion
                     : item.Kind == "project-presentation-json"
-                        ? PersistenceContractV3.ProjectPresentationSchemaVersion
+                        ? PersistenceContractV4.ProjectPresentationSchemaVersion
                         : PersistenceContractV3.ReusedComponentSchemaVersion,
                 item.SchemaVersion);
         }

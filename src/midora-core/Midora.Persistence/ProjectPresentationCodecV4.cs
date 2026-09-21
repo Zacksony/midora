@@ -6,16 +6,19 @@ using Midora.Domain;
 namespace Midora.Persistence;
 
 /// <summary>
-/// Presentation schema 3. The reader is deliberately section-oriented: a bad
+/// Presentation schema 4. The reader is deliberately section-oriented: a bad
 /// workspace section is isolated from valid Onion/All-Tracks data and from the
 /// Project source package.
 /// </summary>
 internal static class ProjectPresentationCodecV4
 {
-    internal const int SchemaVersion = 3;
+    internal const int SchemaVersion = 4;
     private const int MaximumSectionEntries = 131_072;
     private const int MaximumLaneTargets = 65_536;
     private const int MaximumLabelLength = 64;
+    internal const int MaximumNavigationTabs = 4_096;
+    internal const int MaximumNavigationViews = 4_096;
+    internal const int MaximumNavigationTextLength = 256;
     // This is a presentation-file budget, not a Project/package budget.  Save
     // admits complete sections only; it never truncates an array or a string.
     internal const int MaximumSerializedBytes = 64 * 1024 * 1024;
@@ -30,6 +33,8 @@ internal static class ProjectPresentationCodecV4
             project);
         ProjectPresentationWorkspaceStateV4 workspace = canonical.WorkspaceState
             ?? ProjectPresentationWorkspaceStateV4.Empty;
+        ProjectPresentationNavigationStateV4 navigation = canonical.Navigation
+            ?? ProjectPresentationNavigationStateV4.Empty;
         ProjectPresentationJsonV4 dto = new()
         {
             SchemaVersion = SchemaVersion,
@@ -58,7 +63,8 @@ internal static class ProjectPresentationCodecV4
                     SourceMode = ProjectPresentationCodecV2.FormatMode(value.SourceMode),
                     SourceSubVoiceIds = value.SourceSubVoiceIds.Select(id => new StableIdJsonV1(id.Value)).ToArray()
                 }).ToArray(),
-            WorkspaceState = ToDto(workspace)
+            WorkspaceState = ToDto(workspace),
+            WorkspaceNavigation = ToDto(navigation)
         };
         return StrictJsonV1.SerializeWithFinalLf(
             dto,
@@ -78,14 +84,19 @@ internal static class ProjectPresentationCodecV4
         {
             // Validate the music-adjacent presentation section independently.
             baseState = ProjectPresentationCodecV3.ValidateAndCanonicalize(
-                state with { WorkspaceState = ProjectPresentationWorkspaceStateV4.Empty },
+                state with
+                {
+                    WorkspaceState = ProjectPresentationWorkspaceStateV4.Empty,
+                    Navigation = ProjectPresentationNavigationStateV4.Empty
+                },
                 project);
         }
         catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception))
         {
             omitted.Add("onionAndAllTracks");
             baseState = ProjectPresentationCodecV3.ValidateAndCanonicalize(
-                new(ProjectPresentationAllTracksModeV3.Raw, [], [], ProjectPresentationWorkspaceStateV4.Empty),
+                new(ProjectPresentationAllTracksModeV3.Raw, [], [], ProjectPresentationWorkspaceStateV4.Empty,
+                    ProjectPresentationNavigationStateV4.Empty),
                 project);
         }
 
@@ -93,7 +104,15 @@ internal static class ProjectPresentationCodecV4
             state.WorkspaceState,
             project,
             omitted);
-        ProjectPresentationStateV3 prepared = baseState with { WorkspaceState = workspace };
+        ProjectPresentationNavigationStateV4 navigation = PrepareNavigationForSave(
+            state.Navigation,
+            project,
+            omitted);
+        ProjectPresentationStateV3 prepared = baseState with
+        {
+            WorkspaceState = workspace,
+            Navigation = navigation
+        };
         byte[] bytes = SerializeWithBudget(prepared, omitted);
         return new(prepared, bytes, omitted.Distinct(StringComparer.Ordinal).ToArray());
     }
@@ -145,6 +164,22 @@ internal static class ProjectPresentationCodecV4
             {
                 omitted.Add(name);
             }
+        }
+    }
+
+    private static ProjectPresentationNavigationStateV4 PrepareNavigationForSave(
+        ProjectPresentationNavigationStateV4? value,
+        MidoraProject project,
+        ICollection<string> omitted)
+    {
+        try
+        {
+            return ValidateNavigation(value, project);
+        }
+        catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception))
+        {
+            omitted.Add("workspaceNavigation");
+            return ProjectPresentationNavigationStateV4.Empty;
         }
     }
 
@@ -223,7 +258,8 @@ internal static class ProjectPresentationCodecV4
             AllTracksMode = ProjectPresentationAllTracksModeV3.Raw,
             TrackOnionPresets = [],
             SubVoiceOnionPresets = [],
-            WorkspaceState = ProjectPresentationWorkspaceStateV4.Empty
+            WorkspaceState = ProjectPresentationWorkspaceStateV4.Empty,
+            Navigation = ProjectPresentationNavigationStateV4.Empty
         };
         byte[] current = SerializeStrict(acceptedState);
         if (current.Length > MaximumSerializedBytes)
@@ -271,6 +307,18 @@ internal static class ProjectPresentationCodecV4
                 omitted.Add(section);
             }
         }
+        byte[] navigationBytes = SerializeStrict(acceptedState with
+        {
+            Navigation = prepared.Navigation ?? ProjectPresentationNavigationStateV4.Empty
+        });
+        if (navigationBytes.Length <= MaximumSerializedBytes)
+        {
+            current = navigationBytes;
+        }
+        else
+        {
+            omitted.Add("workspaceNavigation");
+        }
         return current;
     }
 
@@ -290,6 +338,8 @@ internal static class ProjectPresentationCodecV4
     {
         ProjectPresentationWorkspaceStateV4 workspace = state.WorkspaceState
             ?? ProjectPresentationWorkspaceStateV4.Empty;
+        ProjectPresentationNavigationStateV4 navigation = state.Navigation
+            ?? ProjectPresentationNavigationStateV4.Empty;
         ProjectPresentationJsonV4 dto = new()
         {
             SchemaVersion = SchemaVersion,
@@ -316,7 +366,8 @@ internal static class ProjectPresentationCodecV4
                 SourceMode = ProjectPresentationCodecV2.FormatMode(value.SourceMode),
                 SourceSubVoiceIds = value.SourceSubVoiceIds.Select(id => new StableIdJsonV1(id.Value)).ToArray()
             }).ToArray(),
-            WorkspaceState = ToDto(workspace)
+            WorkspaceState = ToDto(workspace),
+            WorkspaceNavigation = ToDto(navigation)
         };
         return StrictJsonV1.SerializeWithFinalLf(
             dto,
@@ -334,14 +385,14 @@ internal static class ProjectPresentationCodecV4
         if (root.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("project-presentation.json must be an object.");
 
-        EnsureKnownRootProperties(root);
         int schemaVersion = RequiredInt(root, "schemaVersion");
-        if (schemaVersion != SchemaVersion
+        if (schemaVersion is not (3 or 4)
             || declaredSchemaVersion is { } declared && declared != schemaVersion)
         {
             throw new InvalidDataException(
                 "project-presentation.json schemaVersion is missing, unsupported, or differs from its manifest.");
         }
+        EnsureKnownRootProperties(root, schemaVersion);
 
         List<string> recovered = [];
         ProjectPresentationAllTracksModeV3 mode = ProjectPresentationAllTracksModeV3.Raw;
@@ -377,6 +428,27 @@ internal static class ProjectPresentationCodecV4
             }
         }
 
+        ProjectPresentationNavigationStateV4 navigation = ProjectPresentationNavigationStateV4.Empty;
+        if (schemaVersion == SchemaVersion)
+        {
+            if (!root.TryGetProperty("workspaceNavigation", out JsonElement navigationElement)
+                || navigationElement.ValueKind != JsonValueKind.Object)
+            {
+                recovered.Add("workspaceNavigation");
+            }
+            else
+            {
+                try
+                {
+                    navigation = ReadNavigation(navigationElement, project, recovered);
+                }
+                catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception))
+                {
+                    recovered.Add("workspaceNavigation");
+                    navigation = ProjectPresentationNavigationStateV4.Empty;
+                }
+            }
+        }
         // Validate the music-adjacent presentation section independently from
         // workspace state. A malformed owner in a remembered view must not
         // discard valid Onion/All-Tracks state (or the Project itself).
@@ -384,14 +456,16 @@ internal static class ProjectPresentationCodecV4
         try
         {
             canonicalBase = ProjectPresentationCodecV3.ValidateAndCanonicalize(
-                new(mode, tracks, voices, ProjectPresentationWorkspaceStateV4.Empty),
+                new(mode, tracks, voices, ProjectPresentationWorkspaceStateV4.Empty,
+                    ProjectPresentationNavigationStateV4.Empty),
                 project);
         }
         catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception))
         {
             recovered.Add("onionAndAllTracks");
             canonicalBase = ProjectPresentationCodecV3.ValidateAndCanonicalize(
-                new(ProjectPresentationAllTracksModeV3.Raw, [], [], ProjectPresentationWorkspaceStateV4.Empty),
+                new(ProjectPresentationAllTracksModeV3.Raw, [], [], ProjectPresentationWorkspaceStateV4.Empty,
+                    ProjectPresentationNavigationStateV4.Empty),
                 project);
         }
 
@@ -406,7 +480,22 @@ internal static class ProjectPresentationCodecV4
             canonicalWorkspace = ProjectPresentationWorkspaceStateV4.Empty;
         }
 
-        ProjectPresentationStateV3 state = canonicalBase with { WorkspaceState = canonicalWorkspace };
+        ProjectPresentationNavigationStateV4 canonicalNavigation;
+        try
+        {
+            canonicalNavigation = ValidateNavigation(navigation, project);
+        }
+        catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception))
+        {
+            recovered.Add("workspaceNavigation");
+            canonicalNavigation = ProjectPresentationNavigationStateV4.Empty;
+        }
+
+        ProjectPresentationStateV3 state = canonicalBase with
+        {
+            WorkspaceState = canonicalWorkspace,
+            Navigation = canonicalNavigation
+        };
         return new(state, recovered.Count != 0, recovered.Distinct(StringComparer.Ordinal).ToArray());
     }
 
@@ -468,6 +557,50 @@ internal static class ProjectPresentationCodecV4
             MutedGroupIds = value.Monitoring.MutedGroupIds.Select(id => new StableIdJsonV1(id.Value)).ToArray(),
             SoloGroupIds = value.Monitoring.SoloGroupIds.Select(id => new StableIdJsonV1(id.Value)).ToArray()
         }
+    };
+
+    private static WorkspaceNavigationJsonV4 ToDto(ProjectPresentationNavigationStateV4 value) => new()
+    {
+        Tabs = value.Tabs.Select(ToDto).ToArray(),
+        ActiveTab = ToDto(value.ActiveTab),
+        Views = value.Views.Select(ToDto).ToArray()
+    };
+
+    private static NavigationKeyJsonV4 ToDto(ProjectPresentationNavigationKeyV4 value) => new()
+    {
+        Kind = value.Kind switch
+        {
+            ProjectPresentationNavigationKindV4.Arrangement => "arrangement",
+            ProjectPresentationNavigationKindV4.EventInstrumentLibrary => "eventInstrumentLibrary",
+            ProjectPresentationNavigationKindV4.ProjectSettings => "projectSettings",
+            ProjectPresentationNavigationKindV4.Diagnostics => "diagnostics",
+            ProjectPresentationNavigationKindV4.ConductorTrack => "conductorTrack",
+            ProjectPresentationNavigationKindV4.SegmentEditor => "segmentEditor",
+            ProjectPresentationNavigationKindV4.EventInstrumentEditor => "eventInstrumentEditor",
+            ProjectPresentationNavigationKindV4.AllTracks => "allTracks",
+            _ => throw new InvalidDataException("Unknown workspace navigation kind.")
+        },
+        ObjectId = value.ObjectId is { } id ? new StableIdJsonV1(id.Value) : null
+    };
+
+    private static WorkspaceNavigationViewJsonV4 ToDto(ProjectPresentationNavigationViewV4 value) => new()
+    {
+        Key = ToDto(value.Key),
+        Page = value.Page,
+        SecondaryId = value.SecondaryId is { } secondary ? new StableIdJsonV1(secondary.Value) : null,
+        SearchText = value.SearchText,
+        PrimaryFilter = value.PrimaryFilter,
+        SecondaryFilter = value.SecondaryFilter,
+        TertiaryFilter = value.TertiaryFilter,
+        SortMode = value.SortMode,
+        StartTick = value.StartTick,
+        TickSpan = value.TickSpan,
+        FirstLane = value.FirstLane,
+        FirstRow = value.FirstRow,
+        LaneHeight = value.LaneHeight,
+        FollowPlayback = value.FollowPlayback,
+        LowerEditorVisible = value.LowerEditorVisible,
+        LowerEditorHeight = value.LowerEditorHeight
     };
 
     private static ProfileJsonV4 ToDto(ProjectPresentationEditorProfileV4 value) => new()
@@ -600,6 +733,269 @@ internal static class ProjectPresentationCodecV4
         // section readers, so a dangling owner only invalidates the section that
         // contains it.
         return new(profiles, views, lanes, monitoring);
+    }
+
+    private static ProjectPresentationNavigationStateV4 ReadNavigation(
+        JsonElement element,
+        MidoraProject project,
+        ICollection<string> recovered)
+    {
+        EnsureKnownNavigationProperties(element);
+        NavigationKeyJsonV4[] tabs = JsonSerializer.Deserialize(
+                element.GetProperty("tabs"),
+                ProjectPresentationJsonContextV4.Default.NavigationKeyJsonV4Array)
+            ?? throw new InvalidDataException("workspaceNavigation.tabs cannot be null.");
+        NavigationKeyJsonV4 activeDto = JsonSerializer.Deserialize(
+                element.GetProperty("activeTab"),
+                ProjectPresentationJsonContextV4.Default.NavigationKeyJsonV4)
+            ?? throw new InvalidDataException("workspaceNavigation.activeTab cannot be null.");
+        WorkspaceNavigationViewJsonV4[] views = JsonSerializer.Deserialize(
+                element.GetProperty("views"),
+                ProjectPresentationJsonContextV4.Default.WorkspaceNavigationViewJsonV4Array)
+            ?? throw new InvalidDataException("workspaceNavigation.views cannot be null.");
+
+        List<ProjectPresentationNavigationKeyV4> validTabs = [];
+        foreach (NavigationKeyJsonV4? item in tabs)
+        {
+            if (!TryReadNavigationKey(item, project, out ProjectPresentationNavigationKeyV4 key))
+            {
+                recovered.Add("workspaceNavigation.tabs");
+                continue;
+            }
+            if (validTabs.Contains(key))
+            {
+                recovered.Add("workspaceNavigation.tabs");
+                continue;
+            }
+            validTabs.Add(key);
+        }
+
+        ProjectPresentationNavigationKeyV4 arrangement =
+            new(ProjectPresentationNavigationKindV4.Arrangement);
+        if (!validTabs.Contains(arrangement))
+        {
+            validTabs.Insert(0, arrangement);
+            recovered.Add("workspaceNavigation.tabs");
+        }
+        else if (validTabs[0] != arrangement)
+        {
+            validTabs.Remove(arrangement);
+            validTabs.Insert(0, arrangement);
+            recovered.Add("workspaceNavigation.tabs");
+        }
+
+        ProjectPresentationNavigationKeyV4 active = arrangement;
+        if (!TryReadNavigationKey(activeDto, project, out ProjectPresentationNavigationKeyV4 requestedActive)
+            || !validTabs.Contains(requestedActive))
+        {
+            recovered.Add("workspaceNavigation.activeTab");
+        }
+        else
+        {
+            active = requestedActive;
+        }
+
+        HashSet<ProjectPresentationNavigationKeyV4> tabSet = validTabs.ToHashSet();
+        List<ProjectPresentationNavigationViewV4> validViews = [];
+        foreach (WorkspaceNavigationViewJsonV4? item in views)
+        {
+            if (!TryReadNavigationView(item, project, tabSet, out ProjectPresentationNavigationViewV4 view)
+                || validViews.Any(existing => existing.Key == view.Key))
+            {
+                recovered.Add("workspaceNavigation.views");
+                continue;
+            }
+            validViews.Add(view);
+        }
+        return ValidateNavigation(
+            new ProjectPresentationNavigationStateV4(
+                validTabs.ToArray(),
+                active,
+                validViews.ToArray()),
+            project);
+    }
+
+    private static bool TryReadNavigationKey(
+        NavigationKeyJsonV4? value,
+        MidoraProject project,
+        out ProjectPresentationNavigationKeyV4 key)
+    {
+        try
+        {
+            if (value is null) throw new InvalidDataException("A workspace navigation key cannot be null.");
+            key = FromDto(value);
+            ValidateNavigationKey(key, project);
+            return true;
+        }
+        catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception)
+            || exception is NullReferenceException)
+        {
+            key = default;
+            return false;
+        }
+    }
+
+    private static bool TryReadNavigationView(
+        WorkspaceNavigationViewJsonV4? value,
+        MidoraProject project,
+        IReadOnlySet<ProjectPresentationNavigationKeyV4> tabs,
+        out ProjectPresentationNavigationViewV4 view)
+    {
+        try
+        {
+            if (value is null) throw new InvalidDataException("A workspace navigation view cannot be null.");
+            view = FromDto(value);
+            ValidateNavigationKey(view.Key, project);
+            if (!tabs.Contains(view.Key))
+                throw new InvalidDataException("A workspace navigation view is not present in the tab list.");
+            ValidateNavigationView(view, project);
+            return true;
+        }
+        catch (Exception exception) when (IsRecoverablePresentationValidationFailure(exception)
+            || exception is NullReferenceException)
+        {
+            view = new(new(ProjectPresentationNavigationKindV4.Arrangement));
+            return false;
+        }
+    }
+
+    private static ProjectPresentationNavigationKeyV4 FromDto(NavigationKeyJsonV4 value)
+    {
+        ProjectPresentationNavigationKindV4 kind = value.Kind switch
+        {
+            "arrangement" => ProjectPresentationNavigationKindV4.Arrangement,
+            "eventInstrumentLibrary" => ProjectPresentationNavigationKindV4.EventInstrumentLibrary,
+            "projectSettings" => ProjectPresentationNavigationKindV4.ProjectSettings,
+            "diagnostics" => ProjectPresentationNavigationKindV4.Diagnostics,
+            "conductorTrack" => ProjectPresentationNavigationKindV4.ConductorTrack,
+            "segmentEditor" => ProjectPresentationNavigationKindV4.SegmentEditor,
+            "eventInstrumentEditor" => ProjectPresentationNavigationKindV4.EventInstrumentEditor,
+            "allTracks" => ProjectPresentationNavigationKindV4.AllTracks,
+            _ => throw new InvalidDataException("Unknown workspace navigation kind.")
+        };
+        return new(kind, value.ObjectId?.ToDomain());
+    }
+
+    private static ProjectPresentationNavigationViewV4 FromDto(WorkspaceNavigationViewJsonV4 value) =>
+        new(
+            FromDto(value.Key),
+            value.Page,
+            value.SecondaryId?.ToDomain(),
+            value.SearchText,
+            value.PrimaryFilter,
+            value.SecondaryFilter,
+            value.TertiaryFilter,
+            value.SortMode,
+            value.StartTick,
+            value.TickSpan,
+            value.FirstLane,
+            value.FirstRow,
+            value.LaneHeight,
+            value.FollowPlayback,
+            value.LowerEditorVisible,
+            value.LowerEditorHeight);
+
+    internal static ProjectPresentationNavigationStateV4 ValidateNavigation(
+        ProjectPresentationNavigationStateV4? value,
+        MidoraProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        value ??= ProjectPresentationNavigationStateV4.Empty;
+        if (value.Tabs is null || value.Views is null)
+            throw new InvalidDataException("Workspace navigation sections cannot be null.");
+        if (value.Tabs.Count is < 1 or > MaximumNavigationTabs)
+            throw new InvalidDataException("Workspace navigation tab count is outside its bounded range.");
+        if (value.Views.Count > MaximumNavigationViews)
+            throw new InvalidDataException("Workspace navigation view count exceeds its bounded range.");
+
+        HashSet<ProjectPresentationNavigationKeyV4> tabs = [];
+        foreach (ProjectPresentationNavigationKeyV4 key in value.Tabs)
+        {
+            ValidateNavigationKey(key, project);
+            if (!tabs.Add(key)) throw new InvalidDataException("Workspace navigation contains duplicate tabs.");
+        }
+        ValidateNavigationKey(value.ActiveTab, project);
+        if (!tabs.Contains(value.ActiveTab))
+            throw new InvalidDataException("The active workspace tab is not present in the tab list.");
+
+        HashSet<ProjectPresentationNavigationKeyV4> views = [];
+        foreach (ProjectPresentationNavigationViewV4 view in value.Views)
+        {
+            ValidateNavigationKey(view.Key, project);
+            if (!views.Add(view.Key)) throw new InvalidDataException("Workspace navigation contains duplicate views.");
+            ValidateNavigationView(view, project);
+        }
+
+        ProjectPresentationNavigationKeyV4 arrangement =
+            new(ProjectPresentationNavigationKindV4.Arrangement);
+        ProjectPresentationNavigationKeyV4[] canonicalTabs = new[] { arrangement }
+            .Concat(value.Tabs.Where(key => key != arrangement))
+            .ToArray();
+        ProjectPresentationNavigationViewV4[] canonicalViews = value.Views
+            .OrderBy(view => view.Key.Kind)
+            .ThenBy(view => view.Key.ObjectId)
+            .ToArray();
+        return new(canonicalTabs, value.ActiveTab, canonicalViews);
+    }
+
+    private static void ValidateNavigationKey(
+        ProjectPresentationNavigationKeyV4 key,
+        MidoraProject project)
+    {
+        if (!Enum.IsDefined(key.Kind)) throw new InvalidDataException("Unknown workspace navigation kind.");
+        bool objectKind = key.Kind is ProjectPresentationNavigationKindV4.SegmentEditor
+            or ProjectPresentationNavigationKindV4.EventInstrumentEditor;
+        if (!objectKind && key.ObjectId is not null)
+            throw new InvalidDataException("A type-only workspace navigation key cannot have an object ID.");
+        if (key.Kind == ProjectPresentationNavigationKindV4.SegmentEditor)
+        {
+            if (key.ObjectId is not MidoraId segmentId
+                || (!project.Tracks.SelectMany(track => track.Segments).Any(segment => segment.Id == segmentId)
+                    && !project.PureMidiTracks.SelectMany(track => track.Segments).Any(segment => segment.Id == segmentId)))
+                throw new InvalidDataException("A remembered segment workspace no longer exists.");
+        }
+        else if (key.Kind == ProjectPresentationNavigationKindV4.EventInstrumentEditor)
+        {
+            if (key.ObjectId is not MidoraId instrumentId
+                || !project.EventInstruments.Any(instrument => instrument.Id == instrumentId))
+                throw new InvalidDataException("A remembered Event Instrument workspace no longer exists.");
+        }
+    }
+
+    private static void ValidateNavigationView(
+        ProjectPresentationNavigationViewV4 value,
+        MidoraProject project)
+    {
+        if (value.Page is < 0) throw new InvalidDataException("Workspace navigation page cannot be negative.");
+        if (value.PrimaryFilter is < 0 or > 4095
+            || value.SecondaryFilter is < 0 or > 4095
+            || value.TertiaryFilter is < 0 or > 4095
+            || value.SortMode is < 0 or > 4095)
+            throw new InvalidDataException("Workspace navigation filter is outside its bounded range.");
+        if (value.StartTick is < 0)
+            throw new InvalidDataException("Workspace navigation start tick cannot be negative.");
+        if (value.TickSpan is <= 0 or > (1L << 50))
+            throw new InvalidDataException("Workspace navigation tick span is outside its bounded range.");
+        if (value.FirstLane is < 0 or > 127 || value.FirstRow is < 0)
+            throw new InvalidDataException("Workspace navigation vertical position is outside its bounded range.");
+        if (value.LaneHeight is { } laneHeight
+            && (!double.IsFinite(laneHeight) || laneHeight <= 0 || laneHeight > 128))
+            throw new InvalidDataException("Workspace navigation lane height is invalid.");
+        if (value.LowerEditorHeight is { } lowerHeight
+            && (!double.IsFinite(lowerHeight) || lowerHeight < 110 || lowerHeight > 720))
+            throw new InvalidDataException("Workspace navigation lower-editor height is invalid.");
+        if (value.SearchText is { Length: > MaximumNavigationTextLength })
+            throw new InvalidDataException("Workspace navigation search text exceeds its bounded length.");
+        if (value.SecondaryId is { } secondary)
+        {
+            if (secondary == default)
+                throw new InvalidDataException("Workspace navigation secondary ID cannot be empty.");
+            if (value.Key.Kind != ProjectPresentationNavigationKindV4.EventInstrumentEditor
+                || value.Key.ObjectId is not MidoraId instrumentId
+                || project.EventInstruments.FirstOrDefault(item => item.Id == instrumentId)
+                    ?.SubVoices.Any(item => item.Id == secondary) != true)
+                throw new InvalidDataException("Workspace navigation secondary owner is invalid.");
+        }
     }
 
     private static bool TryDeserialize<T>(
@@ -877,14 +1273,19 @@ internal static class ProjectPresentationCodecV4
         }
     }
 
-    private static void EnsureKnownRootProperties(JsonElement root)
+    private static void EnsureKnownRootProperties(JsonElement root, int schemaVersion)
     {
-        string[] known = ["schemaVersion", "allTracksMode", "trackOnionPresets", "subVoiceOnionPresets", "workspaceState"];
+        string[] known = schemaVersion == SchemaVersion
+            ? ["schemaVersion", "allTracksMode", "trackOnionPresets", "subVoiceOnionPresets", "workspaceState", "workspaceNavigation"]
+            : ["schemaVersion", "allTracksMode", "trackOnionPresets", "subVoiceOnionPresets", "workspaceState"];
         EnsureKnownProperties(root, known, "project-presentation.json");
     }
 
     private static void EnsureKnownWorkspaceProperties(JsonElement element) => EnsureKnownProperties(
         element, ["profiles", "views", "lanes", "monitoring"], "workspaceState");
+
+    private static void EnsureKnownNavigationProperties(JsonElement element) => EnsureKnownProperties(
+        element, ["tabs", "activeTab", "views"], "workspaceNavigation");
 
     private static void EnsureKnownProperties(JsonElement element, IReadOnlyCollection<string> known, string scope)
     {
@@ -909,6 +1310,43 @@ internal sealed class ProjectPresentationJsonV4
     [JsonPropertyOrder(2)] public required TrackOnionPresetJsonV2[] TrackOnionPresets { get; init; }
     [JsonPropertyOrder(3)] public required SubVoiceOnionPresetJsonV2[] SubVoiceOnionPresets { get; init; }
     [JsonPropertyOrder(4)] public required WorkspaceStateJsonV4 WorkspaceState { get; init; }
+    [JsonPropertyOrder(5)] public required WorkspaceNavigationJsonV4 WorkspaceNavigation { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed class WorkspaceNavigationJsonV4
+{
+    [JsonPropertyOrder(0)] public required NavigationKeyJsonV4[] Tabs { get; init; }
+    [JsonPropertyOrder(1)] public required NavigationKeyJsonV4 ActiveTab { get; init; }
+    [JsonPropertyOrder(2)] public required WorkspaceNavigationViewJsonV4[] Views { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed class NavigationKeyJsonV4
+{
+    [JsonPropertyOrder(0)] public required string Kind { get; init; }
+    [JsonPropertyOrder(1)] public StableIdJsonV1? ObjectId { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed class WorkspaceNavigationViewJsonV4
+{
+    [JsonPropertyOrder(0)] public required NavigationKeyJsonV4 Key { get; init; }
+    [JsonPropertyOrder(1)] public int? Page { get; init; }
+    [JsonPropertyOrder(2)] public StableIdJsonV1? SecondaryId { get; init; }
+    [JsonPropertyOrder(3)] public string? SearchText { get; init; }
+    [JsonPropertyOrder(4)] public int? PrimaryFilter { get; init; }
+    [JsonPropertyOrder(5)] public int? SecondaryFilter { get; init; }
+    [JsonPropertyOrder(6)] public int? TertiaryFilter { get; init; }
+    [JsonPropertyOrder(7)] public int? SortMode { get; init; }
+    [JsonPropertyOrder(8)] public long? StartTick { get; init; }
+    [JsonPropertyOrder(9)] public long? TickSpan { get; init; }
+    [JsonPropertyOrder(10)] public int? FirstLane { get; init; }
+    [JsonPropertyOrder(11)] public int? FirstRow { get; init; }
+    [JsonPropertyOrder(12)] public double? LaneHeight { get; init; }
+    [JsonPropertyOrder(13)] public bool? FollowPlayback { get; init; }
+    [JsonPropertyOrder(14)] public bool? LowerEditorVisible { get; init; }
+    [JsonPropertyOrder(15)] public double? LowerEditorHeight { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -1020,4 +1458,9 @@ internal sealed class MonitoringJsonV4
 [JsonSerializable(typeof(MonitoringJsonV4))]
 [JsonSerializable(typeof(TrackOnionPresetJsonV2[]))]
 [JsonSerializable(typeof(SubVoiceOnionPresetJsonV2[]))]
+[JsonSerializable(typeof(WorkspaceNavigationJsonV4))]
+[JsonSerializable(typeof(NavigationKeyJsonV4))]
+[JsonSerializable(typeof(NavigationKeyJsonV4[]))]
+[JsonSerializable(typeof(WorkspaceNavigationViewJsonV4))]
+[JsonSerializable(typeof(WorkspaceNavigationViewJsonV4[]))]
 internal sealed partial class ProjectPresentationJsonContextV4 : JsonSerializerContext;

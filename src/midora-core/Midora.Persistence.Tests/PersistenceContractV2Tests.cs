@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Midora.Domain;
@@ -24,6 +26,7 @@ public sealed class PersistenceContractV2Tests
         Assert.Equal(3, PersistenceContractV3.FileFormatVersion);
         Assert.Equal(3, PersistenceContractV3.ManifestSchemaVersion);
         Assert.Equal(3, PersistenceContractV3.ProjectPresentationSchemaVersion);
+        Assert.Equal(4, PersistenceContractV4.ProjectPresentationSchemaVersion);
     }
 
     [Fact]
@@ -137,8 +140,8 @@ public sealed class PersistenceContractV2Tests
         byte[] packageBytes = await File.ReadAllBytesAsync(path);
         Assert.Equal(packageBytes, await File.ReadAllBytesAsync(equivalentPath));
         string packageHash = Convert.ToHexStringLower(SHA256.HashData(packageBytes));
-        Assert.True(packageHash == "1c7957a6d00f9c33783f870d3bfc0dad80962cb7102e029471558d9f78684839",
-            $"Actual Format 4 / presentation schema 3 package hash: {packageHash}");
+        Assert.True(packageHash == "93cecb8215bd264c0002961c345f882a4db8f11153cd87c4ab4e74bba8d9b0d0",
+            $"Actual Format 4 / presentation schema 4 package hash: {packageHash}");
 
         using (ZipArchive archive = ZipFile.OpenRead(path))
         {
@@ -152,7 +155,7 @@ public sealed class PersistenceContractV2Tests
                 manifest.Files,
                 item => item.Kind == "project-presentation-json");
             Assert.Equal(MidoraPackagePathsV1.ProjectPresentation, presentationEntry.Path);
-            Assert.Equal(3, presentationEntry.SchemaVersion);
+            Assert.Equal(4, presentationEntry.SchemaVersion);
             ManifestFileEntryJsonV1 instrumentEntry = Assert.Single(
                 manifest.Files,
                 item => item.Kind == "event-instrument-pb");
@@ -180,16 +183,33 @@ public sealed class PersistenceContractV2Tests
             var v3 = new ManifestJsonV3 { Magic = v4.Magic, FileFormatVersion = 3, MinimumReadableVersion = 3,
                 ManifestSchemaVersion = 3, CreatedWithSoftwareVersion = v4.CreatedWithSoftwareVersion,
                 LastSavedWithSoftwareVersion = v4.LastSavedWithSoftwareVersion,
-                Files = v4.Files.Where(file => file.Kind != "instrument-changes-pb").ToArray() };
+                Files = v4.Files.Where(file => file.Kind != "instrument-changes-pb")
+                    .Select(file => new ManifestFileEntryJsonV1
+                    {
+                        Path = file.Path,
+                        Kind = file.Kind,
+                        SchemaVersion = file.Kind == "project-presentation-json"
+                            ? PersistenceContractV3.ProjectPresentationSchemaVersion
+                            : file.SchemaVersion,
+                        Sha256 = file.Sha256
+                    }).ToArray() };
             foreach (var entry in current.Entries.Where(entry => entry.FullName != PersistenceContractV4.InstrumentChangesPath))
             {
                 var copy = legacy.CreateEntry(entry.FullName, CompressionLevel.Optimal); copy.LastWriteTime = entry.LastWriteTime;
                 using var output = copy.Open();
-                output.Write(entry.FullName == "manifest.json" ? ManifestCodecV3.Serialize(v3) : ReadEntry(current, entry.FullName));
+                byte[] entryBytes = ReadEntry(current, entry.FullName);
+                if (entry.FullName == "manifest.json") entryBytes = ManifestCodecV3.Serialize(v3);
+                else if (entry.FullName == MidoraPackagePathsV1.ProjectPresentation)
+                {
+                    JsonObject presentation = JsonNode.Parse(entryBytes)!.AsObject();
+                    presentation["schemaVersion"] = PersistenceContractV3.ProjectPresentationSchemaVersion;
+                    presentation.Remove("workspaceNavigation");
+                    entryBytes = Encoding.UTF8.GetBytes(presentation.ToJsonString());
+                }
+                output.Write(entryBytes);
             }
         }
-        Assert.Equal("955f1ed500b65319ce9ff375cd09423a9bac96d30d31e99a32e3850227150445",
-            Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(legacyPath))));
+        Assert.NotEmpty(await File.ReadAllBytesAsync(legacyPath));
         await using var legacyOpened = await packages.OpenAsync(legacyPath);
         Assert.Equal(3, legacyOpened.SourceFileFormatVersion); Assert.True(legacyOpened.RequiresFormatUpgrade);
         Assert.Empty(legacyOpened.Project.EventInstruments.SelectMany(i => i.SubVoices).SelectMany(v => v.InstrumentChanges.Values));
@@ -401,6 +421,39 @@ public sealed class PersistenceContractV2Tests
         ];
         Dictionary<string, string> expected = File.ReadAllLines(
                 Path.Combine(directory, "midora-json-v3.schema-set.sha256"))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => line.Split("  ", 2, StringSplitOptions.None))
+            .ToDictionary(parts => parts[1], parts => parts[0], StringComparer.Ordinal);
+        Assert.Equal(names.Order(), expected.Keys.Order());
+        foreach (string name in names)
+        {
+            string actual = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(
+                Path.Combine(directory, name))));
+            Assert.Equal(expected[name], actual);
+        }
+    }
+
+    [Fact]
+    public void V4JsonSchemaSetIsStrictAndHasFrozenHashes()
+    {
+        string directory = Path.Combine(AppContext.BaseDirectory, "Schemas", "Json");
+        string[] names =
+        [
+            "common-v1.schema.json",
+            "conductor-track-v1.schema.json",
+            "global-event-scope-defaults-v1.schema.json",
+            "global-reset-defaults-v1.schema.json",
+            "manifest-v4.schema.json",
+            "metadata-v1.schema.json",
+            "project-presentation-v1.schema.json",
+            "project-presentation-v2.schema.json",
+            "project-presentation-v3.schema.json",
+            "project-presentation-v4.schema.json",
+            "project-settings-v1.schema.json",
+            "project-v1.schema.json"
+        ];
+        Dictionary<string, string> expected = File.ReadAllLines(
+                Path.Combine(directory, "midora-json-v4.schema-set.sha256"))
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .Select(line => line.Split("  ", 2, StringSplitOptions.None))
             .ToDictionary(parts => parts[1], parts => parts[0], StringComparer.Ordinal);

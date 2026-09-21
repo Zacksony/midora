@@ -414,7 +414,7 @@ Shared Usage / Auto Root 成员在 Track order 中不连续；
 对象 ID、manifest、index 与文件 path 不一致。
 ```
 
-Definition pane 展开、Arrangement viewport、selection、header focus、Mute/Solo 和 drag preview 属于 session/runtime state，不进入 `.midora`。Format 3 只额外保存第 3.11、16.33 节版本化的 Onion source/opacity/enabled 与 All-Tracks raw/compiled presentation；这些字段不属于 Track/Usage/Root source、global order、Project Modified 或 Undo/Redo，也不得改变本节 membership/顺序权威来源。
+Definition pane 展开、selection、header focus 和 drag preview 属于 session/runtime state，不进入 `.midora`。当前 Format 4 presentation schema 4 额外保存第 3.11、16.33 节版本化的 Onion source/opacity/enabled、All-Tracks raw/compiled presentation，以及 B3 批准的 Workspace Tabs/Active Workspace/viewport 纯值；这些字段不属于 Track/Usage/Root source、global order、Project Modified 或 Undo/Redo，也不得改变本节 membership/顺序权威来源。Mute/Solo 仍为 presentation 运行期展示状态，导航恢复不触发音乐重建。
 
 ## 24.14 失败原子性与验收门
 

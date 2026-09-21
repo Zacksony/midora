@@ -1,6 +1,6 @@
 # B3：完整工作区导航恢复与懒激活
 
-初稿：2026-09-20。状态：**仅完成任务细化，未实施、未构建、未验收** 。
+初稿：2026-09-20；实施记录：2026-09-20；回退后复核：2026-09-21。状态：**已重新实施，待人工 UAT；未发布** 。
 
 本文件是 B3 的独立实施计划，承接 [B1/B2 总边界](05-Workspace-State-and-Track-Navigation.md)、[B2 保存读取契约](06-Workspace-State-Persistence-B2.md) 和 [工作区状态需求调查](../03-Multi-Instance-and-Workspace-State.md)。它不替代用户在 [04 决策问答](../04-Decisions-and-Preparation.md) 中已经确认的原答，也不把本文件中的“推荐”自动提升为产品决定。
 
@@ -236,17 +236,23 @@ WorkspaceNavigationSection
 
 **推荐：** 新建可明确识别的 schema 4（或等价的独立 navigation section 版本），不在 strict schema 3 中偷偷增加字段。这样旧读者可安全丢弃未知导航，B3 可以独立 golden/预算；Project Format 4 不变。
 
+**用户决定：** 同意推荐。采用当前 presentation schema 4；继续读取 schema 1/2/3，外层 Project Format 4 不变。
+
 ### B3-D02：失效活动 Tab 的回退
 
 **问题：** 保存的活动 owner 已被删除或项目迁移后不存在时，是否统一回退 Arrangement，还是尝试最近的同类 Workspace？
 
 **推荐：** 统一回退 Arrangement，并给一次明确 Warning；不按名称/邻近位置猜测，避免打开错误音乐对象。
 
+**用户决定：** 同意推荐。
+
 ### B3-D03：隐藏描述何时实例化
 
 **问题：** 重开项目时是否只实例化 Arrangement 与保存的活动 Tab，所有其他 Tab 等用户点击后再创建？
 
 **推荐：** 选择“活动优先、其余全懒激活”。Tab 头可以由轻量描述显示，但不创建 VM、索引、编译或缓存；用户点击时才实例化并可取消。
+
+**用户决定：** 同意推荐。实现使用仅保存纯值的轻量占位描述；切换时才物化真正 Workspace。
 
 ### B3-D04：恢复中用户动作优先级
 
@@ -266,11 +272,15 @@ WorkspaceNavigationSection
 
 **推荐：** 按已批准白名单继续随当前 Project 保存；无 Project 时不产生独立持久化，不恢复跨项目的 Settings/Diagnostics 页面。
 
+**用户决定：** 同意推荐。
+
 ### B3-D07：活动 Compiled 视图的准备时机
 
 **问题：** 重开后若活动页是 All Tracks/Compiled 或编译结果依赖页，是否允许在音乐打开完成后后台准备，而不阻塞首次可交互时间？
 
 **推荐：** 允许仅活动页后台准备；隐藏页不预热。若准备失败，保留可编辑源视图并给局部 Warning，可重试，不阻塞项目打开。
+
+**用户决定：** 同意推荐。
 
 ## 9. 交付顺序与报告要求
 
@@ -289,4 +299,54 @@ WorkspaceNavigationSection
 - 旧格式/坏 section/取消/竞态结果；
 - 未解决风险和需要用户验收的具体步骤。
 
-本文件完成只代表 B3 计划已细化，不代表 B3 已实施、代码已改变、SRS/ADR 已更新、UAT 已通过或已发布。
+## 10. B3 实施记录（2026-09-20）
+
+### 10.1 已实现范围
+
+- `settings/project-presentation.json` 的当前 writer 升为 schema 4；schema 1/2/3 仍可读取，外层 Project Format 4 与音乐 source wire 不变。
+- 新增独立 `workspaceNavigation` section，保存有序 Tab key、活动 Tab，以及已批准的页面/视口纯值；不保存选择、Undo/Redo、任务、菜单、焦点、缓存、VM、编译结果或音频资源。
+- Save/Save Copy 在同一冻结 presentation snapshot 捕获导航；workspaceNavigation 作为完整 section 参加 64 MiB 总预算，超预算时整个导航 section 省略并保留音乐及其他可表达 presentation，不截断数组。
+- Open 独立验证导航：固定 Arrangement、按稳定 owner ID 逐项丢弃失效 Tab/视图，活动项失效时回退 Arrangement 并给出状态提示；保存快照也会在 owner 删除后先过滤导航。Project Settings 与 Diagnostics 的当前页/筛选/页码也随项目保存。
+- 重开只立即物化 Arrangement 与活动 Workspace；其余 Tab 使用轻量占位描述，用户激活时才创建实际 VM、应用保存的纯值并建立运行时状态。All Tracks 的 Compiled 准备沿用已有可取消后台链路，仅对活动实际视图运行。
+- Instrument 当前 SubVoice 恢复在物化后立即重建该 SubVoice 的对象列表、Lane 与快照；Diagnostics 用户在恢复后修改筛选或翻页时会清除旧页码请求，避免迟到页码覆盖新筛选。
+
+### 10.2 代码与格式文件
+
+- `src/midora-core/Midora.Persistence/ProjectPresentationWorkspaceV4.cs`
+- `src/midora-core/Midora.Persistence/ProjectPresentationCodecV4.cs`
+- `src/midora-core/Midora.Persistence/ProjectPresentationV3.cs`
+- `src/midora-core/Midora.Persistence/PersistenceContractV4.cs`
+- `src/midora-core/Midora.Persistence/MidoraProjectPackageV1.cs`
+- `src/midora-core/Midora.Application/ProjectPresentationSessionV3.cs`
+- `src/midora-core/Midora.Persistence/Schemas/Json/project-presentation-v4.schema.json`
+- `src/midora-core/Midora.Persistence/Schemas/Json/midora-json-v4.schema-set.sha256`
+- `src/midora-desktop/Midora.Desktop/DesktopSessionController.WorkspaceNavigation.cs`
+- `src/midora-desktop/Midora.Desktop/LazyWorkspaceViewModel.cs`
+- `src/midora-desktop/Midora.Desktop/DesktopSessionController.cs`
+- `src/midora-desktop/Midora.Desktop/DesktopSessionController.WorkspaceState.cs`
+- `src/midora-desktop/Midora.Desktop/PresentationModels.cs`
+- 相关 Persistence schema/golden/compatibility 测试同步升至当前 schema 4；Application snapshot 测试覆盖导航快照保留与失效 owner 过滤。
+
+### 10.3 自动验证证据
+
+已运行：
+
+```text
+dotnet build src/midora-core/Midora.Persistence/Midora.Persistence.csproj --no-restore -v:minimal
+dotnet test src/midora-core/Midora.Persistence.Tests/Midora.Persistence.Tests.csproj --no-restore -v:minimal
+dotnet test src/midora-core/Midora.Application.Tests/Midora.Application.Tests.csproj --no-restore -v:minimal
+dotnet build src/midora-desktop/Midora.Desktop/Midora.Desktop.csproj --no-restore -v:minimal
+dotnet test src/midora-desktop/Midora.Desktop.Tests/Midora.Desktop.Tests.csproj --no-restore -v:minimal
+```
+
+结果：Persistence 构建 0 警告/0 错误；Persistence Tests **245/245 通过**；Application 构建 0 警告/0 错误，新增导航快照测试 **1/1 通过**，此前 Application 全套 **1256/1256 通过**；Desktop 构建 0 警告/0 错误；Desktop Tests **531/531 通过**。本轮未运行真实 WPF 冷启动/9KX2 长会话、坏包故障注入和 50/100/200 Tab 资源压力测试，仍需人工 UAT 与后续工程门验证。
+
+### 10.4 待人工验收
+
+使用既有 UAT-B3-01～06：保存并重开完整 Tab 集合、活动页和视口；大型项目懒激活；焦点/快捷键；owner 删除/Undo；损坏与旧 schema；长会话和资源释放。尤其检查活动 Instrument 的 SubVoice/Lane 恢复、Diagnostics 页码与筛选交互、All Tracks Compiled 不阻塞首屏。
+
+本记录不表示 UAT 已通过，也不表示已提交、推送或本地发布。
+
+### 10.5 从 B3 前基线重新实施的复核（2026-09-21）
+
+工作区曾回退到 B3 实施前；本轮按本文件已确认的 D01～D07 重新恢复上述实现，没有使用 computer-use、没有运行本地发布，也没有提交或推送。复核后的自动验证结果为：Persistence 构建 0 警告/0 错误，Persistence Tests **245/245**；Application 全套 **1257/1257**；Desktop 构建 0 警告/0 错误，Desktop Tests **531/531**。`git diff --check` 未发现空白错误（仅有 Git 的换行符提示）。真实 WPF 冷启动、坏包注入及 50/100/200 Workspace 资源压力仍未运行，继续由 UAT-B3-01～06 验收。

@@ -441,6 +441,12 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         get => _activeWorkspace;
         set
         {
+            if (value is LazyWorkspaceViewModel lazy)
+            {
+                MaterializeLazyWorkspace(lazy);
+                value = Workspaces.FirstOrDefault(item => item.Key == lazy.Key
+                    && item is not LazyWorkspaceViewModel);
+            }
             WorkspaceViewModel? previous = _activeWorkspace;
             if (value?.IsDisposed == true || ReferenceEquals(previous, value)) return;
             previous?.SuspendPresentation();
@@ -2595,6 +2601,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
             SetStatusMessage(null);
             RefreshAll();
             OpenArrangement();
+            RestoreWorkspaceNavigation(next);
             AudioCacheWarning cacheWarning = next.Compilation.AudioCacheWarning;
             if (cacheWarning.Code != AudioCacheWarningCode.None)
             {
@@ -2617,7 +2624,15 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         WorkspaceKey key,
         Func<WorkspaceViewModel> factory)
     {
-        WorkspaceViewModel? existing = Workspaces.FirstOrDefault(item => item.Key == key);
+        if (Workspaces.FirstOrDefault(item => item.Key == key) is LazyWorkspaceViewModel lazy)
+        {
+            MaterializeLazyWorkspace(lazy);
+            WorkspaceViewModel? materialized = Workspaces.FirstOrDefault(item => item.Key == key
+                && item is not LazyWorkspaceViewModel);
+            if (materialized is not null) return materialized;
+        }
+        WorkspaceViewModel? existing = Workspaces.FirstOrDefault(item => item.Key == key
+            && item is not LazyWorkspaceViewModel);
         if (existing is not null)
         {
             return existing;
@@ -2663,6 +2678,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         {
             foreach (WorkspaceViewModel workspace in Workspaces.ToArray())
             {
+                if (workspace is LazyWorkspaceViewModel) continue;
                 if (!ObjectStillExists(workspace))
                 {
                     CloseWorkspace(workspace);
@@ -2703,6 +2719,7 @@ public sealed partial class DesktopSessionController : ObservableObject, IAsyncD
         HashSet<MidoraId> pureTrackIds = changes.PureMidiTrackIds;
         foreach (WorkspaceViewModel workspace in Workspaces.ToArray())
         {
+            if (workspace is LazyWorkspaceViewModel) continue;
             if (!ObjectStillExists(workspace))
             {
                 CloseWorkspace(workspace);

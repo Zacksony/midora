@@ -86,6 +86,58 @@ public sealed record ProjectPresentationWorkspaceStateV4(
     public static ProjectPresentationWorkspaceStateV4 Empty { get; } = new([], [], [], ProjectPresentationMonitoringV4.Empty);
 }
 
+/// <summary>
+/// Project-persisted workspace navigation.  This is deliberately a value-only
+/// projection: it contains no ViewModel, WPF object, selection, task, cache or
+/// compiled result.  The desktop session resolves these keys against the
+/// current Project and may discard an invalid navigation section independently
+/// from musical source data and the B2 editor-state sections.
+/// </summary>
+public enum ProjectPresentationNavigationKindV4
+{
+    Arrangement,
+    EventInstrumentLibrary,
+    ProjectSettings,
+    Diagnostics,
+    ConductorTrack,
+    SegmentEditor,
+    EventInstrumentEditor,
+    AllTracks
+}
+
+public readonly record struct ProjectPresentationNavigationKeyV4(
+    ProjectPresentationNavigationKindV4 Kind,
+    MidoraId? ObjectId = null);
+
+public sealed record ProjectPresentationNavigationViewV4(
+    ProjectPresentationNavigationKeyV4 Key,
+    int? Page = null,
+    MidoraId? SecondaryId = null,
+    string? SearchText = null,
+    int? PrimaryFilter = null,
+    int? SecondaryFilter = null,
+    int? TertiaryFilter = null,
+    int? SortMode = null,
+    long? StartTick = null,
+    long? TickSpan = null,
+    int? FirstLane = null,
+    int? FirstRow = null,
+    double? LaneHeight = null,
+    bool? FollowPlayback = null,
+    bool? LowerEditorVisible = null,
+    double? LowerEditorHeight = null);
+
+public sealed record ProjectPresentationNavigationStateV4(
+    IReadOnlyList<ProjectPresentationNavigationKeyV4> Tabs,
+    ProjectPresentationNavigationKeyV4 ActiveTab,
+    IReadOnlyList<ProjectPresentationNavigationViewV4> Views)
+{
+    public static ProjectPresentationNavigationStateV4 Empty { get; } = new(
+        new[] { new ProjectPresentationNavigationKeyV4(ProjectPresentationNavigationKindV4.Arrangement) },
+        new(ProjectPresentationNavigationKindV4.Arrangement),
+        Array.Empty<ProjectPresentationNavigationViewV4>());
+}
+
 public sealed record ProjectPresentationParseResultV4(
     ProjectPresentationStateV3 State,
     bool Recovered,

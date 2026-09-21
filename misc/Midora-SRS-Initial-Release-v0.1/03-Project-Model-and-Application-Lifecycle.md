@@ -327,6 +327,10 @@ Per-SubVoice Onion source selection / enabled / opacity
 All-Tracks overlay mode: raw | compiled
 ```
 
+当前 writer 使用 presentation schema 4（外层 Project Format 4 不变），在上述容器和 B1/B2 workspaceState 之外增加独立 `workspaceNavigation` section。该 section 只保存有序 Workspace key、Active Workspace 以及已批准的页面、筛选和 viewport 纯值。schema 1/2/3 继续可读；旧 schema 没有导航时使用默认 Arrangement。
+
+打开时只立即物化 Arrangement 与 Active Workspace，其余已保存 Tab 由有限的纯值描述占位，用户激活时再物化实际 Workspace。失效 owner、重复/非法 key 或无效活动项不得创建幽灵 Tab；活动项统一回退 Arrangement 并报告独立状态提示。Project Settings 与 Diagnostics 的批准页面状态随当前 Project 保存；Selection、Undo/Redo、任务、焦点、菜单、缓存、编译结果、音频资源和任何临时交互状态仍不得保存。导航 section 参与既有 64 MiB presentation 总预算，超限时完整省略 section，不静默截断数组。
+
 引用已删除对象的 dormant presentation entry 在保存快照时过滤；presentation 文件损坏、引用失效或 schema 不合法时恢复默认 presentation 并报告 Warning，音乐 Project 仍按其正式源数据打开且不因此标记 Project Modified。
 
 除上述显式白名单外，初版不把一般 UI 会话状态保存进 Project。包括但不限于：
@@ -341,6 +345,8 @@ All-Tracks overlay mode: raw | compiled
 临时展开 / 折叠状态
 ```
 这些状态不得影响编译、播放、预览、渲染或导出结果。
+
+上述“当前打开的编辑器、缩放、面板、筛选和滚动位置”在 B3 已按批准白名单细化为 schema 4 的 `workspaceNavigation` 纯值；禁止持久化的 Selection、播放位置、焦点、临时展开/折叠、任务和交互中间态仍保持不保存。该导航恢复只影响 Workspace 展示和打开顺序，不改变音乐内容或正式消费者。
 ---
 ## 3.12 项目级撤销 / 重做
 初版应提供完整的、全项目统一的撤销 / 重做框架。
