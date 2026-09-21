@@ -23,10 +23,11 @@ Midora is for musicians who enjoy shaping sounds with MIDI itself. If you have e
 
 ## Table of contents
 
-- [One familiar example: a Sine + Click kick](#one-familiar-example-a-sine--click-kick)
-- [How Midora changes the workflow](#how-midora-changes-the-workflow)
-- [A complete instrument built from MIDI events](#a-complete-instrument-built-from-midi-events)
-- [Channels without channel bookkeeping](#channels-without-channel-bookkeeping)
+- [How many MIDI events are hiding inside one kick?](#how-many-midi-events-are-hiding-inside-one-kick)
+- [Design the sound once](#design-the-sound-once)
+- [Give the instrument its own playing behavior](#give-the-instrument-its-own-playing-behavior)
+- [Turn raw MIDI into controls you choose](#turn-raw-midi-into-controls-you-choose)
+- [Let Midora handle the channels](#let-midora-handle-the-channels)
 - [Why not just use a DAW?](#why-not-just-use-a-daw)
 - [Black MIDI performance](#black-midi-performance)
 - [Platform and prerequisites](#platform-and-prerequisites)
@@ -35,56 +36,62 @@ Midora is for musicians who enjoy shaping sounds with MIDI itself. If you have e
 - [Acknowledgements](#acknowledgements)
 - [License and third-party components](#license-and-third-party-components)
 
-## One familiar example: a Sine + Click kick
+## How many MIDI events are hiding inside one kick?
 
-Suppose you want to make a kick from two layers:
+Suppose a kick has two parts: a **Sine** for its body and a short **Click** for its attack. The Sine quickly falls in pitch; the Click follows its own volume shape. In a regular MIDI editor, that small sound may require two channels and a pile of notes, controller changes, pitch bends, and setup events.
 
-- a **Sine** layer for the body;
-- a short **Click** layer for the attack.
+Building the first hit is not the difficult part. The trouble starts after you copy it across a rhythm: changing the Click, reshaping the pitch drop, or adding a third layer means finding and updating every copy. Miss one event and that hit may sound different from the rest.
 
-In a regular MIDI editor, you may create two channels, choose their Bank/Program settings, configure Pitch Bend Range, draw the pitch drop and Expression curves, align both notes, and add the required cleanup events. Making one kick is manageable. Writing a whole rhythm means copying those two event stacks for every hit.
+## Design the sound once
 
-That creates familiar problems: changing the sound means finding and updating every copy; one missed event can make hits behave differently; fast repeats can leave Pitch Bend or CC state leaking into the next hit; and adding more layers means manually managing even more channels.
-
-## How Midora changes the workflow
-
-In Midora, you design the Sine + Click kick once as an **Event Instrument**—a reusable recipe made entirely from MIDI events. After that, you can write each use on a track as simply as an ordinary note.
+In Midora, you build the Sine + Click kick once as an **Event Instrument**: a reusable sound design made entirely from MIDI events. After that, every hit in the arrangement is written as an ordinary note.
 
 ```text
-Design the Sine + Click recipe once
+Design the Sine + Click sound once
               ↓
 Place one simple note for each kick hit
               ↓
 Midora expands every hit into the full MIDI event sequence
 ```
 
-You arrange the rhythm with compact notes instead of copied event piles. Midora expands those notes, assigns the required ports and channels, and handles event ordering and cleanup boundaries. Change the recipe once, and the arrangement uses the updated design without editing every copied stack.
+Change the instrument once and every place that uses it receives the new design. Make a separate copy only when you actually want a variation, such as a softer kick or a longer one.
 
-Three Midora terms are enough to understand the idea:
+Only three Midora terms are needed to get started:
 
-- **Event Instrument**: the reusable MIDI-event recipe, such as the Sine + Click kick.
-- **Logical Track**: a track containing compact notes that call an Event Instrument.
-- **Pure MIDI Track**: a familiar direct MIDI track for editing notes and channel events without the reusable layer.
+- **Event Instrument**: the reusable sound design, such as the Sine + Click kick.
+- **Logical Track**: a track where ordinary-looking notes play that instrument.
+- **Pure MIDI Track**: a traditional MIDI track where notes and events are edited directly.
 
-You can combine both approaches in one project: use Event Instruments where repetition is painful, and use Pure MIDI Tracks where direct control is simpler. Midora turns the project into standard MIDI 1.0 data for playback and export, so the result remains usable outside Midora as MIDI.
+Both track types can live in the same project. Use Event Instruments where repeated event editing becomes painful, and keep Pure MIDI Tracks wherever direct control is more convenient. Midora expands everything into standard MIDI 1.0 for playback and export.
 
-## A complete instrument built from MIDI events
+## Give the instrument its own playing behavior
 
-An Event Instrument is more than a macro that replays one fixed block of events. It can describe how a MIDI-built instrument is constructed, controlled, and played:
+An Event Instrument is not limited to replaying one fixed block. It can describe how the sound is built and how it should react when played:
 
-- **Multiple layers**: each **SubVoice** is an independent layer with its own notes, Bank/Program settings, controllers, pitch bends, and curves. A Sine body, a Click attack, and additional layers can still be triggered and written as one instrument.
-- **Musical controls instead of raw event editing**: an instrument can expose **Logical Parameters** such as `Punch`, `Brightness`, or `Pitch Drop`. One control can drive several internal MIDI values across several layers, so the arrangement can shape the sound without reopening its event stacks or editing every CC curve by hand.
-- **A full note lifecycle**: an instrument can react differently to short notes, long notes, release, and overlap. It can cut at Note Off, behave as a one-shot, play tail events, hold a state, loop part of its design, follow envelopes, and isolate overlapping notes when they need independent channel-wide state.
+- **Build in layers**: the Sine, Click, Noise, and any other part can each have its own notes, sound selection, bends, controllers, and curves, while the arrangement still plays them as one instrument. Midora calls each layer a **SubVoice**.
+- **Customize the Initial State**: an instrument—or an individual layer—can start with the intended Bank/Program, Expression, Pitch Bend, bend range, and other controller settings. For example, the Sine can begin centered with a wide bend range while the Click selects a different sound and level.
+- **Decide what short and long notes mean**: releasing a short note can begin its ending, let it finish as a one-shot, or continue with tail events. A long note can simply hold its last state.
+- **Keep sounds alive with a Loop**: select a middle section to repeat for as long as the note is held. Releasing the note leaves the Loop and moves into the instrument's ending, keeping every layer aligned without copied repetitions.
+- **Shape attack and release**: reusable ADSR-style envelopes, with additional Delay and Hold stages, can shape any supported MIDI value—not only volume. A release can fade Expression, return Pitch Bend toward center, or change another controller before the actual Note Off is sent.
+- **Control overlapping notes**: when two notes need independent bends or controller movement, Midora can give each one isolated channel state instead of letting them interfere with each other.
 
-The instrument definition is stored separately from the notes that use it. Edit the definition once and every reference uses the updated design. Tracks that use the same definition can keep independent runtime state, or be explicitly grouped when they are meant to share it; duplicate the definition only when you want a separate variation.
+For example, a held tonal effect can play its opening once, loop the middle for as long as the note is held, then leave the loop and follow its release envelope when the note ends. All layers follow the same instrument lifecycle, so this behavior does not have to be rebuilt in every track.
 
-## Channels without channel bookkeeping
+## Turn raw MIDI into controls you choose
 
-Event Instruments and their SubVoices never ask you to choose a Port or Channel. Midora calculates the required routes, allocates them across Ports, safely reuses released Channel Units, and keeps channel-wide state from leaking between unrelated sounds. For normal Logical Track work, Port/Channel routing is something you can largely ignore.
+**Logical Parameters** are the controls an instrument chooses to show to the arrangement. They are not a fixed set of knobs: the instrument author defines their names, defaults, ranges, and whether a value is a whole number, a decimal, or a choice such as `Soft / Hard`.
 
-When shared state is intentional, you can explicitly bind multiple Logical Tracks into one shared group. In the instrument's shared-state mode, those tracks are guaranteed to use the same Channel Group instead of merely landing on the same channels by accident. Independent usages of the same instrument remain isolated.
+For the kick, you might expose a single `Punch` control from `0` to `100`. Raising it could strengthen the Click layer, deepen the Sine pitch drop, and change Expression in both layers at once. The person writing the rhythm edits `Punch`; the instrument takes care of the underlying MIDI values.
 
-Pure MIDI Tracks retain lower-level control: their route can be assigned automatically, or you can pin a track—or a group of tracks sharing one route—to an exact `Port.Channel` address. Midora supports up to **16 Ports × 16 Channels = 256 Channel Units**. If a project cannot fit within that limit, compilation fails instead of silently dropping, stealing, or shortening notes.
+Mappings can be simple ranges and curves, or they can use a **Mapping Function**: a small numeric expression that calculates the result from the current value and musical context. It can, for example, make the same `Punch` setting react differently according to the played pitch, velocity, note length, or position in the song. This allows one Event Instrument to stay compact on the outside while remaining highly customizable inside.
+
+## Let Midora handle the channels
+
+Event Instruments do not ask you to assign a Port or Channel to every layer. Midora finds the required channels, spreads them across Ports when necessary, reuses them when safe, and prevents unrelated sounds from inheriting each other's bends or controller state. In ordinary Logical Track work, channels are something you can largely forget about.
+
+If several Logical Tracks are intended to act as parts of one shared instrument—for example, two lines that should share the same sustain and Expression state—you can explicitly group them. In shared-state mode, Midora keeps them on the same Channel Group; tracks that should be independent remain isolated even when they use the same instrument design.
+
+Pure MIDI Tracks keep the familiar lower-level choice: let Midora assign a route, or pin a track—or a group sharing one route—to an exact `Port.Channel` address. Midora supports up to **16 Ports × 16 Channels = 256 Channel Units**. If that limit is exceeded, compilation fails clearly instead of silently dropping, stealing, or shortening notes.
 
 ## Why not just use a DAW?
 

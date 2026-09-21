@@ -23,10 +23,11 @@ Midora 面向喜欢用 MIDI 本身塑造声音的用户。如果你用过普通 
 
 ## 目录
 
-- [一个熟悉的例子：用 Sine + Click 制作 Kick](#一个熟悉的例子用-sine--click-制作-kick)
-- [Midora 如何改变这套工作流](#midora-如何改变这套工作流)
-- [不只是事件模板：一件完整的 MIDI 乐器](#不只是事件模板一件完整的-midi-乐器)
-- [无需管理 Port 和 Channel](#无需管理-port-和-channel)
+- [一个 Kick 背后有多少 MIDI 事件](#一个-kick-背后有多少-midi-事件)
+- [声音只设计一次](#声音只设计一次)
+- [让事件乐器拥有自己的演奏方式](#让事件乐器拥有自己的演奏方式)
+- [把底层 MIDI 变成自己的参数](#把底层-midi-变成自己的参数)
+- [让 Midora 接管 Port 和 Channel](#让-midora-接管-port-和-channel)
 - [那我为什么不直接用 DAW？](#那我为什么不直接用-daw)
 - [关于黑乐谱性能](#关于黑乐谱性能)
 - [平台与前置条件](#平台与前置条件)
@@ -35,56 +36,62 @@ Midora 面向喜欢用 MIDI 本身塑造声音的用户。如果你用过普通 
 - [特别鸣谢](#特别鸣谢)
 - [许可证与第三方组件](#许可证与第三方组件)
 
-## 一个熟悉的例子：用 Sine + Click 制作 Kick
+## 一个 Kick 背后有多少 MIDI 事件
 
-假设你想用两个声部做一个 Kick：
+假设一个 Kick 由两部分组成：**Sine** 负责低频主体，很短的 **Click** 负责起音。Sine 的音高要快速下坠，Click 则有自己的音量变化。在普通 MIDI 编辑器中，这个看似简单的声音可能需要两个 Channel，以及一大堆 Note、控制器、Pitch Bend 和初始化事件。
 
-- **Sine** 负责低频主体；
-- 很短的 **Click** 负责起音瞬态。
+做出第一声并不难，真正麻烦的是把它复制成一整段鼓点之后：想换掉 Click、调整音高下坠，或再增加一层声音，就得找到并修改每一份副本。只漏掉一条事件，某一次击打就可能和其他位置听起来不同。
 
-在普通 MIDI 编辑器中，你可能要创建两个 Channel，分别设置 Bank/Program 和 Pitch Bend Range，画出音高下坠与 Expression 曲线，对齐两个 Note，再补上必要的状态清理事件。做一个 Kick 尚可接受，但写一整段鼓点时，每一次击打都要复制这两大组事件。
+## 声音只设计一次
 
-问题随之而来：修改声音时要找到并更新每一份副本；漏掉一个事件就可能让某次击打听起来不同；快速连打时，Pitch Bend 或 CC 状态可能污染下一次击打；增加声部后，还要手动规划更多 Channel。
-
-## Midora 如何改变这套工作流
-
-在 Midora 中，你只需把 Sine + Click Kick 设计一次，并保存成一个 **Event Instrument（事件乐器）**——也就是一份完全由 MIDI 事件组成、可以反复调用的“声音配方”。之后便可以像编写普通 Note 一样，在轨道中反复使用它。
+在 Midora 中，你只需把 Sine + Click Kick 设计一次，并保存成一个 **Event Instrument（事件乐器）**——一件完全由 MIDI 事件构成、可以反复使用的自制乐器。之后每一次 Kick 都像普通 Note 一样写在轨道上。
 
 ```text
-设计一次 Sine + Click 配方
+设计一次 Sine + Click 声音
             ↓
 每次 Kick 只放置一个简单 Note
             ↓
 Midora 自动展开为完整的 MIDI 事件序列
 ```
 
-编曲时，你操作的是简洁的 Note，而不是反复复制的大量事件。Midora 会展开这些 Note，分配所需的 Port 和 Channel，并处理事件顺序与清理边界。需要改变声音时，只修改一次配方，整段编曲即可使用更新后的设计，不必逐份寻找事件副本。
+修改一次乐器，所有使用它的位置都会采用新的设计。只有确实需要变体——例如更软或尾音更长的 Kick——才需要复制一份新的乐器定义。
 
-理解 Midora 只需要先认识三个概念：
+开始使用时只需认识三个概念：
 
-- **Event Instrument（事件乐器）**：可复用的 MIDI 事件配方，例如上面的 Sine + Click Kick。
-- **Logical Track（逻辑轨道）**：放置简洁 Note、调用 Event Instrument 的轨道。
-- **Pure MIDI Track（纯 MIDI 轨道）**：不经过可复用抽象，像普通 MIDI 编辑器一样直接编辑 Note 和 Channel Event 的轨道。
+- **Event Instrument（事件乐器）**：可复用的声音设计，例如上面的 Sine + Click Kick。
+- **Logical Track（逻辑轨道）**：用看起来和普通音符一样的 Note 演奏事件乐器。
+- **Pure MIDI Track（纯 MIDI 轨道）**：像传统 MIDI 编辑器一样，直接编辑 Note 和其他 MIDI 事件。
 
-两种方式可以在同一个 Project 中混用：需要大量重复时使用 Event Instrument，需要直接控制时使用 Pure MIDI Track。Midora 最终会把 Project 转换为标准 MIDI 1.0 数据用于播放和导出，因此结果仍能以 MIDI 的形式离开 Midora 使用。
+两种轨道可以放在同一个 Project 中：重复编辑很麻烦的地方使用 Event Instrument，需要直接控制时继续使用 Pure MIDI Track。Midora 会把两者展开为标准 MIDI 1.0 数据用于播放和导出。
 
-## 不只是事件模板：一件完整的 MIDI 乐器
+## 让事件乐器拥有自己的演奏方式
 
-Event Instrument 并非只能原样重放一段固定事件的宏。它可以完整描述一件由 MIDI 构造的乐器如何组成、如何控制，以及如何响应演奏：
+Event Instrument 不只是原样重放一段固定事件。它还可以描述声音由什么组成，以及按下、长按、松开和重叠演奏时应该如何变化：
 
-- **多个独立声部**：每条 **SubVoice（子声部）**都可以拥有自己的 Note、Bank/Program、控制器、Pitch Bend 和曲线。Sine 主体、Click 起音及更多声部可以各自完成不同工作，但在编曲时仍作为一件乐器触发和书写。
-- **用音乐含义控制声音**：乐器可以向编曲界面提供 `Punch（冲击感）`、`Brightness（亮度）`、`Pitch Drop（音高下坠）` 等 **Logical Parameter（逻辑参数）**。一个参数可以同时驱动多个声部中的多个底层 MIDI 值，让用户直接塑造声音，而不必重新打开事件堆或逐条修改 CC 曲线。
-- **完整的音符生命周期**：乐器可以分别处理短音、长音、释放和重叠。它既可以在 Note Off 时立即截断，也可以作为 One-shot 播放、执行尾部事件、保持状态、循环模板的一部分、跟随 Envelope，并在重叠音符需要独立 Channel 状态时将它们隔离。
+- **分层构造声音**：Sine、Click、Noise 等部分都可以拥有自己的 Note、音色选择、Pitch Bend、控制器和曲线，但编曲时仍作为一件乐器使用。Midora 把每一层称为 **SubVoice（子声部）**。
+- **自定义 Initial State（起始状态）**：整件乐器或单独一层都可以指定开始时需要的 Bank/Program、Expression、Pitch Bend、弯音范围和其他控制器状态。例如，Sine 可以从居中 Pitch Bend 和较大的弯音范围开始，而 Click 自动选择另一种音色和音量。
+- **决定短音和长音如何工作**：松开短 Note 时，可以立即进入结束流程、完整播放为 One-shot，或继续执行尾部事件；长 Note 则可以简单地保持最后状态。
+- **用 Loop 维持长音**：选择声音中间的一段，在 Note 被按住时不断循环；松开后退出 Loop 并进入收尾。所有 SubVoice 始终对齐，不需要手工复制循环内容。
+- **塑造起音与释放**：可复用的 ADSR 风格 Envelope 还提供 Delay 和 Hold 阶段，并且不只控制音量。松开 Note 后，它可以让 Expression 渐弱、让 Pitch Bend 回到中心，或继续改变其他控制器，最后再真正发送 Note Off。
+- **处理重叠音符**：如果两个 Note 各自需要独立的 Pitch Bend 或控制器变化，Midora 可以隔离它们使用的 Channel 状态，避免互相干扰。
 
-乐器定义与使用它的编曲内容分开保存。修改一次定义，所有引用都会使用更新后的设计；引用同一定义的轨道可以保持彼此独立的运行状态，也可以在确实需要时显式组成共享状态组。只有想制作独立变体时，才需要复制一份乐器定义。
+例如，一个持续音效可以只播放一次开头，在 Note 被按住时循环中间部分；松开后立即退出 Loop，再沿着 Release Envelope 收尾。所有 SubVoice 共用这套演奏过程，不必在每条轨道中重新搭建。
 
-## 无需管理 Port 和 Channel
+## 把底层 MIDI 变成自己的参数
 
-使用 Event Instrument 和 SubVoice 时，用户无需为它们选择 Port 或 Channel，也无需创建或删除 Port。Midora 会计算所需路由、跨 Port 完成分配、安全复用已经释放的 Channel Unit，并避免无关声音之间发生 Channel 状态污染。对于通常的 Logical Track 编曲，用户基本不需要感知 Port/Channel 的存在。
+**Logical Parameter（逻辑参数）**是事件乐器选择暴露给编曲界面的控制项。它并不是一组固定旋钮：乐器作者可以自行决定参数的名称、默认值和范围，也可以决定它是整数、小数，还是 `Soft / Hard` 这样的选项。
 
-如果确实需要共享状态，用户可以把多个 Logical Track 显式绑定为一个共享组。在乐器的共享状态模式下，这些轨道会固定使用同一个 Channel Group，而不是由系统偶然把它们分配到一起；引用同一乐器但彼此独立的轨道，运行状态仍然互相隔离。
+仍以 Kick 为例，可以只向外提供一个 `Punch（冲击感）` 参数，范围为 `0–100`。提高它时，可以同时增强 Click、加深 Sine 的音高下坠，并调整两个声部的 Expression。编曲者只需要编辑 `Punch`，不必知道背后改动了多少条 MIDI 事件。
 
-Pure MIDI Track 则保留下层路由控制：既可以让程序自动分配，也可以把一条轨道——或共享同一路由的一组轨道——固定到明确的 `Port.Channel` 地址。Midora 最多支持 **16 Ports × 16 Channels = 256 Channel Units**。如果工程无法放入这一资源上限，编译会明确失败，而不会静默丢弃、抢占或截短 Note。
+简单需求可以使用范围变换和曲线；更复杂的行为可以交给 **Mapping Function（映射函数）**。它是一条简短的数值表达式，可以根据当前参数值和演奏环境计算结果，例如读取本次 Note 的音高、力度、长度或它在乐曲中的位置。于是，同一个 `Punch` 值也能随按键力度产生不同反应。事件乐器对外保持简单，内部的映射方式则可以高度自定义。
+
+## 让 Midora 接管 Port 和 Channel
+
+使用 Event Instrument 时，用户不需要为每个 SubVoice 选择 Port 或 Channel。Midora 会自动寻找所需 Channel，必要时跨 Port 分配，在安全时复用已经释放的资源，并避免无关声音继承彼此的 Pitch Bend 或控制器状态。对于通常的 Logical Track 编曲，用户基本可以忘掉 Channel 的存在。
+
+如果多个 Logical Track 本来就属于同一件共享状态的乐器——例如两条旋律线需要共用 Sustain 和 Expression——可以把它们显式组成一组。在共享状态模式下，Midora 会让它们固定使用同一个 Channel Group；需要独立的轨道即使引用同一乐器设计，也仍会保持隔离。
+
+Pure MIDI Track 则保留熟悉的下层选择：既可以让 Midora 自动分配，也可以把一条轨道——或共享同一路由的一组轨道——固定到明确的 `Port.Channel` 地址。Midora 最多支持 **16 Ports × 16 Channels = 256 Channel Units**。如果超出上限，编译会明确失败，而不会静默丢弃、抢占或截短 Note。
 
 ## 那我为什么不直接用 DAW？
 
